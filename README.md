@@ -4,7 +4,7 @@
 
 ## 폴더
 - `scenes/main.tscn`, `scripts/main.gd` — 블록 땅 (이동·확대, 편집 때 쌓기/지우기/회전)
-- `assets/blocks/` — `D:\Molang\Modeling\Ground` 의 블록 glb 14종 (겹치는 것 정리됨)
+- `assets/blocks/` — `D:\Molang\Modeling\Ground` 의 블록 glb 18종
 - `assets/fonts/` — Noto Sans KR 굵게 (한글 2,350자만 담은 작은 버전)
 - `data/mollang_data.json` — 웹 버전에서 옮겨 온 스테이지 200개·확률·아이템 데이터
 
