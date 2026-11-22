@@ -7,14 +7,22 @@ signal info_changed()
 signal toast(text: String)
 signal finished(kind: String, reason: String)   # kind: "over" | "clear"
 signal items_changed()
+signal buzz(ms: int)   # 진동 (웹: 합치기 8/16, 세게 던지기 12, 클리어 30, 끝 60)
 
-const INK := Color("#111113")
-const MILK := Color("#f4f4f2")
-const FRAME := Color("#434348")
-const FRAME_HI := Color("#56565c")
-const WELL := Color("#151517")
-const EDGE := Color("#151517")
-const COLORS := ["#ff4034", "#ffe135", "#5cff3a", "#2bf5b0", "#4a94ff", "#ad66ff", "#ff3aa6", "#ff7f33", "#d6ff33", "#f2f2f2", "#2ff3ff", "#6f7dff", "#dc4dff"]
+# UI 시안 v4(어두운 민트 톤) 색. docs/ui/README.md · scripts/ui/mol_ui.gd 와 같은 값이에요.
+const INK := Color("#101214")                 # 젤리 숫자 글자색
+const MILK := Color("#e9f2ee")
+const FRAME := Color("#2e6b6b")               # 판 안 장애물(벽·못)
+const FRAME_HI := Color("#4ca89b")
+const WELL_TOP := Color(0.043, 0.129, 0.145)  # 판 안쪽 바탕(위→아래)
+const WELL_BOT := Color(0.027, 0.086, 0.098)
+const MINT := Color(0.494, 0.941, 0.784)
+const LINE := Color(0.298, 0.776, 0.694)
+const AMBER := Color(1.0, 0.757, 0.443)
+const EDGE := Color("#0b1416")                # 젤리 테두리
+const WELL_R := 18.0                          # 판 위 모서리 둥글기
+# 1~128(0~7단계)은 시안 색, 256부터는 원래 순서 그대로 반복
+const COLORS := ["#ff5a4c", "#ffe14a", "#6ef25a", "#36f0b4", "#5aa0ff", "#b277ff", "#ff4fae", "#ff8a3d", "#d6ff33", "#f2f2f2", "#2ff3ff", "#6f7dff", "#dc4dff"]
 
 const W := 360.0
 const ASPECT := 1.3
@@ -42,6 +50,12 @@ const MISS_LIMIT := 3
 const MISS_WAIT := 2.2
 const COMBO_MAX := 10
 const TILT_SECS := 8.0
+# 연속 합치기: 던질 때마다 그 숫자가 뭔가와 합쳐지면 +1, 아무것도 못 합치면 0으로.
+# 점수 = 숫자 × 연쇄 × (1 + 0.5×연속), 최대 ×5. 빨리 막 던지는 건 도움이 안 되고(던지기 단위),
+# 헛던지면 바로 끊겨서 꾸준히 맞히는 판일수록 점수가 팍팍 올라가요.
+const STREAK_STEP := 0.5
+const STREAK_MAX := 8
+const STREAK_WAIT := 2.5
 const TIER_MAX := 899
 # 몸 둘레 점 개수 (웹 버전 10 + r×0.3). GDScript 는 느려서 조금 줄임 — 모양은 곡선으로 부드럽게 그림
 const POINTS_BASE := 8.0
@@ -83,6 +97,10 @@ var shake_ang := 0.0
 var shake_safe := 0.0
 
 var chamfer := CHAMFER
+var _well_cache := PackedVector2Array()
+var _well_chamfer := -1.0
+var _grid_tex: Texture2D
+var _grid_chamfer := -1.0
 var sensor_y := SENSOR_Y
 var sensor_clock := 0.0
 var pegs: Array = []
@@ -93,6 +111,10 @@ var miss_count := 0
 var miss_watch = null
 var held_combo := 0
 var held_shot := 0
+var streak := 0
+var streak_on := true
+var shot_wait := {}      # 던진 숫자 id → 아직 못 합친 채 지난 시간
+var streak_bonus := 0.0  # 화면 표시용
 var shot_no := 0
 
 var hammer_left := 0
@@ -389,6 +411,10 @@ func internal_constraints(b: Blob) -> void:
 			dev += absf(gx - x[i]) + absf(gy - y[i])
 		dev = dev / n / (b.r * s)
 		var kk := k + (small * 0.3 + (0.0 if b.wob > 0 else 0.03)) * maxf(0.0, dev - (0.15 if small > 0 else 0.4))
+		# 큰 숫자에 깔린 숫자가 납작하게 눌려 찌그러져 보이지 않게: 위에 실린 무게만큼 더 버팀
+		var heavy := minf(0.12, b.load / (b.r * b.r) * 0.01)
+		if heavy > 0.0 and b.wob <= 0:
+			kk += heavy * maxf(0.0, dev - 0.22)
 		for i in n:
 			x[i] += (gxs[i] - x[i]) * kk
 			y[i] += (gys[i] - y[i]) * kk
@@ -737,8 +763,20 @@ func collide() -> void:
 			if d == 0.0:
 				d = 0.01
 			var lim := 0.42 * maxf(a.r * a.s, b.r * b.s)
-			if d < lim:
-				var push := (lim - d) * 0.25
+			# 작은 숫자의 중심이 큰 숫자 몸 안으로 파고들면(흔들기·세게 던지기로 뚫고 들어감)
+			# 점마다 바깥으로 밀면 작은 숫자가 제자리에서 늘어나기만 하고 갇혀요(찌그러짐·겹침).
+			# 그럴 땐 몸 전체를 중심선 따라 밖으로 밀어냄.
+			var big: Blob = a if a.r >= b.r else b
+			var small: Blob = b if big == a else a
+			var deep := lim
+			if d < big.r * big.s and not (a.row or b.row) and _center_inside(small, big):
+				deep = big.r * big.s + small.r * small.s * 0.5
+				if d < 0.5:
+					dy = 1.0 if b == small else -1.0
+					dx = 0.0
+					d = 1.0
+			if d < deep:
+				var push := (deep - d) * (0.25 if deep == lim else 0.18)
 				var ma := a.r * a.r
 				var mb := b.r * b.r
 				var fa := mb / (ma + mb)
@@ -753,6 +791,23 @@ func collide() -> void:
 				for k in b.n:
 					bxs[k] += ux * fb; bys[k] += uy * fb
 				b.x = bxs; b.y = bys
+
+
+func _center_inside(s: Blob, B: Blob) -> bool:
+	var X := s.cx
+	var Y := s.cy
+	if X < B.x0 or X > B.x1 or Y < B.y0 or Y > B.y1:
+		return false
+	var bx := B.x
+	var by := B.y
+	var m := B.n
+	var inside := false
+	var k := m - 1
+	for j in m:
+		if (by[j] > Y) != (by[k] > Y) and X < (bx[k] - bx[j]) * (Y - by[j]) / (by[k] - by[j]) + bx[j]:
+			inside = not inside
+		k = j
+	return inside
 
 
 func blob_motion(b: Blob) -> Vector2:
@@ -1033,6 +1088,11 @@ func resolve_merges() -> void:
 		a.dead = true; b.dead = true
 		var nt := (b.t if a.wild else a.t) + 1
 		var shot_id := a.shot if a.shot else b.shot
+		if streak_on and shot_id and shot_wait.has(shot_id):
+			shot_wait.erase(shot_id)
+			streak = mini(STREAK_MAX if mode != "stage" else 2, streak + 1)   # 스테이지는 ×2까지(점수 목표 판 밸런스 유지)
+			if streak in [3, 6, 8]:
+				toast.emit("연속 합치기 %d번! 점수 ×%s" % [streak, str(1.0 + streak * STREAK_STEP)])
 		if shot_id and shot_id == held_shot:
 			if held_combo:
 				combo = maxi(combo, held_combo); combo_t = 1
@@ -1053,11 +1113,18 @@ func resolve_merges() -> void:
 				sel = nb
 		combo = mini(COMBO_MAX, combo + 1) if combo_t > 0 else 1
 		combo_t = 1.5
-		var pts: int = (1 << nt if nt < 62 else 1 << 61) * combo
+		var mult := 1.0 + streak * STREAK_STEP if streak_on else 1.0
+		var pts: int = int((1 << nt if nt < 62 else 1 << 61) * combo * mult)
 		add_score(pts)
-		float_text(X, Y + tiers_r[nt] + 14 if home else Y, ("+%d · %d연쇄" % [pts, combo]) if combo > 1 else "+%d" % pts, combo > 1)
+		var tag := ""
+		if combo > 1:
+			tag += " · %d연쇄" % combo
+		if mult > 1.0:
+			tag += " · ×%s" % str(mult)
+		float_text(X, Y + tiers_r[nt] + 14 if home else Y, "+%d%s" % [pts, tag], combo > 1 or mult >= 2.0)
 		var f := 760 * pow(0.89, nt) * (1 + (mini(combo, 10) - 1) * 0.12)
 		tone(f * 0.7, f * 1.05, 0.1, 0.16); tone(f * 0.5, f * 0.34, 0.26, 0.14)
+		buzz.emit(16 if nt >= 7 else 8)
 		if nt > board_tier:
 			board_tier = nt
 		if miss_watch:
@@ -1298,7 +1365,7 @@ func take_undo() -> void:
 	undo_snap = {
 		"blobs": blobs.map(func(b): return b.clone()), "score": score, "throws_left": throws_left,
 		"board_tier": board_tier, "up_count": up_count, "up_tier": up_tier, "gauge": gauge.duplicate(),
-		"press": press.duplicate(), "max_tier": max_tier,
+		"press": press.duplicate(), "max_tier": max_tier, "streak": streak, "shot_wait": shot_wait.duplicate(),
 	}
 	var ids := {}
 	for i in blobs.size():
@@ -1318,6 +1385,7 @@ func do_undo() -> bool:
 	score = S["score"]; throws_left = S["throws_left"]; board_tier = S["board_tier"]
 	up_count = S["up_count"]; up_tier = S["up_tier"]; gauge = S["gauge"].duplicate(); press = S["press"].duplicate()
 	max_tier = S["max_tier"]
+	streak = int(S.get("streak", 0)); shot_wait = S.get("shot_wait", {}).duplicate()
 	pending.clear(); touches.clear(); particles.clear(); sel = null; pull = 0; hammer_armed = false
 	undo_left -= 1; undo_snap = null; miss_watch = null; miss_count = maxi(0, miss_count - 1)
 	score_changed.emit(score); info_changed.emit(); items_changed.emit()
@@ -1334,6 +1402,7 @@ func do_shake() -> bool:
 		b.sleep = false
 	shake_t = 1; shake_ph = 0; shake_ang = randf() * TAU
 	shake_safe = 1.8
+	buzz.emit(150)
 	toast.emit("흔들흔들!" if mode == "stage" else "흔들흔들! 남은 흔들기 %d번" % shake_left)
 	items_changed.emit()
 	return true
@@ -1363,6 +1432,7 @@ func shoot(q: Blob, p: float) -> String:
 	combo_t = 0
 	shot_no += 1
 	q.shot = shot_no
+	shot_wait[shot_no] = 0.0
 	held_shot = q.shot
 	if x2_armed and x2_left > 0:
 		q.wild = true; x2_left -= 1; x2_armed = false; used = "x2"
@@ -1389,6 +1459,8 @@ func shoot(q: Blob, p: float) -> String:
 		for b: Blob in blobs:
 			b.sleep = false
 	tone(240 + p * 420, 110, 0.1 + p * 0.1, 0.1 + p * 0.06, "triangle")
+	if p > 0.85:
+		buzz.emit(12)
 	return used
 
 
@@ -1399,7 +1471,7 @@ func new_game() -> void:
 	blobs = []; pending = []; particles = []; floaters = []; queue = []; touches.clear(); warp_fx = []
 	score = 0; max_tier = 0; aim = 0; over = false; out_t = 0; since_merge = 0; clear_t = 0
 	board_tier = 0; up_count = 0; up_tier = 0
-	miss_count = 0; miss_watch = null; held_combo = 0; held_shot = 0
+	miss_count = 0; miss_watch = null; held_combo = 0; held_shot = 0; streak = 0; shot_wait = {}
 	var ch = stage_opt("chamfer")
 	chamfer = float(ch) if ch else CHAMFER
 	pegs = []
@@ -1437,14 +1509,55 @@ func new_game() -> void:
 			var wl: Array = st["well"]
 			var n := wl.size()
 			var w := W - 120
+			var placed: Array = []
 			for i in n:
-				var o := make_blob(int(wl[i]), 60 + (i * w / (n - 1) if n > 1 else w / 2), H - 150 - (i % 2) * 70, 0, 0, 1)
+				var t := int(wl[i])
+				var p := _free_spot(60 + (i * w / (n - 1) if n > 1 else w / 2), H - 150 - (i % 2) * 70, tiers_r[t], placed)
+				placed.append([p.x, p.y, tiers_r[t]])
+				var o := make_blob(t, p.x, p.y, 0, 0, 1)
 				o.sleep = true
 				blobs.append(o)
 	gauge = [0.0, 0.0]; press = [0.0, 0.0]; combo = 0; combo_t = 0; busy = 0; sel = null
 	score_changed.emit(0)
 	info_changed.emit()
 	items_changed.emit()
+
+
+## 시작 숫자 자리: 벽·기둥·다른 시작 숫자에 박히면 가까운 빈자리로 옮김 (박히면 시작하자마자 튕기거나 끼임)
+func _free_spot(x: float, y: float, r: float, placed: Array) -> Vector2:
+	var best := Vector2(x, y)
+	var best_d := 1e9
+	for ring in 14:
+		for k in (1 if ring == 0 else 12):
+			var a := k * TAU / 12.0
+			var c := Vector2(x, y) + Vector2(cos(a), sin(a)) * ring * 12.0
+			c.x = clampf(c.x, r + 2, W - r - 2)
+			c.y = clampf(c.y, SHELF_BOT + r + 6, H - r - 2)
+			if _spot_ok(c, r, placed):
+				var d := c.distance_to(Vector2(x, y))
+				if d < best_d:
+					best_d = d; best = c
+		if best_d < 1e9:
+			return best
+	return best
+
+
+func _spot_ok(c: Vector2, r: float, placed: Array) -> bool:
+	var rr := r * 0.85
+	if c.x + H - c.y < chamfer + rr * 1.2 or W - c.x + H - c.y < chamfer + rr * 1.2:
+		return false
+	for w in bars:
+		var a := Vector2(w[0], w[1]); var b := Vector2(w[2], w[3])
+		var q := Geometry2D.get_closest_point_to_segment(c, a, b)
+		if c.distance_to(q) < w[4] / 2.0 + rr:
+			return false
+	for p in pegs:
+		if c.distance_to(Vector2(p[0], p[1])) < p[2] + rr:
+			return false
+	for o in placed:
+		if c.distance_to(Vector2(o[0], o[1])) < (o[2] + r) * 0.9:
+			return false
+	return true
 
 
 ## 무한 모드 이어 하기(웹과 같게): 대기줄과 판 위 숫자, 점수, 남은 던지기를 저장해요.
@@ -1484,6 +1597,7 @@ func restore(d: Dictionary) -> void:
 func end_game(reason := "") -> void:
 	over = true
 	sel = null; pull = 0
+	buzz.emit(60)
 	finished.emit("over", reason if reason != "" else "양쪽 반원이 다 눌렸어요")
 
 
@@ -1535,6 +1649,14 @@ func sim_step(dt: float) -> void:
 	clock += dt
 	if combo_t > 0:
 		combo_t -= dt
+	if not over:
+		for k in shot_wait.keys():
+			shot_wait[k] += dt
+			if shot_wait[k] > STREAK_WAIT:
+				shot_wait.erase(k)
+				if streak >= 2:
+					float_text(W / 2, 110, "연속 끊김", false)
+				streak = 0
 	if shake_t > 0 and not over:
 		shake_t -= dt; shake_ph -= dt
 		if shake_ph <= 0:
@@ -1582,6 +1704,7 @@ func sim_step(dt: float) -> void:
 			clear_t -= dt
 			if clear_t <= 0:
 				over = true
+				buzz.emit(30)
 				finished.emit("clear", "")
 		elif (mode != "stage" or int(stages[stage_idx]["throws"])) and throws_left <= 0:
 			out_t += dt
@@ -1628,10 +1751,16 @@ func draw_blob(b: Blob) -> void:
 		draw_circle(Vector2(b.cx, b.cy), b.r * b.s, col)
 	else:
 		draw_colored_polygon(poly, col)
+	var R := b.r * b.s
 	var loop := pts.duplicate()
 	loop.append(pts[0])
-	draw_polyline(loop, EDGE, 2.6, true)
-	var R := b.r * b.s
+	if not b.rock and not b.wild:
+		_blob_shading(b, pts, R, alpha)
+	draw_polyline(loop, EDGE, 2.4, true)
+	if b == sel and not over:
+		# 고른 숫자: 등불색 링 + 은은한 빛
+		draw_arc(Vector2(b.cx, b.cy), R + 5, 0, TAU, 40, Color(AMBER.r, AMBER.g, AMBER.b, 0.22), 7, true)
+		draw_arc(Vector2(b.cx, b.cy), R + 5, 0, TAU, 40, AMBER, 2.4, true)
 	if b.rock:
 		for d in [[-0.3, 0.0, 0.16], [0.22, 0.32, 0.13], [0.24, -0.36, 0.11]]:
 			draw_circle(Vector2(b.cx + R * d[0], b.cy + R * d[1]), R * d[2], Color("#58585e"))
@@ -1647,6 +1776,32 @@ func draw_blob(b: Blob) -> void:
 		return
 	var size := minf(R * 0.85, 13 + R * 0.1)
 	_text_center(num_text(b.t), Vector2(b.cx, b.cy + size * 0.05), size, INK, num_font)
+
+
+## 젤리 안쪽: 위쪽은 흰색 28% 하이라이트, 아래쪽은 검정 12% 그림자 (시안 v4)
+func _blob_shading(b: Blob, pts: PackedVector2Array, R: float, alpha: float) -> void:
+	var c := Vector2(b.cx, b.cy)
+	var n := pts.size()
+	var hi_pts := PackedVector2Array()
+	var hi_cols := PackedColorArray()
+	var sh_pts := PackedVector2Array()
+	var sh_cols := PackedColorArray()
+	hi_pts.resize(n + 1)
+	hi_cols.resize(n + 1)
+	sh_pts.resize(n + 1)
+	sh_cols.resize(n + 1)
+	var inv := 1.0 / maxf(R, 1.0)
+	for i in n + 1:
+		var p: Vector2 = pts[i % n]
+		var d := p - c
+		var up := clampf(-d.y * inv, 0.0, 1.0)
+		var down := clampf(d.y * inv, 0.0, 1.0)
+		hi_pts[i] = c + d * 0.84
+		sh_pts[i] = c + d * 0.9
+		hi_cols[i] = Color(1, 1, 1, 0.28 * up * alpha)
+		sh_cols[i] = Color(0, 0, 0, 0.12 * down * alpha)
+	draw_polyline_colors(sh_pts, sh_cols, 6.0, true)
+	draw_polyline_colors(hi_pts, hi_cols, 3.0, true)
 
 
 func _text_center(s: String, at: Vector2, size: float, col: Color, font: Font) -> void:
@@ -1677,14 +1832,62 @@ func draw_arrow() -> void:
 	if tip > room:
 		tip = room
 		from = minf(from, maxf(0, tip - 26))
-	var neck := tip - 13
-	var col := INK if from < edge else MILK
+	# 시안 v4: 등불색 둥근 점선 + 끝에 점선 원 (젤리 안쪽 구간은 어두운 점)
 	var o := Vector2(hx, hy)
-	draw_line(o + Vector2(ux, uy) * from, o + Vector2(ux, uy) * neck, col, 4, true)
-	draw_colored_polygon(PackedVector2Array([
-		o + Vector2(ux * tip, uy * tip),
-		o + Vector2(ux * neck - uy * 9, uy * neck + ux * 9),
-		o + Vector2(ux * neck + uy * 9, uy * neck - ux * 9)]), col)
+	var dir := Vector2(ux, uy)
+	var ring := 9.0
+	var d := from
+	while d < tip - ring:
+		draw_circle(o + dir * d, 2.0, INK if d < edge else AMBER)
+		d += 7.0
+	var tc := o + dir * tip
+	for k in 8:
+		var a0 := TAU * k / 8.0 + clock * 0.8
+		draw_arc(tc, ring, a0, a0 + TAU / 16.0, 6, AMBER, 2.0, true)
+
+
+## 판 모양: 위 모서리 둥글게, 옆벽 직선, 아래는 chamfer 만큼 꺾인 바닥
+func well_outline() -> PackedVector2Array:
+	if _well_chamfer == chamfer and not _well_cache.is_empty():
+		return _well_cache
+	var pts := PackedVector2Array()
+	for k in 9:
+		var a := PI + (PI / 2) * k / 8.0
+		pts.append(Vector2(WELL_R + cos(a) * WELL_R, WELL_R + sin(a) * WELL_R))
+	for k in 9:
+		var a := PI * 1.5 + (PI / 2) * k / 8.0
+		pts.append(Vector2(W - WELL_R + cos(a) * WELL_R, WELL_R + sin(a) * WELL_R))
+	pts.append(Vector2(W, H - chamfer))
+	pts.append(Vector2(W - chamfer, H))
+	pts.append(Vector2(chamfer, H))
+	pts.append(Vector2(0, H - chamfer))
+	_well_cache = pts
+	_well_chamfer = chamfer
+	return pts
+
+
+## 안쪽 16 간격 점 격자(민트 9%). 한 번만 만들어 두고 재사용해요.
+func grid_texture() -> Texture2D:
+	if _grid_tex != null and _grid_chamfer == chamfer:
+		return _grid_tex
+	var sc := 2
+	var img := Image.create(int(W) * sc, int(H) * sc, false, Image.FORMAT_RGBA8)
+	var col := Color(MINT.r, MINT.g, MINT.b, 0.09)
+	var gap := 16
+	var y := gap
+	while y < int(H):
+		var x := gap
+		while x < int(W):
+			var outside: bool = (x + (H - y) < chamfer) or ((W - x) + (H - y) < chamfer)
+			if not outside:
+				for dx in 2:
+					for dy in 2:
+						img.set_pixel(x * sc + dx, y * sc + dy, col)
+			x += gap
+		y += gap
+	_grid_tex = ImageTexture.create_from_image(img)
+	_grid_chamfer = chamfer
+	return _grid_tex
 
 
 func _draw() -> void:
@@ -1693,9 +1896,12 @@ func _draw() -> void:
 		off = Vector2((randf() - 0.5) * 6 * shake, (randf() - 0.5) * 6 * shake)
 		shake *= 0.86
 	draw_set_transform(off)
-	draw_rect(Rect2(0, 0, W, H), WELL)
-	draw_colored_polygon(PackedVector2Array([Vector2(0, H - chamfer), Vector2(chamfer, H), Vector2(0, H)]), FRAME)
-	draw_colored_polygon(PackedVector2Array([Vector2(W, H - chamfer), Vector2(W - chamfer, H), Vector2(W, H)]), FRAME)
+	var well := well_outline()
+	var well_cols := PackedColorArray()
+	for p in well:
+		well_cols.append(WELL_TOP.lerp(WELL_BOT, clampf(p.y / H, 0.0, 1.0)))
+	draw_polygon(well, well_cols)
+	draw_texture_rect(grid_texture(), Rect2(0, 0, W, H), false)
 	for w in bars:
 		var a := Vector2(w[0], w[1])
 		var b := Vector2(w[2], w[3])
@@ -1722,18 +1928,31 @@ func _draw() -> void:
 	for p in pegs:
 		draw_circle(Vector2(p[0], p[1]), p[2], FRAME)
 		draw_circle(Vector2(p[0] - p[2] * 0.3, p[1] - p[2] * 0.3), p[2] * 0.25, FRAME_HI)
-	draw_rect(Rect2(0, SHELF_TOP - 4, W, SHELF_BOT - SHELF_TOP + 8), Color(1, 1, 1, 0.03))
+	# 선반 띠(민트 5%) + 아래 경계 점선
+	draw_rect(Rect2(0, SHELF_TOP - 4, W, SHELF_BOT - SHELF_TOP + 8), Color(MINT.r, MINT.g, MINT.b, 0.05))
+	draw_dashed_line(Vector2(0, SHELF_BOT + 4), Vector2(W, SHELF_BOT + 4), Color(MINT.r, MINT.g, MINT.b, 0.28), 1.0, 4.0)
 	if rocks_on():
 		for k in MISS_LIMIT:
 			draw_circle(Vector2(W / 2 - 16 + k * 16, SHELF_BOT + 15), 4.5, Color("#e2574c") if k < miss_count else Color(1, 1, 1, 0.12))
-	var mem := Color("#4fc36b") if shake_safe > 0 else FRAME
+	# 끝 반원: 벽 안쪽 반타원, 선만 + 작은 눈 2개 (시안 v4)
+	var safe := shake_safe > 0
+	var mem_fill := Color(0.31, 0.76, 0.42, 0.22) if safe else Color(MINT.r, MINT.g, MINT.b, 0.06)
+	var mem_line := Color(0.31, 0.76, 0.42, 0.9) if safe else Color(LINE.r, LINE.g, LINE.b, 0.7)
 	for i in 2:
 		var cxm: float = W + MEM_TRAVEL * gauge[i] if i == 1 else -MEM_TRAVEL * gauge[i]
 		var el := PackedVector2Array()
-		for k in 24:
+		for k in 25:
 			var a := TAU * k / 24
-			el.append(Vector2(cxm + cos(a) * MEM_A, sensor_y + sin(a) * MEM_B))
-		draw_colored_polygon(el, mem)
+			var ex := cxm + cos(a) * MEM_A
+			el.append(Vector2(maxf(0.0, ex) if i == 0 else minf(W, ex), sensor_y + sin(a) * MEM_B))
+		var reach := (cxm + MEM_A) if i == 0 else (W - (cxm - MEM_A))   # 판 안쪽으로 보이는 폭
+		if reach > 1.0:
+			draw_colored_polygon(el.slice(0, 24), mem_fill)
+			draw_polyline(el, mem_line, 1.6, true)
+		var inner := 1.0 if i == 0 else -1.0
+		var ex0 := (0.0 if i == 0 else W) + inner * 11.0
+		for eye in [-5.0, 5.0]:
+			draw_circle(Vector2(ex0, sensor_y + eye), 1.8, mem_line)
 	for b: Blob in blobs:
 		if not b.row:
 			draw_blob(b)
@@ -1764,13 +1983,21 @@ func _draw() -> void:
 		fk.append(f)
 	floaters = fk
 	draw_set_transform(Vector2.ZERO)
-	# 테두리 (웹 버전 6px 프레임)
-	draw_rect(Rect2(-3, -3, W + 6, H + 6), FRAME, false, 6)
-	# 게이지: 반원 옆 프레임 안 세로 막대
+	# 테두리 1.6: 위는 밝은 민트 → 가운데 흐리게 → 아래 다시 조금 밝게 (세로 그라데이션) + 위 가운데 하이라이트
+	var loop := well.duplicate()
+	loop.append(well[0])
+	var line_cols := PackedColorArray()
+	for p in loop:
+		var t := clampf(p.y / H, 0.0, 1.0)
+		var a := lerpf(0.85, 0.3, minf(t * 2.0, 1.0)) if t < 0.5 else lerpf(0.3, 0.5, (t - 0.5) * 2.0)
+		line_cols.append(Color(MINT.r, MINT.g, MINT.b, a))
+	draw_polyline_colors(loop, line_cols, 1.6, true)
+	draw_line(Vector2(W * 0.3, 0.0), Vector2(W * 0.7, 0.0), Color(1, 1, 1, 0.5), 1.6, true)
+	# 게이지: 반원 옆 판 바깥 세로 막대
 	for i in 2:
 		var gx := -10.0 if i == 0 else W + 6
 		var r := Rect2(gx, sensor_y - 28, 4, 56)
-		draw_rect(r, Color("#1f4a2b") if shake_safe > 0 else Color("#1e1e20"))
+		draw_rect(r, Color(0.31, 0.76, 0.42, 0.25) if shake_safe > 0 else Color(MINT.r, MINT.g, MINT.b, 0.1))
 		var g: float = gauge[i]
-		var gc := Color("#4fc36b") if shake_safe > 0 else (Color("#ff4034") if g > 0.7 else MILK)
+		var gc := Color("#4fc36b") if shake_safe > 0 else (Color("#ff7a6b") if g > 0.7 else MINT)
 		draw_rect(Rect2(gx, sensor_y + 28 - 56 * g, 4, 56 * g), gc)

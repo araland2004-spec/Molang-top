@@ -4,12 +4,20 @@ extends Control
 const GameCore := preload("res://scripts/game_core.gd")
 const Synth := preload("res://scripts/synth.gd")
 
-const PAGE := Color("#29292c")
-const BTN := Color("#38383d")
-const BTN2 := Color("#4a4a50")
-const MILK := Color("#f4f4f2")
-const SOFT := Color("#a3a3a8")
-const INK := Color("#111113")
+# v4 밤 민트 테마 (docs/ui/tokens.json). 예전 회색 화면의 이름은 그대로 두고 값만 바꿈.
+const PAGE := Color(0.063, 0.157, 0.173, 0.97)     # 카드 바탕 (sb_card_result)
+const BTN := Color(0.494, 0.941, 0.784, 0.08)      # 보조 버튼 (sb_button_secondary)
+const BTN2 := Color(0.494, 0.941, 0.784, 0.14)
+const MILK := Color(0.914, 0.949, 0.933)           # 글자 · 「주 버튼」 표시용
+const SOFT := Color(0.624, 0.737, 0.714)
+const INK := Color(0.102, 0.063, 0.024)            # 호박색 주 버튼 위 글자
+const CELL_DONE := Color(0.494, 0.941, 0.784, 0.12)
+const CELL_JUMP := Color(0.725, 0.635, 1.0, 0.14)
+# UI 시안 v4 (docs/ui/README.md). 시안 360 기준 → 이 화면 720 기준이라 MolStyle.S = 2배로 써요.
+const UI := preload("res://scripts/ui/mol_ui.gd")
+const Sty := preload("res://scripts/ui/mol_style.gd")
+const Fx := preload("res://scripts/ui/press_fx.gd")
+const ITEM_ICONS := {"shake": "ic_item_shake", "undo": "ic_item_undo", "hammer": "ic_item_hammer", "tilt": "ic_tilt_right", "x2": "ic_item_x2star"}  # 기울이기 아이템 전용 아이콘은 아직 없어서 임시로 기울임 화살표
 const ITEM_NAMES := {"shake": "흔들기", "undo": "되돌리기", "hammer": "뿅망치", "tilt": "기울이기", "x2": "×2 별"}
 const SECTIONS := {0: "기본", 5: "6단계부터 · 위로 던져서 합치기", 11: "12단계부터 · 섞어서 연습", 17: "18단계부터 · 흔들기", 22: "23단계부터 · 흔들기 게이지",
 	25: "26단계부터 · 새 아이템 「되돌리기」", 29: "30단계부터 · 판 모양이 바뀌어요", 40: "41단계부터 · 새 아이템 「뿅망치」", 45: "46단계부터 · 장애물 + 뿅망치",
@@ -31,6 +39,16 @@ var items_box: HBoxContainer
 var item_btns := {}
 var tilt_l: Button
 var tilt_r: Button
+var font_med: Font
+var goal_box: Control
+var goal_l: Label
+var goal_r: Label
+var goal_bg: Panel
+var goal_fill: Panel
+var goal_ticks: Array = []
+var item_badges := {}
+var item_rings := {}
+var item_prev := {}
 var hint_lbl: Label
 var toast_lbl: Label
 var toast_t := 0.0
@@ -58,11 +76,28 @@ var board_scale := 1.0
 
 
 func _ready() -> void:
-	font_num = load("res://assets/fonts/Poppins-Light.ttf")
-	font_txt = load("res://assets/fonts/NotoSansKR-Light-sub.otf")
-	font_bold = load("res://assets/fonts/NotoSansKR-Bold-sub.otf")
-	var bg := ColorRect.new()
-	bg.color = PAGE
+	font_num = load("res://assets/fonts/Poppins-Bold.ttf")
+	font_txt = load("res://assets/fonts/NotoSansKR-Regular-subset.otf")
+	font_med = load("res://assets/fonts/NotoSansKR-Medium-subset.otf")
+	font_bold = load("res://assets/fonts/NotoSansKR-Bold-subset.otf")
+	# Poppins 에는 한글이 없어서, 숫자와 한글이 섞인 글자(예: 「128 만들기」)는 Noto 로 대신 그려요.
+	var fb: Array[Font] = [font_bold]
+	(font_num as FontFile).fallbacks = fb
+	# 바탕: 위쪽이 밝은 원형 그라데이션 (시안 v4 게임 화면)
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.55, 1.0])
+	grad.colors = PackedColorArray([UI.NIGHT_GAME_BG_CENTER, UI.NIGHT_GAME_BG_MID, UI.NIGHT_GAME_BG_EDGE])
+	var gt := GradientTexture2D.new()
+	gt.gradient = grad
+	gt.fill = GradientTexture2D.FILL_RADIAL
+	gt.fill_from = Vector2(0.5, 0.1)
+	gt.fill_to = Vector2(1.05, 0.75)
+	gt.width = 256
+	gt.height = 256
+	var bg := TextureRect.new()
+	bg.texture = gt
+	bg.stretch_mode = TextureRect.STRETCH_SCALE
+	bg.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(bg)
@@ -81,11 +116,16 @@ func _ready() -> void:
 	core.best = int(Save.d["best"])
 	core.prog = int(Save.d["prog"])
 	_build_ui()
-	core.score_changed.connect(func(s): score_lbl.text = GameCore.score_text(s))
-	core.info_changed.connect(func(): info_lbl.text = core.info_text())
+	core.score_changed.connect(func(s):
+		score_lbl.text = GameCore.score_text(s)
+		_refresh_goal())
+	core.info_changed.connect(func():
+		info_lbl.text = _info_str()
+		_refresh_goal())
 	core.toast.connect(_toast)
 	core.items_changed.connect(_paint_items)
 	core.finished.connect(_on_finished)
+	core.buzz.connect(func(ms: int): Save.buzz(ms))
 	resized.connect(_layout)
 	_layout()
 	var nm := Save.next_mode
@@ -108,6 +148,9 @@ func _style(bg: Color, radius := 12) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = bg
 	sb.set_corner_radius_all(radius)
+	if bg.a < 0.99 or bg == PAGE:
+		sb.border_color = Color(0.494, 0.941, 0.784, 0.14)
+		sb.set_border_width_all(2)
 	sb.content_margin_left = 14
 	sb.content_margin_right = 14
 	sb.content_margin_top = 8
@@ -123,11 +166,32 @@ func _btn(text: String, bg := BTN, fg := MILK, size := 26) -> Button:
 	b.add_theme_font_size_override("font_size", size)
 	for st in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_disabled_color"]:
 		b.add_theme_color_override(st, fg)
-	b.add_theme_stylebox_override("normal", _style(bg))
-	b.add_theme_stylebox_override("hover", _style(bg))
-	b.add_theme_stylebox_override("focus", _style(bg))
-	b.add_theme_stylebox_override("pressed", _style(bg.lightened(0.12)))
-	b.add_theme_stylebox_override("disabled", _style(bg.darkened(0.3)))
+	# 주 버튼(예전 흰 버튼) = 호박색 꽉 찬 버튼, 나머지 = 민트 테두리 보조 버튼, 단계 칸은 칸 스타일
+	var name := "sb_button_secondary"
+	var kind: Dictionary = Fx.SOFT
+	if bg == MILK:
+		name = "sb_button_primary_solid"; kind = Fx.PRIMARY
+		fg = INK
+	elif bg == CELL_DONE:
+		name = "sb_stage_cell_done"
+	elif bg == CELL_JUMP or bg == BTN2:
+		name = "sb_stage_cell"
+	var sb := Sty.box(name)
+	if bg == CELL_JUMP:
+		sb.border_color = UI.VIOLET_BOSS
+		sb.set_border_width_all(2)
+	for st in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		b.add_theme_color_override(st, fg)
+	b.add_theme_color_override("font_disabled_color", Color(fg.r, fg.g, fg.b, 0.35))
+	b.add_theme_stylebox_override("normal", sb)
+	b.add_theme_stylebox_override("hover", sb)
+	b.add_theme_stylebox_override("focus", sb)
+	b.add_theme_stylebox_override("pressed", sb)
+	var dis := sb.duplicate() as StyleBoxFlat
+	dis.bg_color.a *= 0.4
+	dis.border_color.a *= 0.5
+	b.add_theme_stylebox_override("disabled", dis)
+	Fx.attach(b, kind)
 	return b
 
 
@@ -140,68 +204,268 @@ func _lbl(text: String, size: int, col := MILK, font: Font = null) -> Label:
 	return l
 
 
+## 위쪽 아이콘 버튼(44 시안 → 88px). boxed 는 시안의 「목록」처럼 패널 바탕이 있는 버튼.
+func _icon_btn(icon_name: String, boxed: bool) -> Button:
+	var b := Button.new()
+	b.focus_mode = Control.FOCUS_NONE
+	b.icon = Sty.icon(icon_name)
+	b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	b.vertical_icon_alignment = VERTICAL_ALIGNMENT_CENTER
+	b.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	b.add_theme_constant_override("icon_max_width", 44)
+	b.custom_minimum_size = Vector2(88, 88)
+	var sb: StyleBox = Sty.box("sb_panel_night") if boxed else StyleBoxEmpty.new()
+	for st in ["normal", "hover", "pressed", "focus", "disabled"]:
+		b.add_theme_stylebox_override(st, sb)
+	Fx.attach(b, Fx.ICON)
+	return b
+
+
+func _paint_mute() -> void:
+	var c := Color(1, 1, 1, 0.4 if synth.muted else 1.0)
+	for st in ["icon_normal_color", "icon_hover_color", "icon_pressed_color", "icon_focus_color"]:
+		mute_btn.add_theme_color_override(st, c)
+
+
+## 정보줄 옆 작은 알약 버튼 (새 판 / 다시)
+func _chip_btn(text: String) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.add_theme_font_override("font", font_med)
+	b.add_theme_font_size_override("font_size", 24)
+	for st in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		b.add_theme_color_override(st, UI.NIGHT_TEXT_SUB)
+	var sb := Sty.box("sb_chip")
+	for st in ["normal", "hover", "pressed", "focus", "disabled"]:
+		b.add_theme_stylebox_override(st, sb)
+	b.custom_minimum_size = Vector2(0, 56)
+	Fx.attach(b, Fx.SOFT)
+	return b
+
+
+## 아이템 버튼: 위 아이콘 + 아래 이름, 오른쪽 위 노란 개수 배지, 켜졌을 때 등불색 링(숨 쉬듯)
+func _item_btn(k: String) -> Button:
+	var b := Button.new()
+	b.text = ITEM_NAMES[k]
+	b.focus_mode = Control.FOCUS_NONE
+	b.icon = Sty.icon(ITEM_ICONS[k])
+	b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	b.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
+	b.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	b.add_theme_constant_override("icon_max_width", 48)
+	b.add_theme_constant_override("h_separation", 0)
+	b.add_theme_font_override("font", font_med)
+	b.add_theme_font_size_override("font_size", 24)
+	for st in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		b.add_theme_color_override(st, UI.NIGHT_TEXT)
+	b.add_theme_color_override("font_disabled_color", Color(UI.NIGHT_TEXT.r, UI.NIGHT_TEXT.g, UI.NIGHT_TEXT.b, 0.38))
+	b.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.38))
+	var sb := Sty.box("sb_panel_night")
+	for st in ["normal", "hover", "pressed", "focus"]:
+		b.add_theme_stylebox_override(st, sb)
+	var dis := Sty.box("sb_panel_night")
+	dis.bg_color.a *= 0.5
+	b.add_theme_stylebox_override("disabled", dis)
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b.custom_minimum_size = Vector2(96, 148)
+	b.clip_text = true          # 아이템이 많아도(기울이기 화살표까지) 줄이 화면 밖으로 안 넘치게
+	# 켜짐 링
+	var ring := Panel.new()
+	ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ring.set_anchors_preset(Control.PRESET_FULL_RECT)
+	var rsb := Sty.box("sb_panel_night")
+	rsb.bg_color = Color(0, 0, 0, 0)
+	rsb.border_color = UI.AMBER_PRIMARY
+	rsb.set_border_width_all(3)
+	rsb.shadow_color = Color(UI.AMBER_PRIMARY.r, UI.AMBER_PRIMARY.g, UI.AMBER_PRIMARY.b, 0.3)
+	rsb.shadow_size = 10
+	ring.add_theme_stylebox_override("panel", rsb)
+	ring.visible = false
+	b.add_child(ring)
+	Fx.pulse(ring)
+	item_rings[k] = ring
+	# 개수 배지
+	var badge := Label.new()
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	badge.add_theme_font_override("font", font_num)
+	badge.add_theme_font_size_override("font_size", 22)
+	badge.add_theme_color_override("font_color", INK)
+	badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	badge.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	var bsb := StyleBoxFlat.new()
+	bsb.bg_color = UI.GOLD_STAR
+	bsb.set_corner_radius_all(999)
+	badge.add_theme_stylebox_override("normal", bsb)
+	badge.custom_minimum_size = Vector2(40, 40)
+	badge.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	badge.offset_left = -34
+	badge.offset_right = 6
+	badge.offset_top = -14
+	badge.offset_bottom = 26
+	b.add_child(badge)
+	item_badges[k] = badge
+	Fx.attach(b, Fx.SOFT)
+	return b
+
+
+## 기울이기 ◀ ▶ (꾹 누르는 동안만 기울어요)
+func _tilt_btn(icon_name: String, dir: int) -> Button:
+	var b := _icon_btn(icon_name, true)
+	b.custom_minimum_size = Vector2(72, 148)
+	var pst := Sty.box("sb_button_secondary")
+	pst.content_margin_left = 0
+	pst.content_margin_right = 0
+	b.add_theme_stylebox_override("pressed", pst)
+	b.button_down.connect(func(): core.tilt_btn = dir)
+	b.button_up.connect(func(): core.tilt_btn = 0)
+	return b
+
+
+## 정보줄 한 줄: 「45단계 · 고비 · 던지기 31 남음」
+func _info_str() -> String:
+	var left := ("던지기 %d 남음" % core.throws_left) if (core.mode != "stage" or int(core.stages[core.stage_idx]["throws"])) else "던지기 무제한"
+	if core.mode != "stage":
+		return "무한 모드 · " + left
+	var i: int = core.stage_idx
+	var jump := i >= 24 and (i + 1) % 5 == 0
+	return "%d단계%s · %s" % [i + 1, " · 고비" if jump else "", left]
+
+
+## 목표 막대: 스테이지는 목표 진행도, 무한 모드는 최고 기록 대비 점수
+func _refresh_goal() -> void:
+	if goal_box == null:
+		return
+	var cur := 0.0
+	var tot := 1.0
+	var right := ""
+	if core.mode == "stage":
+		var st: Dictionary = core.stages[core.stage_idx]
+		match st["goal"]:
+			"tier":
+				goal_l.text = "목표"
+				cur = float(core.board_tier); tot = float(maxi(1, int(st["t"])))
+				right = core.goal_text(st)
+			"up":
+				goal_l.text = "목표 · 위로 합치기"
+				cur = float(core.up_count); tot = float(maxi(1, int(st["v"])))
+				right = "%d / %d" % [mini(core.up_count, int(st["v"])), int(st["v"])]
+			"upTier":
+				goal_l.text = "목표"
+				cur = float(core.up_tier); tot = float(maxi(1, int(st["t"])))
+				right = core.goal_text(st)
+			_:
+				goal_l.text = "목표 점수"
+				cur = float(core.score); tot = float(maxi(1, int(st["v"])))
+				right = "%s / %s" % [GameCore.score_text(core.score), GameCore.score_text(int(st["v"]))]
+	else:
+		goal_l.text = "최고 기록"
+		cur = float(core.score); tot = float(maxi(1, core.best))
+		right = "%s / %s" % [GameCore.score_text(core.score), GameCore.score_text(core.best)] if core.best > 0 else GameCore.score_text(core.score)
+	goal_r.text = right
+	goal_fill.set_meta("ratio", clampf(cur / tot, 0.0, 1.0))
+	_place_goal()
+
+
+func _place_goal() -> void:
+	var w := goal_box.size.x
+	goal_l.position = Vector2(0, 0)
+	goal_r.position = Vector2(0, 0)
+	goal_r.size = Vector2(w, 0)
+	goal_bg.position = Vector2(0, 46)
+	goal_bg.size = Vector2(w, 18)
+	var ratio: float = goal_fill.get_meta("ratio", 0.0)
+	goal_fill.position = Vector2(0, 46)
+	goal_fill.size = Vector2(maxf(18.0, w * ratio) if ratio > 0.0 else 0.0, 18)
+	for k in 3:
+		var tk: ColorRect = goal_ticks[k]
+		tk.position = Vector2(w * 0.25 * (k + 1) - 1, 44)
+		tk.size = Vector2(2, 22)
+
+
 func _build_ui() -> void:
-	# 위: 점수·안내·버튼
+	# 위: 점수 + 아이콘 버튼 3개 (시안 v4)
 	var top := HBoxContainer.new()
 	top.name = "Top"
-	top.position = Vector2(24, 24)
-	top.add_theme_constant_override("separation", 10)
+	top.add_theme_constant_override("separation", 8)
 	add_child(top)
-	var sv := VBoxContainer.new()
-	sv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sv.add_theme_constant_override("separation", -6)
-	top.add_child(sv)
-	score_lbl = _lbl("0", 64, MILK, font_num)
-	sv.add_child(score_lbl)
-	info_lbl = _lbl("", 22, MILK)
-	sv.add_child(info_lbl)
-	var bb := HBoxContainer.new()
-	bb.add_theme_constant_override("separation", 8)
-	top.add_child(bb)
-	mute_btn = _btn("소리 끔" if synth.muted else "소리", BTN, MILK, 22)
+	score_lbl = _lbl("0", 76, UI.NIGHT_TEXT, font_num)
+	score_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_child(score_lbl)
+	mute_btn = _icon_btn("ic_sound", false)
 	mute_btn.pressed.connect(func():
 		synth.muted = not synth.muted
 		Save.d["muted"] = synth.muted
 		Save.save()
-		mute_btn.text = "소리 끔" if synth.muted else "소리")
-	bb.add_child(mute_btn)
-	var mb := _btn("목록", BTN, MILK, 22)
+		_paint_mute())
+	top.add_child(mute_btn)
+	_paint_mute()
+	var hb := _icon_btn("ic_home", false)
+	hb.pressed.connect(go_home)
+	top.add_child(hb)
+	var mb := _icon_btn("ic_list", true)
 	mb.pressed.connect(func():
 		persist()
 		show_menu())
-	bb.add_child(mb)
-	restart_btn = _btn("새 판", BTN, MILK, 22)
+	top.add_child(mb)
+	# 정보줄: 2줄로 고정(줄바꿈으로 숫자가 떨어지지 않게) + 새 판/다시 칩
+	var info_row := HBoxContainer.new()
+	info_row.name = "InfoRow"
+	info_row.add_theme_constant_override("separation", 12)
+	add_child(info_row)
+	info_lbl = _lbl("", 26, UI.NIGHT_TEXT_SUB)
+	info_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info_lbl.clip_text = true
+	info_row.add_child(info_lbl)
+	restart_btn = _chip_btn("새 판")
 	restart_btn.pressed.connect(_on_restart)
-	bb.add_child(restart_btn)
-	var hb := _btn("집", BTN, MILK, 22)
-	hb.pressed.connect(go_home)
-	bb.add_child(hb)
+	info_row.add_child(restart_btn)
+	# 목표 막대: 왼쪽 「목표 점수」, 오른쪽 「현재 / 목표」, 25% 눈금
+	goal_box = Control.new()
+	goal_box.name = "Goal"
+	goal_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(goal_box)
+	goal_l = _lbl("목표 점수", 26, UI.NIGHT_TEXT_SUB)
+	goal_box.add_child(goal_l)
+	goal_r = _lbl("", 26, UI.NIGHT_TEXT, font_num)
+	goal_r.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	goal_box.add_child(goal_r)
+	goal_bg = Panel.new()
+	goal_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	goal_bg.add_theme_stylebox_override("panel", Sty.box("sb_progress_bg"))
+	goal_box.add_child(goal_bg)
+	goal_fill = Panel.new()
+	goal_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	goal_fill.add_theme_stylebox_override("panel", Sty.box("sb_progress_fill"))
+	goal_box.add_child(goal_fill)
+	for k in 3:
+		var tk := ColorRect.new()
+		tk.color = Color(UI.NIGHT_TEXT.r, UI.NIGHT_TEXT.g, UI.NIGHT_TEXT.b, 0.22)
+		tk.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		goal_box.add_child(tk)
+		goal_ticks.append(tk)
 
 	# 판
 	board_area = Control.new()
-	board_area.mouse_filter = Control.MOUSE_FILTER_STOP
-	board_area.gui_input.connect(_board_input)
+	# 웹 버전처럼 판 밖(아래 빈 곳 등) 어디를 눌러도 손가락과 가장 가까운 대기 숫자를 잡아요.
+	# 판도 PASS 라서 눌림이 화면 전체(_gui_input)로 올라가 한곳에서 처리돼요.
+	board_area.mouse_filter = Control.MOUSE_FILTER_PASS
 	add_child(board_area)
 	board_area.add_child(core)
 
-	# 아래: 아이템
+	# 아래: 아이템 (아이콘 + 이름 + 개수 배지)
 	items_box = HBoxContainer.new()
-	items_box.add_theme_constant_override("separation", 10)
+	items_box.add_theme_constant_override("separation", 12)
 	add_child(items_box)
-	tilt_l = _btn("◀", BTN, MILK, 28)
-	tilt_l.button_down.connect(func(): core.tilt_btn = -1)
-	tilt_l.button_up.connect(func(): core.tilt_btn = 0)
+	tilt_l = _tilt_btn("ic_tilt_left", -1)
 	items_box.add_child(tilt_l)
 	for k in ["shake", "undo", "hammer", "tilt", "x2"]:
-		var b := _btn(ITEM_NAMES[k], BTN2, MILK, 22)
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var b := _item_btn(k)
 		var kk: String = k
 		b.pressed.connect(func(): _use_item(kk))
 		items_box.add_child(b)
 		item_btns[k] = b
-	tilt_r = _btn("▶", BTN, MILK, 28)
-	tilt_r.button_down.connect(func(): core.tilt_btn = 1)
-	tilt_r.button_up.connect(func(): core.tilt_btn = 0)
+	tilt_r = _tilt_btn("ic_tilt_right", 1)
 	items_box.add_child(tilt_r)
 
 	hint_lbl = _lbl("위에 있는 숫자 하나를 골라\n끌었다 놓으면 그 방향으로 날아가요.\n같은 숫자끼리 닿으면 합쳐져요.\n양쪽 반원이 납작해지면 끝나요.", 24, MILK)
@@ -259,16 +523,14 @@ func _build_ui() -> void:
 	card_main.pressed.connect(_on_card_main)
 	cv.add_child(card_main)
 	card_menu = _btn("단계 목록", PAGE, MILK, 26)
-	card_menu.add_theme_stylebox_override("normal", _outline())
 	card_menu.pressed.connect(show_menu)
 	cv.add_child(card_menu)
 	var ch := _btn("집으로", PAGE, MILK, 26)
-	ch.add_theme_stylebox_override("normal", _outline())
 	ch.pressed.connect(go_home)
 	cv.add_child(ch)
 
 	# 단계 목록
-	menu = _overlay(Color(0.16, 0.16, 0.17, 0.97))
+	menu = _overlay(Color(UI.NIGHT_BG_TOP.r, UI.NIGHT_BG_TOP.g, UI.NIGHT_BG_TOP.b, 0.98))
 	var sc := ScrollContainer.new()
 	sc.set_anchors_preset(Control.PRESET_FULL_RECT)
 	sc.offset_top = 30
@@ -305,20 +567,27 @@ func _overlay(col: Color) -> Control:
 
 func _layout() -> void:
 	var vs := size
+	var mx := 36.0
 	var top: Control = get_node("Top")
-	top.size = Vector2(vs.x - 48, 0)
-	top.position = Vector2(24, 24)
-	var top_h := 170.0
-	var bottom_h := 120.0
-	var avail := Vector2(vs.x - 48, vs.y - top_h - bottom_h - 30)
+	top.size = Vector2(vs.x - mx * 2, 0)
+	top.position = Vector2(mx, 28)
+	var info_row: Control = get_node("InfoRow")
+	info_row.position = Vector2(mx, 140)
+	info_row.size = Vector2(vs.x - mx * 2, 0)
+	goal_box.position = Vector2(mx, 204)
+	goal_box.size = Vector2(vs.x - mx * 2, 70)
+	_place_goal()
+	var top_h := 296.0
+	var bottom_h := 220.0
+	var avail := Vector2(vs.x - 48, vs.y - top_h - bottom_h - 20)
 	board_scale = minf(avail.x / GameCore.W, avail.y / GameCore.H)
 	var bw := GameCore.W * board_scale
 	var bh := GameCore.H * board_scale
 	board_area.position = Vector2((vs.x - bw) / 2, top_h + (avail.y - bh) / 2)
 	board_area.size = Vector2(bw, bh)
 	core.scale = Vector2.ONE * board_scale
-	items_box.position = Vector2(24, vs.y - bottom_h + 10)
-	items_box.size = Vector2(vs.x - 48, 90)
+	items_box.position = Vector2(mx, vs.y - 148 - 36)
+	items_box.size = Vector2(vs.x - mx * 2, 148)
 	hint_lbl.position = board_area.position + Vector2(0, bh * 0.38)
 	hint_lbl.size = Vector2(bw, 0)
 	mission.position = Vector2(vs.x * 0.1, board_area.position.y + 60)
@@ -444,15 +713,25 @@ func _paint_items() -> void:
 		b.visible = open
 		any = any or open
 		var left: int = {"shake": core.shake_left, "undo": core.undo_left, "hammer": core.hammer_left, "tilt": core.tilt_left, "x2": core.x2_left}[k]
-		b.text = "%s %d" % [ITEM_NAMES[k], left]
+		b.text = ITEM_NAMES[k]
 		b.disabled = left <= 0 and not (k == "hammer" and core.hammer_armed) and not (k == "x2" and core.x2_armed)
 		var on: bool = (k == "hammer" and core.hammer_armed) or (k == "x2" and core.x2_armed)
-		b.add_theme_stylebox_override("normal", _style(Color("#e2574c") if on else BTN2))
+		item_rings[k].visible = on
+		var badge: Label = item_badges[k]
+		badge.text = str(left)
+		badge.visible = open
+		if item_prev.has(k) and left < int(item_prev[k]):
+			Fx.pop(badge)   # 쓰면 배지가 톡 튀어요
+		item_prev[k] = left
 	var tilting: bool = core.tilt_t > 0
 	tilt_l.visible = tilting
 	tilt_r.visible = tilting
 	if tilting:
-		item_btns["tilt"].text = "기울이기 %d초" % ceili(core.tilt_t)
+		# 기울이는 동안은 「◀ N초 ▶」만: 화살표가 크게, 줄이 화면 밖으로 안 넘침
+		for k in item_btns:
+			if k != "tilt":
+				item_btns[k].visible = false
+		item_btns["tilt"].text = "%d초" % ceili(core.tilt_t)
 	items_box.visible = any
 
 
@@ -481,14 +760,19 @@ func _use_item(k: String) -> void:
 
 # ───────────────────────── 입력 ─────────────────────────
 
+func _gui_input(e: InputEvent) -> void:
+	_board_input(e)
+
+
+## e.position 은 화면(이 Control) 좌표
 func _board_input(e: InputEvent) -> void:
 	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-		var lp: Vector2 = e.position / board_scale
+		var lp: Vector2 = (e.position - board_area.position) / board_scale
 		if e.pressed:
 			if core.over or core.clear_t > 0 or dragging:
 				return
 			if core.hammer_armed:
-				if core.hammer_at(lp.x, lp.y):
+				if core.hammer_at(lp.x, lp.y) if board_area.get_rect().has_point(e.position) else false:
 					Save.spend_item("hammer", core.mode != "stage")
 					_paint_items()
 				return
@@ -671,7 +955,7 @@ func show_menu() -> void:
 		c.queue_free()
 	var head := HBoxContainer.new()
 	menu_grid_box.add_child(head)
-	var t := _lbl("스테이지 · 베타 200단계", 34)
+	var t := _lbl("스테이지 · 베타 %d단계" % core.stages.size(), 34)
 	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(t)
 	var eb := _btn("무한 모드", MILK, INK, 24)
@@ -699,7 +983,8 @@ func show_menu() -> void:
 		var st: Dictionary = core.stages[i]
 		var done := i < prog
 		var jump := i >= 24 and (i + 1) % 5 == 0
-		var bg := Color("#2e4a35") if done else (Color("#4a3540") if jump else BTN)
+		var now := i == prog
+		var bg := CELL_DONE if done else (MILK if now else (CELL_JUMP if jump else BTN2))
 		var b := _btn("%d\n%s" % [i + 1, "완료" if done else core.goal_text(st)], bg, MILK, 20)
 		b.custom_minimum_size = Vector2(0, 120)
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL

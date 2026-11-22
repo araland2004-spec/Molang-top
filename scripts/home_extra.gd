@@ -25,6 +25,20 @@ var thumbs := {}
 var dev_taps := 0
 var floor_edit := ""        # 집 안 바닥 칠하기: 고른 블록 id ("" = 꺼짐)
 var floor_bar: Control
+# 펫을 누르면: 폴짝 + 하트 + 「이름 · 하는 중」 말풍선 (웹 버전 그대로)
+const PET_ACTS := {
+	"ham": ["해바라기씨 먹는", "볼 빵빵하게 채우는", "세수하는", "낮잠 자는", "두리번거리는", "톱밥 파는", "기지개 켜는"],
+	"dog": ["꼬리 흔드는", "킁킁 냄새 맡는", "낮잠 자는", "하품하는", "뒹굴뒹굴하는", "공 찾는"],
+	"cat": ["그루밍하는", "식빵 굽는", "낮잠 자는", "기지개 켜는", "꼬리로 장난치는", "꾹꾹이 하는"],
+}
+const PET_SPEED := {"ham": 1.3, "dog": 1.4, "cat": 1.0}
+var pet_fx := {}            # Node3D → {"hop", "act", "chase", "moving"}
+var hearts: Array = []      # [TextureRect, Node3D, t, dx]
+var bubble: PanelContainer
+var bubble_lbl: Label
+var bubble_t := 0.0
+var bubble_at: Node3D
+var _heart_tex: Texture2D
 
 
 func setup(m: Node3D, ui_root: Control) -> void:
@@ -266,6 +280,7 @@ func _process(_dt: float) -> void:
 		for w in walls:
 			(w[0] as MeshInstance3D).visible = f.dot(w[1]) > -0.15
 	_step_pets(_dt)
+	_pet_fx(_dt)
 
 
 ## 화면 탭 (main 이 먼저 물어봄): 처리했으면 true
@@ -347,6 +362,8 @@ func tap(pos: Vector2) -> bool:
 					after_deco()
 					main.synth_tone(660, 880, 0.06, 0.15)
 		return true
+	if _tap_pet(pos):
+		return true
 	if inside:
 		for target in [[tree_pos + Vector3(0, main.FLOOR_TOP + 0.6, 0), "tree"], [pile_pos + Vector3(0, main.FLOOR_TOP + 0.2, 0), "pile"]]:
 			var w: Vector3 = target[0]
@@ -411,22 +428,172 @@ func _step_pets(dt: float) -> void:
 		var fly: bool = list == fairy_nodes
 		for p in list:
 			var n: Node3D = p[0]
-			var moving: bool = main._step_along(n, p[2], 0.7 if fly else 0.9, dt)
+			var fx: Dictionary = _fx(n)
+			var k: String = "" if fly else str(p[1].get("k", "ham"))
+			# 다른 펫을 쫓아가는 중이면 목표를 계속 따라감
+			var ch = fx.get("chase")
+			if ch != null and is_instance_valid(ch) and not p[2].is_empty():
+				p[2] = [ (ch as Node3D).position + Vector3(0.3, 0, 0.3) ]
+				p[2][0].y = n.position.y
+			var spd: float = 0.7 if fly else 0.9 * float(PET_SPEED.get(k, 1.0))
+			var moving: bool = main._step_along(n, p[2], spd, dt)
+			fx["moving"] = moving
 			if not moving:
+				fx["chase"] = null
+				if fx.get("act", "") == "" and not fly:
+					var acts: Array = PET_ACTS.get(k, PET_ACTS["ham"])
+					fx["act"] = acts[randi() % acts.size()]
 				p[3] -= dt
 				if p[3] <= 0:
 					p[3] = randf_range(1.0, 3.5)
+					fx["act"] = ""
 					var target: Vector3
-					if inside:
+					# 가끔은 다른 펫을 쫓아다녀요 (웹: 35%)
+					var others: Array = pet_nodes.filter(func(o): return o[0] != n)
+					if not fly and others.size() > 0 and randf() < 0.35:
+						var o: Node3D = others[randi() % others.size()][0]
+						fx["chase"] = o
+						target = o.position + Vector3(0.3, 0, 0.3)
+					elif inside:
 						target = Vector3(randf_range(-room.x + 0.5, room.x - 0.5), n.position.y, randf_range(-room.y + 0.5, room.y - 0.5))
 					else:
 						target = Vector3(randf_range(main.X0, main.X1), n.position.y, randf_range(main.Z0 + 4, main.Z1))
+					target.y = n.position.y
 					p[2] = main._route(n.position, target)
+			elif not fly and float(fx.get("hop", 0.0)) <= 0 and randf() < dt * 0.8:
+				fx["hop"] = 0.5     # 걷다가 가끔 폴짝
+			var hop := float(fx.get("hop", 0.0))
+			var hy := sin((1.0 - hop / 0.5) * PI) * 0.3 if hop > 0 else 0.0
 			if fly:
-				n.position.y = main.FLOOR_TOP + 0.25 + sin(t * 3 + n.get_instance_id() % 7) * 0.05
+				n.position.y = main.FLOOR_TOP + 0.25 + sin(t * 3 + n.get_instance_id() % 7) * 0.05 + hy
 			else:
-				n.position.y = main.FLOOR_TOP + (absf(sin(t * 12)) * 0.03 if moving else 0.0)
+				n.position.y = main.FLOOR_TOP + (absf(sin(t * 12)) * 0.03 if moving else 0.0) + hy
 
+
+func _fx(n: Node3D) -> Dictionary:
+	if not pet_fx.has(n):
+		pet_fx[n] = {"hop": 0.0, "act": "", "chase": null, "moving": false}
+	return pet_fx[n]
+
+
+## 화면에서 손가락과 가장 가까운 펫(70px 안)을 찾아 폴짝 + 하트 + 말풍선
+func _tap_pet(pos: Vector2) -> bool:
+	var cam: Camera3D = main.cam
+	var best = null
+	var bd := 70.0
+	for list in [pet_nodes, fairy_nodes]:
+		for p in list:
+			var n: Node3D = p[0]
+			if not n.is_visible_in_tree():
+				continue
+			var w := n.global_position + Vector3(0, 0.3, 0)
+			if cam.is_position_behind(w):
+				continue
+			var d := cam.unproject_position(w).distance_to(pos)
+			if d < bd:
+				bd = d
+				best = p
+	if best == null:
+		return false
+	var n: Node3D = best[0]
+	var fx := _fx(n)
+	if float(fx["hop"]) <= 0:
+		fx["hop"] = 0.5
+	var is_fairy: bool = fairy_nodes.has(best)
+	var nm: String = str(best[1].get("name", "요정" if is_fairy else "햄찌")) if best[1] is Dictionary else "요정"
+	var what: String
+	if is_fairy:
+		what = "반짝반짝 날아다니는"
+	elif fx["moving"]:
+		var ch = fx.get("chase")
+		if ch != null and is_instance_valid(ch):
+			var cd = _pet_data(ch)
+			what = (str(cd.get("name", "친구")) + " 쫓아가는") if cd else "신나게 뛰노는"
+		else:
+			var k := str(best[1].get("k", "ham"))
+			what = "총총 뛰어다니는" if k == "ham" else ("신나게 뛰노는" if k == "dog" else "살금살금 걷는")
+	else:
+		what = str(fx.get("act", "")) if str(fx.get("act", "")) != "" else "쉬는"
+	_show_bubble(n, "%s · %s 중" % [nm, what])
+	hearts.append([_heart(), n, 0.0, randf_range(-3, 3)])
+	main.synth_tone(880, 1320, 0.07, 0.1)
+	Save.buzz(8)
+	return true
+
+
+func _pet_data(n: Node3D):
+	for p in pet_nodes:
+		if p[0] == n:
+			return p[1]
+	return null
+
+
+func _heart() -> TextureRect:
+	if _heart_tex == null:
+		var rows := ["01010", "11111", "11111", "01110", "00100"]
+		var img := Image.create(5, 5, false, Image.FORMAT_RGBA8)
+		for y in 5:
+			for x in 5:
+				if rows[y][x] == "1":
+					img.set_pixel(x, y, Color("#ffb3c1") if (y == 1 and x == 1) else Color("#e2574c"))
+		_heart_tex = ImageTexture.create_from_image(img)
+	var tr := TextureRect.new()
+	tr.texture = _heart_tex
+	tr.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tr.size = Vector2(30, 30)
+	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(tr)
+	return tr
+
+
+func _show_bubble(n: Node3D, text: String) -> void:
+	if bubble == null:
+		bubble = PanelContainer.new()
+		bubble.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = main.C_CREAM
+		sb.border_color = main.C_INK
+		sb.set_border_width_all(4)
+		sb.set_corner_radius_all(6)
+		sb.content_margin_left = 16; sb.content_margin_right = 16
+		sb.content_margin_top = 8; sb.content_margin_bottom = 8
+		bubble.add_theme_stylebox_override("panel", sb)
+		bubble_lbl = main._label("", 22, main.C_INK, false)
+		bubble.add_child(bubble_lbl)
+		ui.add_child(bubble)
+	bubble_lbl.text = text
+	bubble.reset_size()
+	bubble.visible = true
+	bubble_at = n
+	bubble_t = 2.4
+
+
+func _pet_fx(dt: float) -> void:
+	for n in pet_fx.keys():
+		if not is_instance_valid(n):
+			pet_fx.erase(n)
+			continue
+		if float(pet_fx[n]["hop"]) > 0:
+			pet_fx[n]["hop"] = float(pet_fx[n]["hop"]) - dt
+	var cam: Camera3D = main.cam
+	for h in hearts.duplicate():
+		h[2] += dt
+		var tr: TextureRect = h[0]
+		if h[2] >= 1.1 or not is_instance_valid(h[1]):
+			tr.queue_free()
+			hearts.erase(h)
+			continue
+		var s := cam.unproject_position((h[1] as Node3D).global_position + Vector3(0, 0.75, 0))
+		tr.position = s + Vector2(-15 + h[3] * h[2] * 6, -30 - h[2] * 54)
+		tr.modulate.a = minf(1.0, (1.1 - h[2]) * 2.5)
+	if bubble and bubble.visible:
+		bubble_t -= dt
+		if bubble_t <= 0 or not is_instance_valid(bubble_at) or not bubble_at.is_visible_in_tree():
+			bubble.visible = false
+		else:
+			var s := cam.unproject_position(bubble_at.global_position + Vector3(0, 0.8, 0))
+			bubble.position = s - Vector2(bubble.size.x / 2, bubble.size.y + 20)
 
 func check_pets() -> void:
 	var h := H()
@@ -514,7 +681,7 @@ func _sheet(title: String, width := 640) -> VBoxContainer:
 	return v
 
 
-func _wrap(text: String, size := 20, col: Color = Color("#6b6478"), width := 580) -> Label:
+func _wrap(text: String, size := 20, col: Color = Color(0.624, 0.737, 0.714), width := 580) -> Label:
 	var l: Label = main._label(text, size, col, false)
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	l.custom_minimum_size.x = width
@@ -644,7 +811,7 @@ func open_book(tab := "in") -> void:
 			nm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			cell.add_child(nm)
 			if n > 1:
-				var dup: Label = main._label("×%d" % n, 16, Color("#6b6478"), false)
+				var dup: Label = main._label("×%d" % n, 16, main.C_SUB, false)
 				dup.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 				cell.add_child(dup)
 			if n >= 4:
@@ -725,6 +892,7 @@ func open_box() -> void:
 	center.add_child(v)
 	var stage := Control.new()
 	stage.custom_minimum_size = Vector2(320, 320)
+	stage.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(stage)
 	var halo := Panel.new()
 	var hs := StyleBoxFlat.new()
@@ -732,6 +900,7 @@ func open_box() -> void:
 	hs.set_corner_radius_all(160)
 	halo.add_theme_stylebox_override("panel", hs)
 	halo.size = Vector2(320, 320)
+	halo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stage.add_child(halo)
 	var box := Panel.new()
 	var bs := StyleBoxFlat.new()
@@ -742,6 +911,7 @@ func open_box() -> void:
 	box.size = Vector2(170, 170)
 	box.position = Vector2(75, 90)
 	box.pivot_offset = Vector2(85, 85)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stage.add_child(box)
 	var pic := TextureRect.new()
 	pic.texture = thumb(id)
@@ -751,6 +921,7 @@ func open_box() -> void:
 	pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	pic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	pic.scale = Vector2.ZERO
+	pic.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stage.add_child(pic)
 	var title: Label = main._label("상자를 여는 중…", 30, Color.WHITE, true)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -769,18 +940,69 @@ func open_box() -> void:
 		_close_sheet()
 		after_deco())
 	row.add_child(ok)
-	var tw := create_tween()
-	for k in 6:
-		tw.tween_property(box, "rotation", 0.12 if k % 2 == 0 else -0.12, 0.09)
-	tw.tween_property(box, "rotation", 0.0, 0.06)
-	tw.tween_callback(func():
-		main.synth_tone(660, 990, 0.12, 0.12)
-		box.visible = false
-		hs.bg_color.a = 0.55
-		title.text = ("새 장식! " if fresh else "중복 · ") + str(it["name"]))
-	tw.tween_property(pic, "scale", Vector2.ONE * 1.1, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tw.tween_property(pic, "scale", Vector2.ONE, 0.12)
-	tw.tween_property(row, "modulate:a", 1.0, 0.2)
+	title.text = "상자를 옆으로 돌려서 열어 보세요"
+	var hint: Label = main._label("← 좌우로 밀기 · 톡톡 두드려도 돼요 →", 22, Color(1, 1, 1, 0.7), true)
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(hint)
+	v.move_child(hint, 2)
+	# 손가락을 따라 상자가 기울고, 충분히 돌리면(좌우 합쳐 한 바퀴 반쯤) 팡! 열려요.
+	var st := {"open": false, "drag": false, "x": 0.0, "turn": 0.0, "last": 0.0}
+	var bob := create_tween().set_loops()
+	bob.tween_property(box, "rotation", 0.05, 0.5).set_trans(Tween.TRANS_SINE)
+	bob.tween_property(box, "rotation", -0.05, 0.5).set_trans(Tween.TRANS_SINE)
+	var do_open := func():
+		if st["open"]:
+			return
+		st["open"] = true
+		bob.kill()
+		hint.visible = false
+		Save.buzz(30)
+		var tw := create_tween()
+		tw.tween_property(box, "scale", Vector2(1.25, 0.8), 0.08)
+		tw.tween_property(box, "scale", Vector2(0.9, 1.15), 0.08)
+		tw.tween_callback(func():
+			main.synth_tone(660, 990, 0.12, 0.12)
+			box.visible = false
+			hs.bg_color.a = 0.55
+			title.text = ("새 장식! " if fresh else "중복 · ") + str(it["name"]))
+		tw.tween_property(pic, "scale", Vector2.ONE * 1.1, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tw.tween_property(pic, "scale", Vector2.ONE, 0.12)
+		tw.tween_property(row, "modulate:a", 1.0, 0.2)
+	var add_turn := func(dr: float):
+		st["turn"] = float(st["turn"]) + absf(dr)
+		var k := minf(1.0, float(st["turn"]) / 2.4)
+		hs.bg_color.a = 0.25 * k
+		if int(st["turn"] * 4) != int((float(st["turn"]) - absf(dr)) * 4):
+			main.synth_tone(300 + k * 500, 260 + k * 500, 0.05, 0.06)
+			Save.buzz(6)
+		if float(st["turn"]) >= 2.4:
+			do_open.call()
+	ov.gui_input.connect(func(e: InputEvent):
+		if st["open"]:
+			return
+		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+			if e.pressed:
+				st["drag"] = true; st["x"] = e.position.x; st["last"] = box.rotation
+				bob.pause()
+			else:
+				st["drag"] = false
+				if absf(e.position.x - float(st["x"])) < 12:
+					# 톡: 흔들 하고 조금 열림
+					add_turn.call(0.5)
+					var t2 := create_tween()
+					t2.tween_property(box, "rotation", 0.25, 0.06)
+					t2.tween_property(box, "rotation", -0.2, 0.08)
+					t2.tween_property(box, "rotation", 0.0, 0.06)
+				else:
+					var t3 := create_tween()
+					t3.tween_property(box, "rotation", 0.0, 0.2).set_trans(Tween.TRANS_BACK)
+				if not st["open"]:
+					bob.play()
+		elif e is InputEventMouseMotion and st["drag"]:
+			var r := clampf((e.position.x - float(st["x"])) / 220.0, -0.9, 0.9)
+			add_turn.call(r - float(st["last"]))
+			st["last"] = r
+			box.rotation = r)
 
 
 func open_deco() -> void:
@@ -1059,7 +1281,7 @@ class PolishCanvas extends Control:
 func open_settings() -> void:
 	var v := _sheet("설정", 600)
 	var h := H()
-	v.add_child(_wrap("깬 단계 %d/200 · 플레이 %d분 · 요정 %d명 · 펫 %d마리" % [int(Save.d["prog"]), int(float(Save.d["play_sec"]) / 60), h["fairies"].size(), h["pets"].size()], 21))
+	v.add_child(_wrap("깬 단계 %d/%d · 플레이 %d분 · 요정 %d명 · 펫 %d마리" % [int(Save.d["prog"]), Save.data.get("stages", []).size(), int(float(Save.d["play_sec"]) / 60), h["fairies"].size(), h["pets"].size()], 21))
 	var nb: Button = main._px_btn("이름 바꾸기 (%s)" % h["name"], main.C_CREAM, 22)
 	nb.pressed.connect(func():
 		ask_name("집 이름을 지어 주세요", h["name"], func(nm: String):
@@ -1074,6 +1296,13 @@ func open_settings() -> void:
 		Save.save()
 		open_settings())
 	v.add_child(mb)
+	var vb: Button = main._px_btn("진동 %s" % ("켜짐" if bool(Save.d.get("vibe", true)) else "꺼짐"), main.C_CREAM, 22)
+	vb.pressed.connect(func():
+		Save.d["vibe"] = not bool(Save.d.get("vibe", true))
+		Save.save()
+		Save.buzz(20)
+		open_settings())
+	v.add_child(vb)
 	var bb: Button = main._px_btn("배경 음악 %s" % ("켜짐" if Bgm.is_on() else "꺼짐"), main.C_CREAM, 22)
 	bb.pressed.connect(func():
 		Bgm.toggle()
@@ -1105,7 +1334,7 @@ func open_dev() -> void:
 			for k in ["undo", "hammer", "tilt", "x2", "shake"]:
 				Save.d["bag"][k] = Save.bag_count(k) + 20],
 		["오너먼트 +10개 (플레이 +5시간)", func(): Save.d["play_sec"] = float(Save.d["play_sec"]) + 5 * 3600],
-		["스테이지 전부 열기", func(): Save.d["prog"] = 200],
+		["스테이지 전부 열기", func(): Save.d["prog"] = Save.data.get("stages", []).size()],
 		["햄스터 데려오기", func():
 			var pets: Array = H()["pets"]
 			pets.append({"k": "ham", "name": "햄찌", "since": Save.kst_day()})],
