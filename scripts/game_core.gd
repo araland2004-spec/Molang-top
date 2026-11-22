@@ -1119,14 +1119,12 @@ func resolve_merges() -> void:
 				sel = nb
 		combo = mini(COMBO_MAX, combo + 1) if combo_t > 0 else 1
 		combo_t = 1.5
-		var mult := 1.0 + streak * STREAK_STEP if streak_on else 1.0
+		var mult := (1.0 + streak * STREAK_STEP if streak_on else 1.0) * (1.0 + momentum())
 		var pts: int = int((1 << nt if nt < 62 else 1 << 61) * combo * mult)
 		add_score(pts)
 		var tag := ""
 		if combo > 1:
-			tag += " · %d연쇄" % combo
-		if mult > 1.0:
-			tag += " · ×%s" % str(mult)
+			tag += " · %d연쇄" % combo   # 배율(연속 ×N)은 정보 줄에 따로 보여서 여기선 짧게
 		float_text(X, Y + tiers_r[nt] + 14 if home else Y, "+%d%s" % [pts, tag], combo > 1 or mult >= 2.0)
 		var f := 760 * pow(0.89, nt) * (1 + (mini(combo, 10) - 1) * 0.12)
 		tone(f * 0.7, f * 1.05, 0.1, 0.16); tone(f * 0.5, f * 0.34, 0.26, 0.14)
@@ -1187,8 +1185,20 @@ func note_tier(nt: int) -> void:
 	if nt > max_tier:
 		max_tier = nt
 		if nt >= 7 and mode == "endless":
-			toast.emit("첫 " + num_text(nt) + "!")
+			if nt >= 9 and nt <= 13:
+				toast.emit("첫 %s! 이번 판 점수 +%d%%" % [num_text(nt), roundi(momentum() * 100)])
+				info_changed.emit()
+			else:
+				toast.emit("첫 " + num_text(nt) + "!")
 	check_goal()
+
+
+## 판 기세 (무한 모드): 이번 판에서 512·1024·2048·4096·8192를 처음 만들 때마다 점수 +10% (최대 +50%).
+## 큰 숫자를 만들어야만 오르니 막 던지기로는 안 오르고, 초반은 빡빡하다가 후반에 팍팍 올라가요.
+func momentum() -> float:
+	if mode == "stage":
+		return 0.0
+	return clampf((max_tier - 8) * 0.1, 0.0, 0.5)
 
 
 func check_goal() -> void:
@@ -1664,7 +1674,7 @@ func sim_step(dt: float) -> void:
 			if shot_wait[k] > STREAK_WAIT:
 				shot_wait.erase(k)
 				if streak >= 2:
-					float_text(W / 2, 110, "연속 끊김", false)
+					float_text(W / 2, H * 0.42, "연속 끊김", false)
 				streak = 0
 				info_changed.emit()
 	if shake_t > 0 and not over:

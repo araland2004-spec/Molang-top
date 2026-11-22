@@ -329,6 +329,8 @@ func _info_str() -> String:
 	var left := ("던지기 %d 남음" % core.throws_left) if (core.mode != "stage" or int(core.stages[core.stage_idx]["throws"])) else "던지기 무제한"
 	if core.streak > 0:
 		left += " · 연속 ×%s" % str(1.0 + core.streak * GameCore.STREAK_STEP)
+	if core.momentum() > 0:
+		left += " · 기세 +%d%%" % roundi(core.momentum() * 100)
 	if core.mode != "stage":
 		return "무한 모드 · " + left
 	var i: int = core.stage_idx
