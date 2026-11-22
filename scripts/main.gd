@@ -98,6 +98,11 @@ var rot_r: Button
 var edit_btn: Button
 var toast_label: Label
 var toast_t := 0.0
+var jelly_btn: Button
+var play_label: Label
+var work_label: Label
+var shop_panel: Control
+var hud_t := 0.0
 
 
 func _ready() -> void:
@@ -557,6 +562,13 @@ func _process(delta: float) -> void:
 		var w := 0.09 * (1.0 - f * 0.6)
 		smoke[i].scale = Vector3.ONE * w * 2.0
 		smoke[i].position = chimney_top + Vector3(sin(now + i * 2) * 0.06 + f * 0.25, f * 0.9, 0)
+	hud_t -= delta
+	if hud_t <= 0 and jelly_btn:
+		hud_t = 1.0
+		jelly_btn.text = "● %s" % _comma(int(Save.d.get("jelly", 0)))
+		var ps := float(Save.d.get("play_sec", 0.0))
+		var left := 30 - int(ps / 60.0) % 30
+		play_label.text = "플레이 %d분\n다음 오너먼트까지 %d분" % [int(ps / 60.0), left]
 	if toast_t > 0:
 		toast_t -= delta
 		toast_label.modulate.a = clampf(toast_t * 2.0, 0, 1)
@@ -856,7 +868,8 @@ func _build_hud() -> void:
 	ph.add_child(pv)
 	pv.add_child(_label("몰랑이네", 30, C_INK, false))
 	pv.add_child(_label("크리스마스 마을 · 집 1채", 19, C_SUB, false))
-	tl.add_child(_label("플레이 0분\n다음 오너먼트까지 30분", 22, Color.WHITE))
+	play_label = _label("", 22, Color.WHITE)
+	tl.add_child(play_label)
 
 	# 오른쪽 위: 젤리 바 + 공방 + 아이콘 버튼
 	var tr := VBoxContainer.new()
@@ -870,6 +883,7 @@ func _build_hud() -> void:
 	jbar.alignment = BoxContainer.ALIGNMENT_END
 	tr.add_child(jbar)
 	var jchip := _px_btn("● %s" % str(Save.d.get("jelly", 0)), C_CREAM, 30)
+	jelly_btn = jchip
 	jchip.add_theme_color_override("font_color", C_INK)
 	jchip.custom_minimum_size = Vector2(176, 60)
 	jchip.alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -877,9 +891,10 @@ func _build_hud() -> void:
 	jbar.add_child(jchip)
 	var plus := _px_btn("+", C_YELLOW, 32)
 	plus.custom_minimum_size = Vector2(60, 60)
-	plus.pressed.connect(func(): _toast("상점은 곧 옮겨 올게요"))
+	plus.pressed.connect(_open_shop)
 	jbar.add_child(plus)
-	var work := _label("공방 +0.5/분", 22, C_YELLOW, false)
+	var work := _label("공방 +%s/분" % str(snappedf(Save.work_rate(), 0.1)), 22, C_YELLOW, false)
+	work_label = work
 	work.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	tr.add_child(work)
 	var row := HBoxContainer.new()
@@ -890,7 +905,10 @@ func _build_hud() -> void:
 		var b := _px_btn(t, C_CREAM, 22)
 		b.custom_minimum_size = Vector2(78, 78)
 		var tt: String = t
-		b.pressed.connect(func(): _toast(tt + "은 곧 옮겨 올게요"))
+		if t == "상점":
+			b.pressed.connect(_open_shop)
+		else:
+			b.pressed.connect(func(): _toast(tt + "은 곧 옮겨 올게요"))
 		row.add_child(b)
 
 	# 가운데 안내
@@ -992,6 +1010,58 @@ func _build_hud() -> void:
 	toast_label.position = Vector2(-260, 120)
 	toast_label.modulate.a = 0
 	ui_root.add_child(toast_label)
+
+
+## 상점 (웹 버전과 같게): 무한 모드용 아이템을 젤리로 사서 가방에
+func _open_shop() -> void:
+	if shop_panel:
+		shop_panel.queue_free()
+	shop_panel = PanelContainer.new()
+	shop_panel.add_theme_stylebox_override("panel", _px_style(C_CREAM))
+	shop_panel.set_anchors_preset(Control.PRESET_CENTER)
+	shop_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	shop_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+	shop_panel.custom_minimum_size = Vector2(620, 0)
+	ui_root.add_child(shop_panel)
+	hud_blocks.append(shop_panel)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 14)
+	shop_panel.add_child(v)
+	v.add_child(_label("상점", 32, C_INK, false))
+	var desc := _label("무한 모드용 아이템을 사요. 무한 모드에서는 아이템마다 하루 3번 무료, 그다음엔 가방에 산 만큼 더 쓸 수 있어요. (스테이지는 아이템마다 한 번씩 무료)", 20, C_SUB, false)
+	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	desc.custom_minimum_size.x = 580
+	v.add_child(desc)
+	v.add_child(_label("● %s" % _comma(int(Save.d["jelly"])), 26, C_INK, false))
+	var prog := int(Save.d.get("prog", 0))
+	for it in Save.data.get("shop", []):
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 12)
+		v.add_child(row)
+		var open: bool = prog >= int(it["at"]) - 1
+		var nm := _label((str(it["n"]) + "\n" + str(it["d"]) + " · 가방 %d개" % Save.bag_count(str(it["k"]))) if open else ("???\n%d단계를 깨면 열려요" % (int(it["at"]) - 1)), 20, C_INK if open else C_SUB, false)
+		nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(nm)
+		if open:
+			var b := _px_btn("● %d" % int(it["p"]), C_YELLOW, 22)
+			b.disabled = int(Save.d["jelly"]) < int(it["p"])
+			var item: Dictionary = it
+			b.pressed.connect(func():
+				if int(Save.d["jelly"]) < int(item["p"]):
+					return
+				Save.d["jelly"] = int(Save.d["jelly"]) - int(item["p"])
+				Save.d["bag"][item["k"]] = Save.bag_count(str(item["k"])) + 1
+				Save.save()
+				_toast(str(item["n"]) + " 1개를 가방에 넣었어요")
+				hud_t = 0
+				_open_shop())
+			row.add_child(b)
+	var close := _px_btn("닫기", C_CREAM, 22)
+	close.pressed.connect(func():
+		hud_blocks.erase(shop_panel)
+		shop_panel.queue_free()
+		shop_panel = null)
+	v.add_child(close)
 
 
 func _set_edit(on: bool) -> void:

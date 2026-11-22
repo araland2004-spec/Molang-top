@@ -8,8 +8,13 @@ const ENDLESS_PAID := 5
 var d := {
 	"best": 0, "prog": 0, "seen_hint": false, "guides": [], "jelly": 100, "muted": false,
 	"daily": {"day": "", "used": {}}, "bag": {}, "erew": {"day": "", "n": 0}, "stars": {},
+	"play_sec": 0.0, "work_total": 0,
 }
-var next_mode := ""      # 집 → 게임으로 넘어갈 때: "endless" | "menu" | "stage:N"
+signal jelly_changed
+
+var next_mode := ""
+var work_carry := 0.0
+var save_t := 0.0      # 집 → 게임으로 넘어갈 때: "endless" | "menu" | "stage:N"
 var data := {}           # mollang_data.json
 
 
@@ -22,6 +27,32 @@ func _ready() -> void:
 		if s is Dictionary:
 			for k in s:
 				d[k] = s[k]
+
+
+## 공방(웹 버전과 같게): 화면이 켜져 있는 동안 1분에 0.5 + 0.1 × 깬 단계 젤리. 플레이 시간도 여기서 셈.
+func work_rate() -> float:
+	return 0.5 + 0.1 * int(d["prog"])
+
+
+func _process(delta: float) -> void:
+	var dt := minf(delta, 5.0)
+	d["play_sec"] = float(d.get("play_sec", 0.0)) + dt
+	work_carry += work_rate() * dt / 60.0
+	if work_carry >= 1.0:
+		var n := int(work_carry)
+		work_carry -= n
+		d["jelly"] = int(d["jelly"]) + n
+		d["work_total"] = int(d.get("work_total", 0)) + n
+		jelly_changed.emit()
+	save_t += delta
+	if save_t > 10.0:
+		save_t = 0
+		save()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
+		save()
 
 
 func save() -> void:
@@ -85,6 +116,7 @@ func endless_jelly(sc: int) -> int:
 func add_jelly(n: int) -> void:
 	d["jelly"] = int(d["jelly"]) + n
 	save()
+	jelly_changed.emit()
 
 
 ## 원래 몰랑탑(웹)의 「저장 백업」 코드에서 진행도·젤리·가방·가이드를 가져옴. 집 꾸미기 기록은 나중에 옮길 때 쓰려고 통째로 보관.
@@ -104,6 +136,7 @@ func import_web(json_str: String) -> bool:
 		var h = JSON.parse_string(str(o["mollang.home"]))
 		if h is Dictionary:
 			d["jelly"] = int(h.get("jelly", d["jelly"]))
+			d["play_sec"] = maxf(float(d.get("play_sec", 0.0)), float(h.get("playSec", 0.0)))
 			if h.get("inv") is Dictionary:
 				d["bag"] = h["inv"]
 			d["home_web"] = h
