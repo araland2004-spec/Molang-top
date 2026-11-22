@@ -4,7 +4,7 @@
 
 ## 폴더
 - `scenes/main.tscn`, `scripts/main.gd` — 블록 땅 (이동·확대, 편집 때 쌓기/지우기/회전)
-- `assets/blocks/` — `D:\Molang\Modeling\Ground` 의 블록 glb 18종
+- `assets/nature/Nature_Assets.glb` — `D:\Molang\Modeling\ground_test` 자연 에셋 331종 (블록 78 · 장식 250 · 구름 3). `data/nature_assets.json` 에 이름·종류·크기
 - `assets/fonts/` — Noto Sans KR 굵게 (한글 2,350자만 담은 작은 버전)
 - `data/mollang_data.json` — 웹 버전에서 옮겨 온 스테이지 200개·확률·아이템 데이터
 

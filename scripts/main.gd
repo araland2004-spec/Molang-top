@@ -3,27 +3,53 @@ extends Node3D
 ## 평소: 한 손가락 드래그 = 이동, 두 손가락 = 확대/축소
 ## 편집: 탭 = 블록 쌓기(지우기 모드면 제거), 두 손가락 비틀기·↺↻ = 회전
 
-const BLOCK_DIR := "res://assets/blocks/"
+const NATURE_GLB := "res://assets/nature/Nature_Assets.glb"
+const NATURE_LIST := "res://data/nature_assets.json"
 const DATA_PATH := "res://data/mollang_data.json"
-const SAVE_PATH := "user://land.json"
+const SAVE_PATH := "user://land2.json"
+const PROP_SCALE := 2.13       # 블록(약 0.47)이 한 칸(1)을 채우는 배율 — 장식도 같은 배율로 크기 비율 유지
 const START_HALF := 3          # 처음 땅: 6×6
 const MAX_HEIGHT := 8
 const ZOOM_MIN := 5.0
 const ZOOM_MAX := 32.0
 
 const KO := {
-	"Grass": "잔디", "Dirt": "흙", "Soil": "흙", "Sand": "모래", "Stone": "돌",
-	"StoneBrick": "돌벽돌", "Brick": "벽돌", "Lava": "용암", "Water": "물",
-	"Wood": "나무", "Crate": "상자", "Moss": "이끼", "Light": "밝은", "Dark": "어두운",
-	"Red": "빨간", "Slate": "점판", "Stony": "자갈", "Base": "", "Static": "",
+	"Block": "", "Stairs": "계단", "Grass": "잔디", "Dirt": "흙", "Sand": "모래", "Stone": "돌",
+	"StoneBrick": "돌벽돌", "Lava": "용암", "Water": "물", "Snow": "눈", "Ice": "얼음",
+	"Metal": "금속", "Ore": "광석", "Coal": "석탄", "Crystal": "수정", "Crystals": "수정",
+	"Gold": "금", "Silver": "은", "Lime": "연두", "Teal": "청록", "Green": "초록", "Cyan": "하늘",
+	"Blue": "파랑", "Red": "빨강", "Yellow": "노랑", "Light": "밝은", "Dark": "어두운",
+	"Charcoal": "숯색", "Gradient": "그러데이션", "Layered": "층", "Wavy": "물결", "Solid": "",
+	"Fractured": "갈라진", "Striped": "줄무늬", "Ripple": "잔물결", "Speckled": "점박이",
+	"Gravel": "자갈", "Vein": "광맥", "Nodules": "덩이", "MixedOre": "섞인 광석",
+	"SilverOre": "은광석", "RedOre": "빨간 광석", "CyanOre": "하늘 광석", "YellowOre": "노란 광석",
+	"DarkOre": "어두운 광석", "Straight": "", "InnerCorner": "안쪽 모서리", "OuterCorner": "바깥 모서리",
+	"OrePile": "광석 더미", "Ingot": "주괴", "Rock": "바위", "Pillar": "기둥", "Boulder": "큰 바위",
+	"Tall": "높은", "Short": "낮은", "Tan": "황갈", "Coral": "산호", "Brown": "갈색", "Gray": "회색",
+	"Beige": "베이지", "Slate": "점판", "WarmGray": "따뜻한 회색", "DarkGreen": "짙은 초록",
+	"PaleSand": "옅은 모래", "DarkGray": "짙은 회색", "DarkTan": "짙은 황갈", "Crimson": "진홍",
+	"Ochre": "황토", "Rust": "녹슨", "DarkBrown": "짙은 갈색", "Mushroom": "버섯", "White": "하양",
+	"GoldRing": "금테", "WhiteSpots": "흰점", "CyanRing": "하늘테", "GreenRing": "초록테",
+	"WhiteRing": "흰테", "Plant": "풀", "Columns": "기둥풀", "GlowYellow": "빛나는 노랑",
+	"Reed": "갈대", "Rosette": "로제트", "Blade": "풀잎", "Flower": "꽃", "Round": "동글",
+	"Star": "별", "Sprout": "새싹", "Bush": "덤불", "Stem": "줄기", "Leaf": "잎", "Tuft": "풀포기",
+	"Cactus": "선인장", "Ribbed": "골", "Saguaro": "기둥", "PricklyPear": "부채", "Spiny": "가시",
+	"Tree": "나무", "Dead": "마른", "Autumn": "가을", "Palm": "야자", "Pine": "소나무",
+	"Branching": "가지", "YellowGreen": "황록", "Cloud": "구름", "Small": "작은", "Medium": "중간", "Large": "큰",
 }
 
 var data := {}
-var block_files: PackedStringArray = []
-var block_scenes: Array[PackedScene] = []
-var selected := 0
+var lib: Node3D                      # Nature_Assets.glb 한 번만 불러온 원본 (화면엔 안 붙임)
+var roots := {}                      # 에셋 이름 -> 원본 루트 노드
+var info := {}                       # 에셋 이름 -> {c, k, d}
+var block_files: PackedStringArray = []   # 블록(정육면체·계단) 이름
+var prop_files: PackedStringArray = []    # 장식(바위·풀·나무 등) 이름
+var tab := 0                         # 0 블록, 1 장식
+var selected := 0                    # 블록 탭에서 고른 번호
+var selected_prop := 0               # 장식 탭에서 고른 번호
+var clouds: Array[Node3D] = []
 
-var tiles := {}   # Vector3i -> 블록 번호
+var tiles := {}   # Vector3i -> 에셋 이름 (블록이나 장식)
 var nodes := {}   # Vector3i -> Node3D
 var land_root: Node3D
 
@@ -31,7 +57,7 @@ var cam: Camera3D
 var pivot := Vector3.ZERO
 var yaw := deg_to_rad(45.0)
 var pitch := deg_to_rad(-35.0)
-var zoom := 11.0
+var zoom := 15.0
 
 var edit_mode := false
 var erase_mode := false
@@ -50,12 +76,14 @@ var palette_panel: PanelContainer
 var palette_box: HBoxContainer
 var top_panel: PanelContainer
 var palette_buttons: Array[Button] = []
+var tab_buttons: Array[Button] = []
 
 
 func _ready() -> void:
 	_load_data()
 	_load_blocks()
 	_build_world()
+	_make_clouds()
 	_build_ui()
 	if not _load_land():
 		_make_start_plot()
@@ -76,40 +104,51 @@ func _load_data() -> void:
 
 
 func _load_blocks() -> void:
-	var names := {}
-	var dir := DirAccess.open(BLOCK_DIR)
-	if dir == null:
-		push_error("블록 폴더가 없어요")
+	var ps := load(NATURE_GLB) as PackedScene
+	if ps == null:
+		push_error("Nature_Assets.glb 를 못 불러왔어요")
 		return
-	for f in dir.get_files():
-		# 내보낸 빌드에선 .glb 대신 .glb.import / .glb.remap 으로 보임
-		var base := f.trim_suffix(".import").trim_suffix(".remap")
-		if base.get_extension().to_lower() == "glb":
-			names[base] = true
-	var sorted := names.keys()
-	sorted.sort()
-	for n in sorted:
-		var ps := load(BLOCK_DIR + n) as PackedScene
-		if ps:
-			block_files.append(n)
-			block_scenes.append(ps)
-	var g := _find_block("Grass_01")
-	selected = maxi(g, 0)
+	lib = ps.instantiate() as Node3D
+	var list = JSON.parse_string(FileAccess.get_file_as_string(NATURE_LIST))
+	if list is Array:
+		for a in list:
+			info[a["n"]] = a
+	# 카테고리 노드(Blocks, Rocks, Plants, Trees, Clouds) 아래 에셋 루트를 이름으로 찾음
+	for cat in lib.get_children():
+		for r in cat.get_children():
+			if info.has(str(r.name)):
+				roots[str(r.name)] = r
+	var names := roots.keys()
+	names.sort()
+	for n in names:
+		match info[n]["k"]:
+			"block": block_files.append(n)
+			"prop": prop_files.append(n)
+	selected = maxi(block_files.find("Block_Grass_Green_Wavy_01"), 0)
 
 
-func _find_block(part: String) -> int:
-	for i in block_files.size():
-		if block_files[i].contains(part):
-			return i
-	return -1
+## 원본 에셋 루트를 통째로 복제(메시·재질·아틀라스는 공유) → 바닥 가운데 기준으로 놓을 수 있게
+func _spawn(asset: String) -> Node3D:
+	if not roots.has(asset):
+		return null
+	var n := (roots[asset] as Node3D).duplicate() as Node3D
+	n.position = Vector3.ZERO      # GLB 안 진열 위치는 버림
+	var s := PROP_SCALE
+	if info[asset]["k"] == "block":
+		var d: Array = info[asset]["d"]
+		s = 1.0 / maxf((float(d[0]) + float(d[2])) * 0.5, 0.01)   # 칸을 꼭 채우게
+	n.scale = Vector3.ONE * s
+	return n
 
 
-func _pretty(file_name: String) -> String:
-	var core := file_name.get_basename().trim_prefix("Block_")
-	var bits := core.split("_")
+func _find_block(name: String) -> int:
+	return block_files.find(name)
+
+
+func _pretty(asset: String) -> String:
 	var words: PackedStringArray = []
 	var num := ""
-	for b in bits:
+	for b in asset.split("_"):
 		if b.is_valid_int():
 			num = str(b.to_int())
 		elif KO.has(b):
@@ -120,7 +159,7 @@ func _pretty(file_name: String) -> String:
 	var s := " ".join(words)
 	if num != "" and num != "1":
 		s += " " + num
-	return s
+	return s if s != "" else asset
 
 
 # ───────────────────────── 월드 ─────────────────────────
@@ -134,7 +173,7 @@ func _build_world() -> void:
 	env.ambient_light_energy = 0.45
 	env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
 	# 웹(호환 렌더러)은 블룸을 끄고, 앱(모바일 렌더러)만 켬
-	env.glow_enabled = not OS.has_feature("web")
+	env.glow_enabled = false
 	env.glow_intensity = 0.35
 	env.glow_bloom = 0.0
 	env.glow_hdr_threshold = 1.2
@@ -166,25 +205,31 @@ func _build_world() -> void:
 
 
 func _make_start_plot() -> void:
-	var grass: int = maxi(_find_block("Grass_01"), 0)
-	var dirt := _find_block("Dirt_Light")
-	for x in range(-START_HALF, START_HALF):
-		for z in range(-START_HALF, START_HALF):
-			_set_block(Vector3i(x, 0, z), grass, false)
-	if dirt >= 0:
-		_set_block(Vector3i(-1, 1, -1), dirt, false)
+	var greens := ["Block_Grass_Green_Wavy_01", "Block_Grass_Green_Layered_01"]
+	for x in range(-START_HALF, START_HALF + 1):
+		for z in range(-START_HALF, START_HALF + 1):
+			_set_block(Vector3i(x, 0, z), greens[(x * 7 + z * 3) & 1], false)
+	# 처음 꾸며진 모습: 나무·바위·꽃·풀 조금
+	var deco := {
+		Vector3i(-3, 1, -3): "Tree_Round_Green_01", Vector3i(2, 1, -3): "Tree_Pine_Green_01",
+		Vector3i(3, 1, 2): "Tree_Branching_Lime_01", Vector3i(-2, 1, 3): "Rock_Gray_01",
+		Vector3i(0, 1, -2): "Flower_Round_Red_01", Vector3i(1, 1, 1): "Grass_Tuft_Green_01",
+		Vector3i(-1, 1, 0): "Mushroom_Red_WhiteSpots_01", Vector3i(2, 1, 0): "Plant_Bush_Green_01",
+	}
+	for c in deco:
+		if roots.has(deco[c]):
+			_set_block(c, deco[c], false)
 	_save_land()
 
 
-func _set_block(cell: Vector3i, idx: int, save := true) -> void:
+func _set_block(cell: Vector3i, asset: String, save := true) -> void:
 	_remove_block(cell, false)
-	if idx < 0 or idx >= block_scenes.size():
+	var n := _spawn(asset)
+	if n == null:
 		return
-	var n := block_scenes[idx].instantiate() as Node3D
-	n.position = Vector3(cell.x, cell.y + 0.5, cell.z)
-	_pixel_filter(n)
+	n.position = Vector3(cell.x, cell.y, cell.z)   # 바닥 가운데가 기준점
 	land_root.add_child(n)
-	tiles[cell] = idx
+	tiles[cell] = asset
 	nodes[cell] = n
 	if save:
 		_save_land()
@@ -199,23 +244,12 @@ func _remove_block(cell: Vector3i, save := true) -> void:
 			_save_land()
 
 
-## 16×16 블록이 뭉개지지 않게 최근접 필터로
-func _pixel_filter(n: Node) -> void:
-	if n is MeshInstance3D and n.mesh:
-		for s in n.mesh.get_surface_count():
-			var m: Material = n.mesh.surface_get_material(s)
-			if m is BaseMaterial3D:
-				m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-	for c in n.get_children():
-		_pixel_filter(c)
-
-
 # ───────────────────────── 저장 ─────────────────────────
 
 func _save_land() -> void:
 	var list := []
 	for c in tiles:
-		list.append([c.x, c.y, c.z, block_files[tiles[c]]])
+		list.append([c.x, c.y, c.z, tiles[c]])
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify({"v": 1, "tiles": list}))
@@ -228,9 +262,8 @@ func _load_land() -> bool:
 	if not (parsed is Dictionary) or not parsed.has("tiles"):
 		return false
 	for t in parsed["tiles"]:
-		var idx := block_files.find(str(t[3]))
-		if idx >= 0:
-			_set_block(Vector3i(int(t[0]), int(t[1]), int(t[2])), idx, false)
+		if roots.has(str(t[3])):
+			_set_block(Vector3i(int(t[0]), int(t[1]), int(t[2])), str(t[3]), false)
 	return not tiles.is_empty()
 
 
@@ -351,6 +384,10 @@ func _over_ui(pos: Vector2) -> bool:
 	return false
 
 
+func _is_block(cell: Vector3i) -> bool:
+	return tiles.has(cell) and info.has(tiles[cell]) and info[tiles[cell]]["k"] == "block"
+
+
 func _on_tap(pos: Vector2) -> void:
 	if not edit_mode:
 		return
@@ -360,11 +397,19 @@ func _on_tap(pos: Vector2) -> void:
 	if erase_mode:
 		if hit.has("cell") and tiles.size() > 1:
 			_remove_block(hit["cell"])
+		return
+	if hit.has("cell") and not _is_block(hit["cell"]):
+		return    # 장식 위에는 못 쌓음
+	var target: Vector3i = hit["place"]
+	if target.y < 0 or target.y >= MAX_HEIGHT or tiles.has(target):
+		return
+	if tab == 0:
+		if block_files.size() > 0:
+			_set_block(target, block_files[selected])
 	else:
-		var target: Vector3i = hit["place"]
-		if target.y < 0 or target.y >= MAX_HEIGHT or tiles.has(target):
-			return
-		_set_block(target, selected)
+		# 장식은 블록 바로 위에만
+		if prop_files.size() > 0 and _is_block(target - Vector3i.UP):
+			_set_block(target, prop_files[selected_prop])
 
 
 ## 화면 좌표 → 맞은 블록과 쌓을 칸 (작은 걸음으로 광선 진행)
@@ -474,45 +519,107 @@ func _build_ui() -> void:
 	palette_panel.offset_left = 16
 	palette_panel.offset_right = -16
 	palette_panel.offset_bottom = -24
-	palette_panel.offset_top = -120
+	palette_panel.offset_top = -190
 	root.add_child(palette_panel)
 
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 6)
+	palette_panel.add_child(col)
+	var tabs := HBoxContainer.new()
+	tabs.add_theme_constant_override("separation", 8)
+	col.add_child(tabs)
+	for i in 2:
+		var t := _btn(["블록 %d" % block_files.size(), "장식 %d" % prop_files.size()][i])
+		t.custom_minimum_size = Vector2(150, 52)
+		t.toggle_mode = true
+		var ti := i
+		t.pressed.connect(func():
+			tab = ti
+			_fill_palette())
+		tabs.add_child(t)
+		tab_buttons.append(t)
 	var scroll := ScrollContainer.new()
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	palette_panel.add_child(scroll)
+	scroll.custom_minimum_size.y = 80
+	col.add_child(scroll)
 	palette_box = HBoxContainer.new()
 	palette_box.add_theme_constant_override("separation", 8)
 	scroll.add_child(palette_box)
-	for i in block_files.size():
-		var b := _btn(_pretty(block_files[i]))
-		b.custom_minimum_size = Vector2(120, 72)
+	_fill_palette()
+
+
+func _fill_palette() -> void:
+	for b in palette_buttons:
+		b.queue_free()
+	palette_buttons.clear()
+	var list := block_files if tab == 0 else prop_files
+	for i in list.size():
+		var b := _btn(_pretty(list[i]))
+		b.custom_minimum_size = Vector2(150, 72)
+		b.add_theme_font_size_override("font_size", 20)
 		b.toggle_mode = true
 		var idx := i
 		b.pressed.connect(func():
-			selected = idx
+			if tab == 0:
+				selected = idx
+			else:
+				selected_prop = idx
 			erase_mode = false
 			erase_btn.button_pressed = false
 			_refresh_ui())
 		palette_box.add_child(b)
 		palette_buttons.append(b)
+	if erase_btn:
+		_refresh_ui()
 
 
 func _refresh_ui() -> void:
 	var stages := 0
 	if data.has("stages"):
 		stages = (data["stages"] as Array).size()
+	var list := block_files if tab == 0 else prop_files
+	var sel := selected if tab == 0 else selected_prop
 	if edit_mode:
 		if erase_mode:
-			info_label.text = "지우기: 블록을 탭"
-		elif block_files.size() > 0:
-			info_label.text = "탭해서 쌓기 · " + _pretty(block_files[selected])
+			info_label.text = "지우기: 블록이나 장식을 탭"
+		elif list.size() > 0:
+			info_label.text = ("탭해서 쌓기 · " if tab == 0 else "블록 위에 놓기 · ") + _pretty(list[sel])
 		else:
-			info_label.text = "블록 없음"
+			info_label.text = "에셋 없음"
 	else:
-		info_label.text = "몰랑탑 · 블록 %d종 · 스테이지 %d" % [block_files.size(), stages]
+		info_label.text = "몰랑탑 · 블록 %d · 장식 %d · 스테이지 %d" % [block_files.size(), prop_files.size(), stages]
 	edit_btn.text = "완료" if edit_mode else "편집"
 	rot_box.visible = edit_mode
 	erase_btn.visible = edit_mode
 	palette_panel.visible = edit_mode
+	for i in tab_buttons.size():
+		tab_buttons[i].button_pressed = (i == tab)
 	for i in palette_buttons.size():
-		palette_buttons[i].button_pressed = (i == selected and not erase_mode)
+		palette_buttons[i].button_pressed = (i == sel and not erase_mode)
+
+
+# ───────────────────────── 구름 ─────────────────────────
+
+func _make_clouds() -> void:
+	var spots := [["Cloud_Large_01", Vector3(-14, 9, -10)], ["Cloud_Medium_01", Vector3(6, 11, -16)], ["Cloud_Small_01", Vector3(12, 8, 4)]]
+	for sp in spots:
+		if not roots.has(sp[0]):
+			continue
+		var c := (roots[sp[0]] as Node3D).duplicate() as Node3D
+		c.position = sp[1]       # 구름은 기준점이 가운데
+		c.scale = Vector3.ONE * PROP_SCALE * 0.6
+		add_child(c)
+		clouds.append(c)
+
+
+func _process(delta: float) -> void:
+	for i in clouds.size():
+		var c := clouds[i]
+		c.position.x += delta * (0.25 + i * 0.12)
+		if c.position.x > 28.0:
+			c.position.x = -28.0
+
+
+func _exit_tree() -> void:
+	if lib:
+		lib.free()
