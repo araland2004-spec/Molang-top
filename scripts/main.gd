@@ -8,12 +8,12 @@ const BLOCK_DIR := "res://assets/blocks/"
 const COTTAGE := "res://assets/house/cottage.glb"
 const PLAYER_SCENE := "res://scenes/player.tscn"
 const DATA_PATH := "res://data/mollang_data.json"
-const SAVE_PATH := "user://home.json"
+const SAVE_PATH := "user://home2.json"   # 바닥 섞기 버전부터 새로
 const FLOOR_TOP := 1.0
-const X0 := -4
-const X1 := 4
-const Z0 := -3
-const Z1 := 5
+const X0 := -7
+const X1 := 7
+const Z0 := -6
+const Z1 := 8
 const HOUSE_S := 1.3                       # 웹 버전 꼬마집 크기
 const HOUSE_BOX := Rect2(-1.45, -1.35, 2.9, 2.75)   # 몰랑이·햄스터가 못 들어가는 집 자리 (x, z)
 const ZOOM_MIN := 5.0
@@ -50,6 +50,10 @@ var floor_nodes := {}
 var land_root: Node3D
 var cottage: Node3D
 var lights: Array[MeshInstance3D] = []
+var sun: DirectionalLight3D
+var env: Environment
+var lamps: Array = []          # [OmniLight3D, 등불 재질]
+var fireflies: CPUParticles3D
 var light_mats: Array[StandardMaterial3D] = []
 var smoke: Array[MeshInstance3D] = []
 var chimney_top := Vector3.ZERO
@@ -162,17 +166,20 @@ func _pixel(n: Node) -> void:
 # ───────────────────────── 월드 ─────────────────────────
 
 func _build_world() -> void:
-	var env := Environment.new()
+	env = Environment.new()
 	env.background_mode = Environment.BG_CANVAS      # 뒤에 2D 하늘 그라데이션
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color(0.9, 0.9, 1.0)
 	env.ambient_light_energy = 0.5
 	env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
+	env.fog_enabled = true
+	env.fog_density = 0.02
+	env.fog_sky_affect = 0.0
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
 
-	var sun := DirectionalLight3D.new()
+	sun = DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-55, -30, 0)
 	sun.light_energy = 0.9
 	sun.light_color = Color(1.0, 0.97, 0.92)
@@ -193,11 +200,51 @@ func _build_world() -> void:
 	add_child(land_root)
 
 
+## 바닥 섞기: 잔디 두 가지를 얼룩지게, 집 앞 마당과 굽은 흙길, 가장자리 어두운 흙, 한쪽에 시냇물과 돌
 func _make_floor() -> void:
+	var noise := FastNoiseLite.new()
+	noise.seed = 7
+	noise.frequency = 0.18
+	var n2 := FastNoiseLite.new()
+	n2.seed = 21
+	n2.frequency = 0.35
 	for x in range(X0, X1 + 1):
 		for z in range(Z0, Z1 + 1):
-			_set_floor(Vector2i(x, z), "Block_Grass_01", false)
+			_set_floor(Vector2i(x, z), _floor_pick(x, z, noise, n2), false)
 	_save_floor()
+
+
+func _floor_pick(x: int, z: int, noise: FastNoiseLite, n2: FastNoiseLite) -> String:
+	var v := noise.get_noise_2d(x, z)
+	var w := n2.get_noise_2d(x, z)
+	# 시냇물: 오른쪽 위에서 아래로 살짝 굽어 흐름
+	var river_x := 5.5 + sin(z * 0.45) * 0.9
+	var dr := absf(x - river_x)
+	if dr < 0.6:
+		return "Block_Water_Base_01"
+	if dr < 1.3:
+		return "Block_StoneBrick_Moss_01" if w > 0.15 else ("Block_Stone_Light_01" if w > -0.2 else "Block_Dirt_Stony_01")
+	# 집 앞 마당 (둥근 흙 광장)
+	var plaza := Vector2(x - 0.2, (z - 3.0) * 1.15).length()
+	if plaza < 1.6:
+		return "Block_Dirt_Light_01" if w < 0.35 else "Block_Sand_02"
+	# 굽은 흙길: 마당에서 아래(앞)로
+	if z > 3:
+		var path_x := 0.4 + sin(z * 0.55) * 1.4
+		var dp := absf(x - path_x)
+		if dp < 0.55:
+			return "Block_Dirt_Light_01"
+		if dp < 1.1 and w > 0.0:
+			return "Block_Dirt_Stony_01"
+	# 가장자리는 어둡게
+	var edge := mini(mini(x - X0, X1 - x), mini(z - Z0, Z1 - z))
+	if edge == 0 and v < 0.1:
+		return "Block_Soil_Dark_01"
+	if v > 0.25:
+		return "Block_Grass_02"
+	if v < -0.45 and w > 0.3:
+		return "Block_Dirt_Stony_01"
+	return "Block_Grass_01"
 
 
 func _make_block(asset: String) -> Node3D:
@@ -264,6 +311,7 @@ func _build_cottage() -> void:
 		if n is Node3D:
 			n.visible = false
 	_add_lights()
+	_add_lamps()
 	var ch := cottage.find_child("chimney_cap", true, false) as Node3D
 	if ch:
 		chimney_top = ch.global_position + Vector3(0, 0.1, 0)
@@ -277,6 +325,90 @@ func _build_cottage() -> void:
 		m.mesh = bm
 		add_child(m)
 		smoke.append(m)
+
+
+## 길가 등불 + 문 앞 불빛 + 반딧불이: 해 질 녘부터 켜짐
+func _add_lamps() -> void:
+	var wood := StandardMaterial3D.new()
+	wood.albedo_color = Color("#4a3426")
+	var post := BoxMesh.new()
+	post.size = Vector3(0.07, 0.55, 0.07)
+	post.material = wood
+	var head := BoxMesh.new()
+	head.size = Vector3(0.16, 0.16, 0.16)
+	for p in [Vector3(-1.1, 0, 4.2), Vector3(1.8, 0, 5.6), Vector3(-0.6, 0, 7.3), Vector3(1.6, 0, 2.2), Vector3(0.75, 0, 1.75)]:
+		var at: Vector3 = p + Vector3(0, FLOOR_TOP, 0)
+		var door: bool = p == Vector3(0.75, 0, 1.75)
+		if not door:
+			var m := MeshInstance3D.new()
+			m.mesh = post
+			m.position = at + Vector3(0, 0.275, 0)
+			add_child(m)
+		var lm := StandardMaterial3D.new()
+		lm.albedo_color = Color("#ffd9a0")
+		lm.emission_enabled = true
+		lm.emission = Color("#ffb45a")
+		var h := MeshInstance3D.new()
+		h.mesh = head
+		h.material_override = lm
+		h.position = at + Vector3(0, 0.62 if not door else 0.9, 0)
+		add_child(h)
+		var o := OmniLight3D.new()
+		o.light_color = Color(1.0, 0.72, 0.42)
+		o.omni_range = 2.6
+		o.omni_attenuation = 1.4
+		o.position = h.position
+		add_child(o)
+		lamps.append([o, lm])
+	fireflies = CPUParticles3D.new()
+	fireflies.amount = 28
+	fireflies.lifetime = 6.0
+	fireflies.preprocess = 6.0
+	fireflies.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+	fireflies.emission_box_extents = Vector3(7, 0.6, 7)
+	fireflies.position = Vector3(0, FLOOR_TOP + 0.8, 1)
+	fireflies.gravity = Vector3.ZERO
+	fireflies.direction = Vector3(0, 1, 0)
+	fireflies.spread = 180.0
+	fireflies.initial_velocity_min = 0.05
+	fireflies.initial_velocity_max = 0.15
+	var fm := StandardMaterial3D.new()
+	fm.albedo_color = Color("#fff1a8")
+	fm.emission_enabled = true
+	fm.emission = Color("#ffe06a")
+	fm.emission_energy_multiplier = 2.0
+	fm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	var fq := BoxMesh.new()
+	fq.size = Vector3.ONE * 0.04
+	fq.material = fm
+	fireflies.mesh = fq
+	var ramp := Gradient.new()
+	ramp.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
+	ramp.colors = PackedColorArray([Color("#7ff5e0"), Color("#c9a2ff"), Color("#ffe06a")])
+	fireflies.color_initial_ramp = ramp
+	fm.vertex_color_use_as_albedo = true
+	add_child(fireflies)
+
+
+## 시간에 따라: 낮엔 밝고, 해 질 녘·밤엔 어둑한 숲빛 + 등불이 따뜻하게
+func _update_mood() -> void:
+	var s := _sky_now()
+	var night: float = s["night"]
+	sun.light_energy = lerpf(0.95, 0.12, night)
+	sun.light_color = Color(1.0, 0.97, 0.92).lerp(Color(0.45, 0.7, 0.85), night)
+	env.ambient_light_color = Color(0.9, 0.9, 1.0).lerp(Color(0.22, 0.42, 0.45), night)   # 밤: 짙은 청록
+	env.ambient_light_energy = lerpf(0.5, 0.42, night)
+	env.adjustment_enabled = true
+	env.adjustment_brightness = lerpf(1.0, 0.85, night)
+	env.adjustment_saturation = lerpf(1.0, 0.72, night)
+	env.adjustment_contrast = lerpf(1.0, 1.08, night)
+	env.fog_light_color = (s["bot"] as Color).lerp(Color(0.06, 0.14, 0.16), 0.4 + 0.5 * night)
+	env.fog_density = lerpf(0.012, 0.035, night)
+	for l in lamps:
+		(l[0] as OmniLight3D).light_energy = lerpf(0.1, 1.1, night)
+		(l[1] as StandardMaterial3D).emission_energy_multiplier = lerpf(0.3, 2.2, night)
+	if fireflies:
+		fireflies.emitting = night > 0.3
 
 
 ## 처마 끝 깜빡이는 크리스마스 전구
@@ -409,8 +541,10 @@ func _sky_now() -> Dictionary:
 
 func _update_sky(now: float) -> void:
 	var s := _sky_now()
-	sky_grad.set_color(0, s["top"])
-	sky_grad.set_color(1, s["bot"])
+	# 밤 하늘은 참고 이미지처럼 짙은 청록 쪽으로
+	var nk: float = s["night"] * 0.7
+	sky_grad.set_color(0, (s["top"] as Color).lerp(Color("#0b1c22"), nk))
+	sky_grad.set_color(1, (s["bot"] as Color).lerp(Color("#123036"), nk))
 	var vs := get_viewport().get_visible_rect().size
 	for st in stars:
 		var r: ColorRect = st[0]
@@ -549,6 +683,8 @@ func _walk_to(p: Vector3) -> void:
 func _process(delta: float) -> void:
 	var now := Time.get_ticks_msec() / 1000.0
 	_update_sky(now)
+	if Engine.get_process_frames() % 30 == 0:
+		_update_mood()
 	var vs := get_viewport().get_visible_rect().size
 	snow.position = Vector2(vs.x * 0.5, -20)
 	snow.emission_rect_extents = Vector2(vs.x * 0.6, 10)
