@@ -9,6 +9,7 @@ var d := {
 	"best": 0, "prog": 0, "seen_hint": false, "guides": [], "jelly": 100, "muted": false,
 	"daily": {"day": "", "used": {}}, "bag": {}, "erew": {"day": "", "n": 0}, "stars": {},
 	"play_sec": 0.0, "work_total": 0,
+	"home": {"own": {}, "put": {}, "lvl": 1, "orn": 0, "fairies": [], "pets": [], "events": [], "name": "몰랑이네", "floors_in": {}, "seen_box": 0},
 }
 signal jelly_changed
 
@@ -140,6 +141,10 @@ func import_web(json_str: String) -> bool:
 			if h.get("inv") is Dictionary:
 				d["bag"] = h["inv"]
 			d["home_web"] = h
+			var hm: Dictionary = d["home"]
+			for k in ["own", "put", "lvl", "orn", "fairies", "pets", "events", "name"]:
+				if h.has(k) and h[k] != null:
+					hm[k] = h[k]
 			ok = true
 	if o.has("mollang.guides"):
 		var gs = JSON.parse_string(str(o["mollang.guides"]))
@@ -154,3 +159,22 @@ func import_web(json_str: String) -> bool:
 	if ok:
 		save()
 	return ok
+
+
+func home() -> Dictionary:
+	var h: Dictionary = d["home"]
+	for k in ["own", "put", "floors_in"]:
+		if not (h.get(k) is Dictionary):
+			h[k] = {}
+	for k in ["fairies", "pets", "events"]:
+		if not (h.get(k) is Array):
+			h[k] = []
+	if not h.has("lvl"): h["lvl"] = 1
+	if not h.has("orn"): h["orn"] = 0
+	if not h.has("name"): h["name"] = "몰랑이네"
+	return h
+
+
+## 오너먼트: 플레이 30분마다 1개 (웹과 같게). 받을 수 있는 수 = 누적 − 단 수
+func orn_ready() -> int:
+	return maxi(0, int(float(d.get("play_sec", 0.0)) / 1800.0) - int(home()["orn"]))

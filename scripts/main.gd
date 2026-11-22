@@ -18,6 +18,8 @@ const Z0 := -6
 const Z1 := 8
 const HOUSE_S := 1.3                       # 웹 버전 꼬마집 크기
 const HOUSE_BOX := Rect2(-1.45, -1.35, 2.9, 2.75)   # 몰랑이·햄스터가 못 들어가는 집 자리 (x, z)
+const HomeExtra := preload("res://scripts/home_extra.gd")
+const Synth := preload("res://scripts/synth.gd")
 const ZOOM_MIN := 5.0
 const ZOOM_MAX := 18.0
 const WALK_SPEED := 1.5
@@ -110,6 +112,18 @@ var rot_l: Button
 var rot_r: Button
 var edit_btn: Button
 var toast_label: Label
+var extra: HomeExtra
+var synth: Node
+var outside_nodes: Array = []
+var sky_layers: Array = []
+var hud_groups: Array = []
+var walk_min := Vector2(X0 - 0.35, Z0 - 0.35)
+var walk_max := Vector2(X1 + 0.35, Z1 + 0.35)
+var blockers: Array = [HOUSE_BOX]
+var out_btn: Button
+var deco_btn: Button
+var name_label: Label
+var pet_label: Label
 var toast_t := 0.0
 var jelly_btn: Button
 var play_label: Label
@@ -133,6 +147,16 @@ func _ready() -> void:
 	_make_hamster()
 	_build_sky()
 	_build_hud()
+	synth = Synth.new()
+	add_child(synth)
+	outside_nodes.append_array([land_root, cottage, ham])
+	var seats_node := get_node_or_null("Seats")
+	if seats_node:
+		outside_nodes.append(seats_node)
+	extra = HomeExtra.new()
+	add_child(extra)
+	extra.setup(self, ui_root)
+	outside_nodes.append(extra.yard_root)
 	_update_camera()
 	_refresh_ui()
 
@@ -418,6 +442,7 @@ func _build_cottage() -> void:
 		m.mesh = bm
 		add_child(m)
 		smoke.append(m)
+		outside_nodes.append(m)
 
 
 ## 길가 등불 + 문 앞 불빛 + 반딧불이: 해 질 녘부터 켜짐
@@ -437,6 +462,7 @@ func _add_lamps() -> void:
 			m.mesh = post
 			m.position = at + Vector3(0, 0.275, 0)
 			add_child(m)
+			outside_nodes.append(m)
 		var lm := StandardMaterial3D.new()
 		lm.albedo_color = Color("#ffd9a0")
 		lm.emission_enabled = true
@@ -446,12 +472,14 @@ func _add_lamps() -> void:
 		h.material_override = lm
 		h.position = at + Vector3(0, 0.62 if not door else 0.9, 0)
 		add_child(h)
+		outside_nodes.append(h)
 		var o := OmniLight3D.new()
 		o.light_color = Color(1.0, 0.72, 0.42)
 		o.omni_range = 2.6
 		o.omni_attenuation = 1.4
 		o.position = h.position
 		add_child(o)
+		outside_nodes.append(o)
 		lamps.append([o, lm])
 	fireflies = CPUParticles3D.new()
 	fireflies.amount = 28
@@ -481,10 +509,22 @@ func _add_lamps() -> void:
 	fireflies.color_initial_ramp = ramp
 	fm.vertex_color_use_as_albedo = true
 	add_child(fireflies)
+	outside_nodes.append(fireflies)
 
 
 ## 시간에 따라: 낮엔 밝고, 해 질 녘·밤엔 어둑한 숲빛 + 등불이 따뜻하게
 func _update_mood() -> void:
+	if extra and extra.inside:
+		# 집 안: 따뜻한 실내 불빛
+		sun.light_energy = 0.45
+		sun.light_color = Color(1.0, 0.92, 0.8)
+		env.ambient_light_color = Color(1.0, 0.93, 0.85)
+		env.ambient_light_energy = 0.7
+		env.adjustment_brightness = 1.0
+		env.adjustment_saturation = 1.0
+		env.adjustment_contrast = 1.0
+		env.fog_density = 0.0
+		return
 	var s := _sky_now()
 	var night: float = s["night"]
 	sun.light_energy = lerpf(0.95, 0.12, night)
@@ -536,6 +576,7 @@ func _add_lights() -> void:
 			m.position = Vector3(box.position.x + box.size.x * i / n, y, z)
 			add_child(m)
 			lights.append(m)
+			outside_nodes.append(m)
 
 
 func _make_player() -> void:
@@ -575,6 +616,7 @@ func _make_hamster() -> void:
 
 func _build_sky() -> void:
 	var back := CanvasLayer.new()
+	sky_layers.append(back)
 	back.layer = -1
 	add_child(back)
 	sky_grad = Gradient.new()
@@ -601,6 +643,7 @@ func _build_sky() -> void:
 	_update_sky(0.0)
 
 	var front := CanvasLayer.new()
+	sky_layers.append(front)
 	front.layer = 1
 	add_child(front)
 	snow = CPUParticles2D.new()
@@ -716,13 +759,58 @@ func _turn(deg: float) -> void:
 # ───────────────────────── 걷기 ─────────────────────────
 
 func _in_house(p: Vector3, m := 0.0) -> bool:
-	return HOUSE_BOX.grow(m).has_point(Vector2(p.x, p.z))
+	for r: Rect2 in blockers:
+		if r.grow(m).has_point(Vector2(p.x, p.z)):
+			return true
+	return false
 
 
 func _clamp_yard(p: Vector3) -> Vector3:
-	p.x = clamp(p.x, X0 - 0.35, X1 + 0.35)
-	p.z = clamp(p.z, Z0 - 0.35, Z1 + 0.35)
+	p.x = clamp(p.x, walk_min.x, walk_max.x)
+	p.z = clamp(p.z, walk_min.y, walk_max.y)
 	return p
+
+
+func set_walk_area(mn: Vector2, mx: Vector2, bl: Array) -> void:
+	walk_min = mn
+	walk_max = mx
+	blockers = bl
+
+
+func reset_walk_area() -> void:
+	set_walk_area(Vector2(X0 - 0.35, Z0 - 0.35), Vector2(X1 + 0.35, Z1 + 0.35), [HOUSE_BOX])
+
+
+func set_outside_visible(v: bool) -> void:
+	for n in outside_nodes:
+		if is_instance_valid(n):
+			n.visible = v
+	for l in sky_layers:
+		(l as CanvasLayer).visible = v
+	env.background_mode = Environment.BG_CANVAS if v else Environment.BG_COLOR
+	env.background_color = Color("#2a2533")
+	_update_mood()
+	if fireflies and not v:
+		fireflies.emitting = false
+
+
+func refresh_ui() -> void:
+	_refresh_ui()
+
+
+func toast(text: String) -> void:
+	_toast(text)
+
+
+func synth_tone(f0: float, f1: float, dur: float, vol: float) -> void:
+	if synth:
+		synth.muted = bool(Save.d.get("muted", false))
+		synth.tone(f0, f1, dur, vol)
+
+
+func refresh_names() -> void:
+	if name_label:
+		name_label.text = str(Save.home().get("name", "몰랑이네"))
 
 
 ## 집을 가로지르면 집 모서리를 돌아서 가는 길
@@ -730,12 +818,17 @@ func _route(from: Vector3, to: Vector3) -> Array:
 	to = _clamp_yard(to)
 	if _in_house(to, 0.15):
 		return []
-	var r := HOUSE_BOX.grow(0.25)
+	var r := Rect2()
 	var hits := false
-	for i in 21:
-		var p := from.lerp(to, i / 20.0)
-		if r.has_point(Vector2(p.x, p.z)):
-			hits = true
+	for bl: Rect2 in blockers:
+		var g := bl.grow(0.25)
+		for i in 21:
+			var p := from.lerp(to, i / 20.0)
+			if g.has_point(Vector2(p.x, p.z)):
+				hits = true
+				r = g
+				break
+		if hits:
 			break
 	if not hits:
 		return [to]
@@ -947,6 +1040,8 @@ func _seat_at(pos: Vector2) -> Node:
 	var best: Node = null
 	var best_d := 70.0
 	for s in get_tree().get_nodes_in_group("seat"):
+		if not (s as Node3D).is_visible_in_tree():
+			continue
 		var w: Vector3 = (s as Node3D).global_position + Vector3(0, 0.3, 0)
 		if cam.is_position_behind(w):
 			continue
@@ -969,6 +1064,8 @@ func _on_tap(pos: Vector2) -> void:
 			_swap_floor(c, block_files[selected])
 		return
 	var seat := _seat_at(pos)
+	if seat == null and extra and extra.tap(pos):
+		return
 	if seat:
 		var sp: Node3D = seat.get_node("SitPoint")
 		var front := -sp.global_transform.basis.z
@@ -1061,9 +1158,10 @@ func _build_hud() -> void:
 	tl.position = Vector2(24, 28)
 	tl.add_theme_constant_override("separation", 10)
 	ui_root.add_child(tl)
+	hud_groups.append(tl)
 	var prof := _px_btn("", C_CREAM)
 	prof.custom_minimum_size = Vector2(340, 100)
-	prof.pressed.connect(func(): _toast("설정은 곧 옮겨 올게요"))
+	prof.pressed.connect(func(): extra.open_settings())
 	tl.add_child(prof)
 	var ph := HBoxContainer.new()
 	ph.add_theme_constant_override("separation", 14)
@@ -1095,8 +1193,11 @@ func _build_hud() -> void:
 	var pv := VBoxContainer.new()
 	pv.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ph.add_child(pv)
-	pv.add_child(_label("몰랑이네", 30, C_INK, false))
+	name_label = _label(str(Save.home().get("name", "몰랑이네")), 30, C_INK, false)
+	pv.add_child(name_label)
 	pv.add_child(_label("크리스마스 마을 · 집 1채", 19, C_SUB, false))
+	pet_label = _label("", 22, Color.WHITE)
+	tl.add_child(pet_label)
 	play_label = _label("", 22, Color.WHITE)
 	tl.add_child(play_label)
 
@@ -1107,6 +1208,7 @@ func _build_hud() -> void:
 	tr.add_theme_constant_override("separation", 12)
 	tr.alignment = BoxContainer.ALIGNMENT_END
 	ui_root.add_child(tr)
+	hud_groups.append(tr)
 	var jbar := HBoxContainer.new()
 	jbar.add_theme_constant_override("separation", 0)
 	jbar.alignment = BoxContainer.ALIGNMENT_END
@@ -1136,6 +1238,8 @@ func _build_hud() -> void:
 		var tt: String = t
 		if t == "상점":
 			b.pressed.connect(_open_shop)
+		elif t == "도감":
+			b.pressed.connect(func(): extra.open_book("in" if extra.inside else "out"))
 		else:
 			b.pressed.connect(func(): _toast(tt + "은 곧 옮겨 올게요"))
 		row.add_child(b)
@@ -1145,6 +1249,7 @@ func _build_hud() -> void:
 	hint.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	hint.position = Vector2(-280, 360)
 	ui_root.add_child(hint)
+	hud_groups.append(hint)
 
 	# 왼쪽 아래: 꾸미기 · 땅 편집
 	var bl := VBoxContainer.new()
@@ -1152,9 +1257,14 @@ func _build_hud() -> void:
 	bl.position = Vector2(24, -190)
 	bl.add_theme_constant_override("separation", 16)
 	ui_root.add_child(bl)
+	hud_groups.append(bl)
+	out_btn = _px_btn("← 밖으로", C_CREAM)
+	out_btn.pressed.connect(func(): extra.leave())
+	bl.add_child(out_btn)
 	var deco := _px_btn("집 밖 꾸미기", C_VIOLET)
-	deco.pressed.connect(func(): _toast("꾸미기는 곧 옮겨 올게요"))
+	deco.pressed.connect(func(): extra.open_deco())
 	bl.add_child(deco)
+	deco_btn = deco
 	edit_btn = _px_btn("땅 편집", C_CREAM)
 	edit_btn.pressed.connect(func(): _set_edit(true))
 	bl.add_child(edit_btn)
@@ -1165,6 +1275,7 @@ func _build_hud() -> void:
 	br.position = Vector2(-360, -250)
 	br.add_theme_constant_override("separation", 18)
 	ui_root.add_child(br)
+	hud_groups.append(br)
 	var prog := int(Save.d.get("prog", 0))
 	var et := roundi(550 + (prog - 20) * 450.0 / 80.0) if prog >= 20 else 300
 	var endless := _px_btn("무한 모드\n던지기 %d · 최고 %s · 보상 %d/%d" % [et, _comma(int(Save.d.get("best", 0))), Save.endless_paid_left(), Save.ENDLESS_PAID], C_CREAM, 24)
@@ -1307,9 +1418,17 @@ func _set_edit(on: bool) -> void:
 
 func _refresh_ui() -> void:
 	var busy := sitting != null or edit_mode
-	for c in ui_root.get_children():
-		if c != edit_bar and c != stand_btn and c != toast_label:
-			c.visible = not busy
+	for c in hud_groups:
+		c.visible = not busy
+	var ins: bool = extra != null and extra.inside
+	if out_btn:
+		out_btn.visible = ins
+		deco_btn.text = "집 안 꾸미기" if ins else "집 밖 꾸미기"
+		edit_btn.visible = not ins
+	if hint:
+		hint.text = ("트리를 누르면 닦아요 · 의자를 누르면 앉아요" if ins else "바닥을 누르면 걸어가요 · 집을 누르면 들어가요")
+	if pet_label and extra:
+		pet_label.text = extra.pet_line()
 	edit_bar.visible = edit_mode and not sitting
 	stand_btn.visible = sitting != null
 	if block_files.size() > 0:
