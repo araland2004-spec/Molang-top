@@ -1,0 +1,10 @@
+# Godot
+.godot/
+/build/
+*.tmp
+export_credentials.cfg
+*.keystore
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
