@@ -14,6 +14,7 @@ var d := {
 signal jelly_changed
 
 var next_mode := ""
+var jelly_seen := -1     # 집 화면이 마지막으로 보여 준 젤리 수 (돌아왔을 때 「+N」 연출용)
 var work_carry := 0.0
 var save_t := 0.0      # 집 → 게임으로 넘어갈 때: "endless" | "menu" | "stage:N"
 var data := {}           # mollang_data.json

@@ -57,6 +57,7 @@ var mission_t := 0.0
 var card: Control
 var card_title: Label
 var card_stars: Label
+var card_stage: Label
 var card_big: Label
 var card_note: Label
 var card_reward: Label
@@ -118,6 +119,7 @@ func _ready() -> void:
 	_build_ui()
 	core.score_changed.connect(func(s):
 		score_lbl.text = GameCore.score_text(s)
+		info_lbl.text = _info_str()
 		_refresh_goal())
 	core.info_changed.connect(func():
 		info_lbl.text = _info_str()
@@ -325,6 +327,8 @@ func _tilt_btn(icon_name: String, dir: int) -> Button:
 ## 정보줄 한 줄: 「45단계 · 고비 · 던지기 31 남음」
 func _info_str() -> String:
 	var left := ("던지기 %d 남음" % core.throws_left) if (core.mode != "stage" or int(core.stages[core.stage_idx]["throws"])) else "던지기 무제한"
+	if core.streak > 0:
+		left += " · 연속 ×%s" % str(1.0 + core.streak * GameCore.STREAK_STEP)
 	if core.mode != "stage":
 		return "무한 모드 · " + left
 	var i: int = core.stage_idx
@@ -499,8 +503,11 @@ func _build_ui() -> void:
 	# 결과 카드
 	card = _overlay(Color(0, 0, 0, 0.45))
 	var cp := PanelContainer.new()
-	cp.add_theme_stylebox_override("panel", _style(PAGE, 26))
-	cp.custom_minimum_size = Vector2(560, 0)
+	var cps := Sty.box("sb_card_result")
+	cps.content_margin_left = 44; cps.content_margin_right = 44
+	cps.content_margin_top = 40; cps.content_margin_bottom = 36
+	cp.add_theme_stylebox_override("panel", cps)
+	cp.custom_minimum_size = Vector2(600, 0)
 	cp.set_anchors_preset(Control.PRESET_CENTER)
 	cp.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	cp.grow_vertical = Control.GROW_DIRECTION_BOTH
@@ -508,16 +515,33 @@ func _build_ui() -> void:
 	var cv := VBoxContainer.new()
 	cv.add_theme_constant_override("separation", 14)
 	cp.add_child(cv)
-	card_title = _lbl("", 36)
-	card_stars = _lbl("", 40, Color("#ffd45c"))
-	card_big = _lbl("", 84, MILK, font_num)
+	card_stage = _lbl("", 22, UI.MINT_PROGRESS, font_num)      # 「STAGE 45 · 고비」
+	card_title = _lbl("", 40, MILK, font_bold)
+	card_stars = _lbl("", 52, UI.GOLD_STAR)
+	card_big = _lbl("", 104, MILK, font_num)
 	card_note = _lbl("", 24, SOFT)
-	card_reward = _lbl("", 28, Color("#ff8fb1"), font_bold)
-	for l in [card_title, card_stars, card_big, card_note, card_reward]:
+	card_reward = _lbl("", 26, UI.JELLY, font_bold)
+	var rsb := StyleBoxFlat.new()
+	rsb.bg_color = Color(UI.JELLY.r, UI.JELLY.g, UI.JELLY.b, 0.1)
+	rsb.border_color = Color(UI.JELLY.r, UI.JELLY.g, UI.JELLY.b, 0.35)
+	rsb.set_border_width_all(2)
+	rsb.set_corner_radius_all(40)
+	rsb.content_margin_top = 10; rsb.content_margin_bottom = 10
+	card_reward.add_theme_stylebox_override("normal", rsb)
+	for l in [card_stage, card_title, card_stars, card_big, card_note]:
 		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		l.custom_minimum_size.x = 520
+		l.custom_minimum_size.x = 512
 		cv.add_child(l)
+	var dash := _lbl("- - - - - - - - - - - - - - - - - - - - - - - - - -", 16, Color(UI.MINT_PROGRESS.r, UI.MINT_PROGRESS.g, UI.MINT_PROGRESS.b, 0.28))
+	dash.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	dash.clip_text = true
+	dash.custom_minimum_size.x = 512
+	cv.add_child(dash)
+	card_reward.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	card_reward.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	card_reward.custom_minimum_size.x = 512
+	cv.add_child(card_reward)
 	card_main = _btn("다시 하기", MILK, INK, 30)
 	card_main.custom_minimum_size.y = 92
 	card_main.pressed.connect(_on_card_main)
@@ -525,7 +549,10 @@ func _build_ui() -> void:
 	card_menu = _btn("단계 목록", PAGE, MILK, 26)
 	card_menu.pressed.connect(show_menu)
 	cv.add_child(card_menu)
-	var ch := _btn("집으로", PAGE, MILK, 26)
+	var ch := _btn("집으로", PAGE, SOFT, 24)
+	ch.flat = true
+	for stn in ["normal", "hover", "focus", "pressed"]:
+		ch.add_theme_stylebox_override(stn, StyleBoxEmpty.new())
 	ch.pressed.connect(go_home)
 	cv.add_child(ch)
 
@@ -732,7 +759,12 @@ func _paint_items() -> void:
 			if k != "tilt":
 				item_btns[k].visible = false
 		item_btns["tilt"].text = "%d초" % ceili(core.tilt_t)
+	item_btns["tilt"].icon = null if tilting else Sty.icon(ITEM_ICONS["tilt"])
 	items_box.visible = any
+	# 컨테이너는 한 번 커지면 안 줄어들어요(처음엔 아이템이 다 보이는 상태로 잼) → 보이는 칸이 바뀔 때마다 너비를 다시 맞춤
+	var w := get_viewport_rect().size.x - 72
+	if items_box.size.x != w:
+		items_box.size = Vector2(w, 148)
 
 
 func _use_item(k: String) -> void:
@@ -779,10 +811,12 @@ func _board_input(e: InputEvent) -> void:
 			if core.grab(lp.x):
 				dragging = true
 				drag_start = e.position
+				Save.buzz(8)
 		else:
 			if dragging:
 				dragging = false
 				var used: String = core.release(true)
+				Save.buzz(8)
 				if used == "x2":
 					Save.spend_item("x2", core.mode != "stage")
 				if hint_lbl.visible and core.mode != "stage":
@@ -920,12 +954,17 @@ func _stage_clear() -> void:
 	card_stars.text = "★".repeat(stars) + "☆".repeat(3 - stars)
 	var big := GameCore.num_text(int(st["t"])) if st["goal"] == "tier" else GameCore.score_text(core.score)
 	var note := ("던지기 %d번 남기고 성공" % core.throws_left if throws else "점수 " + GameCore.score_text(core.score)) + extra
-	_show_card("모든 단계를 깼어요" if last else "%d단계 클리어" % (i + 1), big, note,
-		("첫 클리어 보상" if first else "다시 깨기 보상") + " 젤리 +%d" % j, "목록으로" if last else "다음 단계", not last)
+	_show_card("모든 단계를 깼어요!" if last else "클리어!", big, note,
+		("첫 클리어 보상" if first else "다시 깨기 보상") + "  젤리 +%d" % j, "목록으로" if last else "다음 단계 · %d" % (i + 2), not last)
 	card_act = "menu" if last else "next"
 
 
 func _show_card(title: String, big: String, note: String, reward: String, main: String, with_menu: bool) -> void:
+	if core.mode == "stage":
+		var i: int = core.stage_idx
+		card_stage.text = "STAGE %d" % (i + 1) + (" · 고비" if i >= 24 and (i + 1) % 5 == 0 else "")
+	else:
+		card_stage.text = "ENDLESS"
 	card_title.text = title
 	card_big.text = big
 	card_note.text = note
@@ -936,6 +975,7 @@ func _show_card(title: String, big: String, note: String, reward: String, main: 
 	card.visible = true
 	var cp: Control = card.get_child(0)
 	cp.reset_size()
+	Fx.appear(cp)
 
 
 func _on_card_main() -> void:
@@ -953,46 +993,178 @@ func show_menu() -> void:
 	core.sel = null
 	for c in menu_grid_box.get_children():
 		c.queue_free()
+	var n_st: int = core.stages.size()
+	var prog := int(Save.d["prog"])
+	var nxt := mini(prog, n_st - 1)
+	# 머리: 스테이지 · 깬 수 / 전체 + 무한 모드 · 집으로
 	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 12)
 	menu_grid_box.add_child(head)
-	var t := _lbl("스테이지 · 베타 %d단계" % core.stages.size(), 34)
-	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var t := _lbl("스테이지", 40, MILK, font_bold)
 	head.add_child(t)
-	var eb := _btn("무한 모드", MILK, INK, 24)
+	var cnt := _lbl("%d / %d" % [prog, n_st], 30, SOFT, font_num)
+	cnt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cnt.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	head.add_child(cnt)
+	var eb := _btn("무한 모드", BTN, MILK, 22)
 	eb.pressed.connect(start_endless)
 	head.add_child(eb)
-	var hb := _btn("집으로", BTN, MILK, 24)
+	var hb := _btn("집으로", BTN, MILK, 22)
 	hb.pressed.connect(go_home)
 	head.add_child(hb)
+	# 이어하기 카드 (다음 단계 바로 시작)
+	var cont := _btn("", BTN, MILK, 22)
+	cont.custom_minimum_size.y = 190
+	var cs := Sty.box("sb_button_primary")
+	for stn in ["normal", "hover", "focus", "pressed"]:
+		cont.add_theme_stylebox_override(stn, cs)
+	cont.pressed.connect(func(): start_stage(nxt))
+	menu_grid_box.add_child(cont)
+	var crow := HBoxContainer.new()
+	crow.set_anchors_preset(Control.PRESET_FULL_RECT)
+	crow.offset_left = 36; crow.offset_right = -36
+	crow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cont.add_child(crow)
+	var cl := VBoxContainer.new()
+	cl.alignment = BoxContainer.ALIGNMENT_CENTER
+	cl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	crow.add_child(cl)
+	cl.add_child(_lbl("이어하기" if prog < n_st else "다시 도전", 22, UI.AMBER_PRIMARY))
+	var gl := _lbl(core.goal_text(core.stages[nxt]), 34, MILK, font_bold)
+	cl.add_child(gl)
+	var tags: Array = []
+	if nxt >= 24 and (nxt + 1) % 5 == 0:
+		tags.append("고비 판")
+	for k in ["shake", "undo", "hammer", "tilt", "x2"]:
+		if nxt + 1 >= int(core.item_at.get(k, 999)):
+			tags.append(ITEM_NAMES[k])
+	cl.add_child(_lbl(" · ".join(tags), 20, SOFT))
+	var cr := VBoxContainer.new()
+	cr.alignment = BoxContainer.ALIGNMENT_CENTER
+	cr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	crow.add_child(cr)
+	var sl := _lbl("STAGE", 20, UI.AMBER_PRIMARY, font_num)
+	sl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	cr.add_child(sl)
+	var sn := _lbl(str(nxt + 1), 84, UI.AMBER_PRIMARY, font_num)
+	sn.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	cr.add_child(sn)
 	if OS.has_feature("web"):
-		var ib := _btn("원래 몰랑탑 기록 불러오기", BTN, SOFT, 20)
+		var ib := _btn("원래 몰랑탑 기록 불러오기", BTN, SOFT, 18)
 		ib.pressed.connect(_import_web)
 		menu_grid_box.add_child(ib)
-	var prog := int(Save.d["prog"])
-	var grid: GridContainer = null
-	for i in core.stages.size():
-		if SECTIONS.has(i):
-			var s := _lbl(SECTIONS[i], 20, SOFT)
-			menu_grid_box.add_child(s)
-			grid = GridContainer.new()
-			grid.columns = 4
-			grid.add_theme_constant_override("h_separation", 10)
-			grid.add_theme_constant_override("v_separation", 10)
-			grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			menu_grid_box.add_child(grid)
-		var st: Dictionary = core.stages[i]
-		var done := i < prog
-		var jump := i >= 24 and (i + 1) % 5 == 0
-		var now := i == prog
-		var bg := CELL_DONE if done else (MILK if now else (CELL_JUMP if jump else BTN2))
-		var b := _btn("%d\n%s" % [i + 1, "완료" if done else core.goal_text(st)], bg, MILK, 20)
-		b.custom_minimum_size = Vector2(0, 120)
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		b.disabled = i > prog
-		var idx: int = i
-		b.pressed.connect(func(): start_stage(idx))
-		grid.add_child(b)
+	# 챕터: 10단계씩. 지금 챕터만 펼치고 나머지는 누르면 펼침. 새 판·장애물 안내가 있는 챕터는 그 이름을 붙임
+	var guides: Dictionary = Save.data.get("guides", {})
+	var stars: Dictionary = Save.d.get("stars", {})
+	var cur_ch := nxt / 10
+	var chapters := ceili(n_st / 10.0)   # 앞으로 열릴 챕터는 숨김(시안처럼 지금 챕터가 맨 위)
+	for chi in range(mini(cur_ch, chapters - 1), -1, -1):
+		var a := chi * 10
+		var b := mini(n_st, a + 10)
+		var names: Array = []
+		for i in range(a, b):
+			var g = core.stages[i].get("guide")
+			if g and guides.has(g) and str(guides[g].get("rib", "")).begins_with("새") and names.size() < 2:
+				names.append(str(guides[g].get("title", "")))
+		var done_n := 0
+		var star_n := 0
+		for i in range(a, b):
+			if i < prog:
+				done_n += 1
+			star_n += int(stars.get(str(i), 0))
+		var locked_ch := a > prog
+		var card_p := PanelContainer.new()
+		var ps := Sty.box("sb_card_result") if chi == cur_ch else Sty.box("sb_panel_night")
+		ps.shadow_size = 0
+		ps.content_margin_left = 28; ps.content_margin_right = 28
+		ps.content_margin_top = 22; ps.content_margin_bottom = 22
+		card_p.add_theme_stylebox_override("panel", ps)
+		menu_grid_box.add_child(card_p)
+		var cv := VBoxContainer.new()
+		cv.add_theme_constant_override("separation", 16)
+		card_p.add_child(cv)
+		var hrow := HBoxContainer.new()
+		cv.add_child(hrow)
+		var dot := Panel.new()
+		dot.custom_minimum_size = Vector2(18, 18)
+		dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		var ds := StyleBoxFlat.new()
+		ds.set_corner_radius_all(9)
+		if chi == cur_ch:
+			ds.bg_color = UI.AMBER_PRIMARY
+			ds.shadow_color = Color(UI.AMBER_PRIMARY.r, UI.AMBER_PRIMARY.g, UI.AMBER_PRIMARY.b, 0.5); ds.shadow_size = 8
+		elif done_n == b - a:
+			ds.bg_color = UI.MINT_PROGRESS
+		else:
+			ds.bg_color = Color(0, 0, 0, 0); ds.border_color = UI.NIGHT_LINE_STRONG; ds.set_border_width_all(2)
+		dot.add_theme_stylebox_override("panel", ds)
+		hrow.add_child(dot)
+		var title := "  %d–%d" % [a + 1, b] + ((" · " + "와 ".join(names)) if names.size() else (" · 기본" if chi == 0 else ""))
+		var tl := _lbl(title, 26, MILK if not locked_ch else SOFT, font_bold)
+		tl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tl.clip_text = true
+		hrow.add_child(tl)
+		hrow.add_child(_lbl("%d/%d  ★%d" % [done_n, b - a, star_n], 22, SOFT, font_num))
+		var grid := GridContainer.new()
+		grid.columns = 5
+		grid.add_theme_constant_override("h_separation", 14)
+		grid.add_theme_constant_override("v_separation", 14)
+		grid.visible = chi == cur_ch
+		cv.add_child(grid)
+		for i in range(a, b):
+			var st: Dictionary = core.stages[i]
+			var done := i < prog
+			var now := i == prog
+			var jump := i >= 24 and (i + 1) % 5 == 0
+			var bg := CELL_DONE if done else (MILK if now else (CELL_JUMP if jump else BTN2))
+			var cb := _btn(str(i + 1), bg, UI.MINT_PROGRESS if done else (MILK if not (i > prog) else SOFT), 28)
+			cb.add_theme_font_override("font", font_num)
+			cb.custom_minimum_size = Vector2(0, 96)
+			cb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			var idx: int = i
+			if i > prog:
+				# 잠긴 칸: 작아지지 않고 좌우로 흔들림 + 「○단계에 열려요」 (인터랙션 제안서 E)
+				var lk := cb.get_theme_stylebox("disabled")
+				for stn in ["normal", "hover", "focus", "pressed"]:
+					cb.add_theme_stylebox_override(stn, lk)
+				for sig in [cb.button_down, cb.button_up]:
+					for c in sig.get_connections():
+						sig.disconnect(c["callable"])
+				cb.scale = Vector2.ONE
+				cb.pressed.connect(func():
+					Fx.shake(cb)
+					_toast("%d단계를 깨면 열려요" % idx))
+			else:
+				for sig in [cb.button_down, cb.button_up]:
+					for c in sig.get_connections():
+						sig.disconnect(c["callable"])
+				Fx.attach(cb, Fx.ICON)
+				cb.pressed.connect(func(): start_stage(idx))
+			grid.add_child(cb)
+		if chi == cur_ch:
+			# 다음 아이템 안내 (시안: 「다음 아이템 · 기울이기 56단계」)
+			for k in ["shake", "undo", "hammer", "tilt", "x2"]:
+				var at := int(core.item_at.get(k, 999))
+				if at > nxt + 1:
+					var nrow := HBoxContainer.new()
+					cv.add_child(nrow)
+					var nl := _lbl("다음 아이템 · " + ITEM_NAMES[k], 20, SOFT)
+					nl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+					nrow.add_child(nl)
+					nrow.add_child(_lbl("%d단계" % at, 20, MILK, font_num))
+					break
+		else:
+			# 접힌 챕터: 누르면 펼침
+			var tog := Button.new()
+			tog.flat = true
+			tog.focus_mode = Control.FOCUS_NONE
+			tog.set_anchors_preset(Control.PRESET_FULL_RECT)
+			tog.mouse_filter = Control.MOUSE_FILTER_PASS
+			card_p.add_child(tog)
+			tog.pressed.connect(func():
+				grid.visible = not grid.visible
+				tog.visible = false)
 	card.visible = false
 	guide.visible = false
 	hint_lbl.visible = false

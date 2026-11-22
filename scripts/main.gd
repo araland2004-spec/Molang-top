@@ -957,7 +957,12 @@ func _process(delta: float) -> void:
 	hud_t -= delta
 	if hud_t <= 0 and jelly_btn:
 		hud_t = 1.0
-		jelly_btn.text = "● %s" % _comma(int(Save.d.get("jelly", 0)))
+		var jn := int(Save.d.get("jelly", 0))
+		if Save.jelly_seen >= 0 and jn > Save.jelly_seen:
+			_jelly_gain(Save.jelly_seen, jn)
+		else:
+			jelly_btn.text = "● %s" % _comma(jn)
+		Save.jelly_seen = jn
 		var ps := float(Save.d.get("play_sec", 0.0))
 		var left := 30 - int(ps / 60.0) % 30
 		var rdy: int = Save.orn_ready()
@@ -1211,6 +1216,21 @@ func _label(text: String, size: int, col: Color, outline := true) -> Label:
 		l.add_theme_constant_override("shadow_offset_x", 2)
 		l.add_theme_constant_override("shadow_offset_y", 2)
 	return l
+
+
+## 젤리 받기 (인터랙션 제안서 C): 칩이 톡 + 숫자가 0.6초 동안 올라감 + 「+N」이 떠오르며 사라짐
+
+
+func _jelly_gain(a: int, b: int) -> void:
+	Fx.pop(jelly_btn, 1.1)
+	jelly_btn.create_tween().tween_method(func(v: float): jelly_btn.text = "● %s" % _comma(int(v)), float(a), float(b), 0.6).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	var f := _label("+%s" % _comma(b - a), 30, C_JELLY)
+	ui_root.add_child(f)
+	f.position = jelly_btn.global_position + Vector2(60, 70)
+	var tw := f.create_tween().set_parallel(true)
+	tw.tween_property(f, "position:y", f.position.y - 70, 0.9).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(f, "modulate:a", 0.0, 0.9).set_delay(0.3)
+	tw.chain().tween_callback(f.queue_free)
 
 
 func _toast(text: String) -> void:
@@ -1497,6 +1517,10 @@ func _build_hud() -> void:
 		b.add_theme_constant_override("icon_max_width", 48)
 		b.custom_minimum_size = Vector2(0, 132)
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		for sig in [b.button_down, b.button_up]:
+			for c in sig.get_connections():
+				sig.disconnect(c["callable"])
+		Fx.attach(b, Fx.ICON)
 		match dk[0]:
 			"도감": b.pressed.connect(func(): extra.open_book("in" if extra.inside else "out"))
 			"상점": b.pressed.connect(_open_shop)

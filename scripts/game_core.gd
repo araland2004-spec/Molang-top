@@ -197,6 +197,7 @@ class Blob:
 	var sleep := false
 	var warp_cd := 0.0
 	var warp_n := 0
+	var pop_t := 0.0     # 새로 합쳐진 젤리의 「퐁」(그림만 1→1.18→1)
 	var rx := PackedFloat64Array()
 	var ry := PackedFloat64Array()
 	var x := PackedFloat64Array()
@@ -1099,6 +1100,11 @@ func resolve_merges() -> void:
 			held_shot = 0; held_combo = 0
 		var nb := make_blob(nt, X, Y, (va.x + vb.x) / 2, (va.y + vb.y) / 2, 0.94)
 		blend_shape(nb, a, b)
+		nb.pop_t = 0.28
+		for k in 8:     # 같은 색 조각 8개 (인터랙션 제안서 I)
+			var ang := k * TAU / 8.0 + randf() * 0.4
+			var sp := 90.0 + randf() * 120.0
+			particles.append([X + cos(ang) * nb.r * 0.6, Y + sin(ang) * nb.r * 0.6, cos(ang) * sp, sin(ang) * sp - 60, 2 + randf() * 2.5, 0.45, tier_color(nt)])
 		nb.age = 2
 		if shot_id:
 			nb.shot = shot_id
@@ -1647,6 +1653,9 @@ func sim_step(dt: float) -> void:
 		for i in SUB:
 			substep(H_STEP)
 	clock += dt
+	for b: Blob in blobs:
+		if b.pop_t > 0:
+			b.pop_t = maxf(0.0, b.pop_t - dt)
 	if combo_t > 0:
 		combo_t -= dt
 	if not over:
@@ -1657,6 +1666,7 @@ func sim_step(dt: float) -> void:
 				if streak >= 2:
 					float_text(W / 2, 110, "연속 끊김", false)
 				streak = 0
+				info_changed.emit()
 	if shake_t > 0 and not over:
 		shake_t -= dt; shake_ph -= dt
 		if shake_ph <= 0:
@@ -1732,6 +1742,12 @@ func blob_points(b: Blob) -> PackedVector2Array:
 		pts[k] = a; k += 1
 		pts[k] = a * 0.25 + c * 0.5 + e * 0.25; k += 1
 		pts[k] = a.lerp(c, 0.75).lerp(c.lerp(e, 0.75), 0.75); k += 1
+	if b.pop_t > 0:
+		var q := 1.0 - b.pop_t / 0.28
+		var kk := 1.0 + 0.18 * sin(q * PI) if q < 0.6 else 1.0 + 0.18 * sin(0.6 * PI) * (1.0 - (q - 0.6) / 0.4)
+		var cc := Vector2(b.cx, b.cy)
+		for i in pts.size():
+			pts[i] = cc + (pts[i] - cc) * kk
 	return pts
 
 
