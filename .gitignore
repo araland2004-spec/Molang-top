@@ -8,3 +8,7 @@ export_credentials.cfg
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 테스트용
+/_*.gd
+/_*.gd.uid

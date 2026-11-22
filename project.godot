@@ -13,6 +13,10 @@ config/features=PackedStringArray("4.7", "Mobile")
 boot_splash/bg_color=Color(0.98, 0.95, 0.92, 1)
 boot_splash/show_image=false
 
+[autoload]
+
+Save="*res://scripts/save.gd"
+
 [display]
 
 window/size/viewport_width=720

@@ -101,6 +101,9 @@ var toast_t := 0.0
 
 
 func _ready() -> void:
+	if OS.has_feature("web") and str(JavaScriptBridge.eval("location.hash")) == "#bench":
+		_go_game.call_deferred("endless")
+		return
 	_load_data()
 	_load_blocks()
 	_build_world()
@@ -788,8 +791,19 @@ func _toast(text: String) -> void:
 	toast_t = 2.2
 
 
-func _stages_cleared() -> int:
-	return 0
+func _comma(n: int) -> String:
+	var s := str(n)
+	var out := ""
+	for i in s.length():
+		if i > 0 and (s.length() - i) % 3 == 0:
+			out += ","
+		out += s[i]
+	return out
+
+
+func _go_game(m: String) -> void:
+	Save.next_mode = m
+	get_tree().change_scene_to_file("res://scenes/game.tscn")
 
 
 func _build_hud() -> void:
@@ -855,11 +869,11 @@ func _build_hud() -> void:
 	jbar.add_theme_constant_override("separation", 0)
 	jbar.alignment = BoxContainer.ALIGNMENT_END
 	tr.add_child(jbar)
-	var jchip := _px_btn("● 0", C_CREAM, 30)
+	var jchip := _px_btn("● %s" % str(Save.d.get("jelly", 0)), C_CREAM, 30)
 	jchip.add_theme_color_override("font_color", C_INK)
 	jchip.custom_minimum_size = Vector2(176, 60)
 	jchip.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	jchip.pressed.connect(func(): _toast("젤리는 숫자 게임에서 모아요"))
+	jchip.pressed.connect(func(): _toast("젤리는 스테이지와 무한 모드에서 모아요"))
 	jbar.add_child(jchip)
 	var plus := _px_btn("+", C_YELLOW, 32)
 	plus.custom_minimum_size = Vector2(60, 60)
@@ -901,18 +915,20 @@ func _build_hud() -> void:
 	# 오른쪽 아래: 무한 모드 · 스테이지
 	var br := VBoxContainer.new()
 	br.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	br.position = Vector2(-330, -250)
+	br.position = Vector2(-360, -250)
 	br.add_theme_constant_override("separation", 18)
 	ui_root.add_child(br)
-	var endless := _px_btn("무한 모드\n던지기 300 · 최고 0", C_CREAM, 28)
-	endless.custom_minimum_size = Vector2(300, 100)
+	var prog := int(Save.d.get("prog", 0))
+	var et := roundi(550 + (prog - 20) * 450.0 / 80.0) if prog >= 20 else 300
+	var endless := _px_btn("무한 모드\n던지기 %d · 최고 %s · 보상 %d/%d" % [et, _comma(int(Save.d.get("best", 0))), Save.endless_paid_left(), Save.ENDLESS_PAID], C_CREAM, 24)
+	endless.custom_minimum_size = Vector2(330, 100)
 	endless.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	endless.pressed.connect(func(): _toast("숫자 게임 판은 다음 단계에서 옮겨요"))
+	endless.pressed.connect(func(): _go_game("endless"))
 	br.add_child(endless)
-	var stage := _px_btn("스테이지\n%d / 200 클리어" % _stages_cleared(), C_YELLOW, 28)
+	var stage := _px_btn("스테이지\n%d / 200 클리어" % prog, C_YELLOW, 28)
 	stage.custom_minimum_size = Vector2(300, 100)
 	stage.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	stage.pressed.connect(func(): _toast("숫자 게임 판은 다음 단계에서 옮겨요"))
+	stage.pressed.connect(func(): _go_game("menu"))
 	br.add_child(stage)
 
 	# 앉아 있을 때: 일어나기
