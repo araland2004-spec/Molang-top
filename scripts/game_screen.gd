@@ -166,7 +166,9 @@ func _build_ui() -> void:
 		mute_btn.text = "소리 끔" if synth.muted else "소리")
 	bb.add_child(mute_btn)
 	var mb := _btn("목록", BTN, MILK, 22)
-	mb.pressed.connect(show_menu)
+	mb.pressed.connect(func():
+		persist()
+		show_menu())
 	bb.add_child(mb)
 	restart_btn = _btn("새 판", BTN, MILK, 22)
 	restart_btn.pressed.connect(_on_restart)
@@ -332,10 +334,15 @@ func _apply_daily() -> void:
 	core.daily_left = dl
 
 
-func start_endless() -> void:
+func start_endless(resume := true) -> void:
 	core.mode = "endless"
 	_apply_daily()
-	core.new_game()
+	var run: Dictionary = Save.d.get("run", {})
+	if resume and run.get("blobs", []).size() > 0 and not run.get("over", false) and int(run.get("throws_left", 0)) > 0:
+		core.restore(run)
+		_toast("하던 무한 모드를 이어서 해요")
+	else:
+		core.new_game()
 	restart_btn.text = "새 판"
 	_close_overlays()
 	hint_lbl.visible = not bool(Save.d["seen_hint"])
@@ -385,10 +392,22 @@ func _restart_same() -> void:
 	if core.mode == "stage":
 		start_stage(core.stage_idx)
 	else:
-		start_endless()
+		start_endless(false)
+
+
+func persist() -> void:
+	if core and core.mode != "stage":
+		Save.d["run"] = core.snapshot()
+		Save.save()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_APPLICATION_PAUSED:
+		persist()
 
 
 func go_home() -> void:
+	persist()
 	get_tree().change_scene_to_file("res://scenes/main.tscn")
 
 
@@ -499,8 +518,28 @@ func _board_input(e: InputEvent) -> void:
 
 # ───────────────────────── 매 프레임 ─────────────────────────
 
+## 폰 기울기(좌우, 도 단위): 웹은 deviceorientation, 앱은 중력 센서
+var tilt_js := false
+
+
+func _read_tilt() -> void:
+	if OS.has_feature("web"):
+		if not tilt_js:
+			tilt_js = true
+			JavaScriptBridge.eval("""(function(){try{var f=function(){window.addEventListener('deviceorientation',function(e){if(e.gamma!=null)window.__tilt=e.gamma;});};
+				if(window.DeviceOrientationEvent&&DeviceOrientationEvent.requestPermission){DeviceOrientationEvent.requestPermission().then(function(r){if(r=='granted')f();}).catch(function(){});}else f();}catch(e){}})()""")
+		var v = JavaScriptBridge.eval("window.__tilt||0")
+		core.tilt_deg = clampf(float(v), -50, 50)
+	else:
+		var g := Input.get_gravity()
+		if g.length() > 1.0:
+			core.tilt_deg = clampf(rad_to_deg(atan2(-g.x, -g.y if absf(g.y) > absf(g.z) else -g.z)), -50, 50)
+
+
 func _process(delta: float) -> void:
 	var dt := minf(0.05, delta)
+	if core.tilt_t > 0:
+		_read_tilt()
 	if not card.visible and not menu.visible and not guide.visible:
 		acc += dt
 		var steps := 0
@@ -533,6 +572,8 @@ func _process(delta: float) -> void:
 
 func _on_finished(kind: String, reason: String) -> void:
 	dragging = false
+	if core.mode != "stage":
+		Save.d["run"] = {}
 	if kind == "clear":
 		_stage_clear()
 	else:

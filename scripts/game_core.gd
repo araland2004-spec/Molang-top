@@ -1447,6 +1447,40 @@ func new_game() -> void:
 	items_changed.emit()
 
 
+## 무한 모드 이어 하기(웹과 같게): 대기줄과 판 위 숫자, 점수, 남은 던지기를 저장해요.
+func snapshot() -> Dictionary:
+	var bl: Array = []
+	var qu: Array = []
+	for b: Blob in blobs:
+		if b.row:
+			continue
+		bl.append({"t": b.t, "x": roundi(b.cx), "y": roundi(b.cy)})
+	for q: Blob in queue:
+		qu.append(q.t)
+	return {"score": score, "max_tier": max_tier, "throws_left": throws_left, "over": over, "blobs": bl, "queue": qu}
+
+
+func restore(d: Dictionary) -> void:
+	new_game()
+	score = int(d.get("score", 0))
+	max_tier = int(d.get("max_tier", 0))
+	throws_left = int(d.get("throws_left", endless_throws()))
+	for s in d.get("blobs", []):
+		var t := int(s["t"])
+		var r: float = tiers_r[t]
+		var b := make_blob(t, clampf(float(s["x"]), r, W - r), minf(H - r, float(s["y"])), 0, 0, 1)
+		b.age = 2
+		blobs.append(b)
+	var i := 0
+	for t in d.get("queue", []):
+		var q := make_blob(int(t), 50 + i * 87, ROW_Y, 0, 0, 1)
+		q.row = true; q.age = 2; q.tx = q.cx
+		blobs.append(q); queue.append(q)
+		i += 1
+	score_changed.emit(score)
+	info_changed.emit()
+
+
 func end_game(reason := "") -> void:
 	over = true
 	sel = null; pull = 0

@@ -23,6 +23,8 @@ var ui: Control
 var sheet: Control
 var thumbs := {}
 var dev_taps := 0
+var floor_edit := ""        # 집 안 바닥 칠하기: 고른 블록 id ("" = 꺼짐)
+var floor_bar: Control
 
 
 func setup(m: Node3D, ui_root: Control) -> void:
@@ -103,6 +105,8 @@ func enter() -> void:
 func leave() -> void:
 	if not inside:
 		return
+	if floor_edit != "":
+		stop_floor_edit()
 	inside = false
 	if interior:
 		interior.visible = false
@@ -134,10 +138,11 @@ func _build_interior() -> void:
 	var t := 0.14
 	interior.add_child(Boxes.one(Vector3(-rx - t, -0.4, -rz - t), Vector3(rx + t, -0.01, rz + t), {"top": "wood", "side": "wood"}))
 	# 바닥 칸 (웹: 0.8 크기 격자, 집마다 칠한 블록)
-	var nx := maxi(2, roundi(rx * 2 / 0.8))
-	var nz := maxi(2, roundi(rz * 2 / 0.8))
-	var cx := rx * 2 / nx
-	var cz := rz * 2 / nz
+	var gr := _floor_grid()
+	var nx: int = gr[0]
+	var nz: int = gr[1]
+	var cx: float = gr[2]
+	var cz: float = gr[3]
 	var fl: Dictionary = H()["floors_in"]
 	var bl := {}
 	for b in M.get("BLOCKS_IN", []):
@@ -177,8 +182,8 @@ func _build_interior() -> void:
 	var light := OmniLight3D.new()
 	light.light_color = Color(1.0, 0.85, 0.65)
 	light.omni_range = maxf(rx, rz) * 2.2
-	light.light_energy = 0.9
-	light.position = Vector3(0, 1.4, 0)
+	light.light_energy = 0.25
+	light.position = Vector3(0, 2.4, 0)
 	interior.add_child(light)
 	# 책상 의자에 앉기
 	var seat := (load("res://scenes/seat.tscn") as PackedScene).instantiate() as Node3D
@@ -264,8 +269,84 @@ func _process(_dt: float) -> void:
 
 
 ## 화면 탭 (main 이 먼저 물어봄): 처리했으면 true
+func _floor_grid() -> Array:
+	var nx := maxi(2, roundi(room.x * 2 / 0.8))
+	var nz := maxi(2, roundi(room.y * 2 / 0.8))
+	return [nx, nz, room.x * 2 / nx, room.y * 2 / nz]
+
+
+## 집 안 바닥 꾸미기: 블록을 고르고 칸을 누르면 칠해져요
+func start_floor_edit() -> void:
+	_close_sheet()
+	floor_edit = "plank"
+	for c in main.hud_groups:
+		c.visible = false
+	floor_bar = PanelContainer.new()
+	floor_bar.add_theme_stylebox_override("panel", main._px_style(main.C_CREAM))
+	floor_bar.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	floor_bar.offset_top = -230
+	floor_bar.offset_bottom = -20
+	floor_bar.offset_left = 20
+	floor_bar.offset_right = -20
+	ui.add_child(floor_bar)
+	main.hud_blocks.append(floor_bar)
+	_paint_floor_bar()
+
+
+func _paint_floor_bar() -> void:
+	for c in floor_bar.get_children():
+		c.queue_free()
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 8)
+	floor_bar.add_child(v)
+	var nm := ""
+	for b in M.get("BLOCKS_IN", []):
+		if b["id"] == floor_edit:
+			nm = b["n"]
+	v.add_child(main._label("바닥 칸을 누르면 「%s」(으)로 칠해져요" % nm, 20, main.C_INK, false))
+	var g := GridContainer.new()
+	g.columns = 4
+	g.add_theme_constant_override("h_separation", 6)
+	g.add_theme_constant_override("v_separation", 6)
+	v.add_child(g)
+	for b in M.get("BLOCKS_IN", []):
+		var id: String = b["id"]
+		var bt: Button = main._px_btn(b["n"], main.C_YELLOW if id == floor_edit else main.C_CREAM, 18)
+		bt.custom_minimum_size.x = 150
+		bt.pressed.connect(func():
+			floor_edit = id
+			_paint_floor_bar())
+		g.add_child(bt)
+	var done: Button = main._px_btn("다 했어요", main.C_VIOLET, 20)
+	done.pressed.connect(stop_floor_edit)
+	v.add_child(done)
+
+
+func stop_floor_edit() -> void:
+	floor_edit = ""
+	if floor_bar:
+		main.hud_blocks.erase(floor_bar)
+		floor_bar.queue_free()
+		floor_bar = null
+	main.refresh_ui()
+
+
 func tap(pos: Vector2) -> bool:
 	var cam: Camera3D = main.cam
+	if inside and floor_edit != "":
+		var p = main._floor_point(pos)
+		if p != null:
+			var gr := _floor_grid()
+			var i := floori((p.x + room.x) / gr[2])
+			var j := floori((p.z + room.y) / gr[3])
+			if i >= 0 and j >= 0 and i < gr[0] and j < gr[1]:
+				var key := "%d,%d" % [i, j]
+				if H()["floors_in"].get(key, "plank") != floor_edit:
+					H()["floors_in"][key] = floor_edit
+					Save.save()
+					after_deco()
+					main.synth_tone(660, 880, 0.06, 0.15)
+		return true
 	if inside:
 		for target in [[tree_pos + Vector3(0, main.FLOOR_TOP + 0.6, 0), "tree"], [pile_pos + Vector3(0, main.FLOOR_TOP + 0.2, 0), "pile"]]:
 			var w: Vector3 = target[0]
@@ -355,7 +436,45 @@ func check_pets() -> void:
 			ask_name("햄스터의 이름을 지어 주세요", "햄찌", func(nm: String):
 				pets.append({"k": "ham", "name": nm, "since": Save.kst_day()})
 				Save.save()
-				spawn_pets()))
+				spawn_pets()
+				if int(h["lvl"]) >= 2:
+					check_pets()))
+		return
+	# 넓은 집: 햄스터가 한 마리 더(쌍둥이) → 강아지나 고양이
+	if int(h["lvl"]) >= 2 and pets.size() == 1 and pets[0]["k"] == "ham" and not h["events"].has("twin"):
+		h["events"].append("twin")
+		Save.save()
+		var first: String = pets[0]["name"]
+		notice("응? %s가 두 마리가 됐어요!" % first, "넓어진 집 구석에서 똑 닮은 햄스터가 한 마리 더 나왔어요. 언제부터 있었던 걸까요?", "이름 지어 주기", func():
+			ask_name("새 햄스터의 이름은?", "쫀떡", func(nm: String):
+				pets.append({"k": "ham", "name": nm, "since": Save.kst_day()})
+				Save.save()
+				spawn_pets()
+				check_pets()))
+		return
+	var has_other := false
+	for p in pets:
+		if p["k"] != "ham":
+			has_other = true
+	if int(h["lvl"]) >= 2 and pets.size() >= 1 and not has_other:
+		var v := _sheet("다른 친구도 데려올 수 있어요", 600)
+		v.add_child(_wrap("집이 넓어져서 한 마리 더 함께 살 수 있어요. 누구를 데려올까요?", 22))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		for kd in [["dog", "강아지", "흑당"], ["cat", "고양이", "보리"]]:
+			var b: Button = main._px_btn(kd[1], main.C_YELLOW, 24)
+			var k: String = kd[0]
+			var lab: String = kd[1]
+			var def: String = kd[2]
+			b.pressed.connect(func():
+				_close_sheet()
+				ask_name(lab + "의 이름을 지어 주세요", def, func(nm: String):
+					pets.append({"k": k, "name": nm, "since": Save.kst_day()})
+					Save.save()
+					spawn_pets()
+					main.toast("새 가족이 생겼어요!")))
+			row.add_child(b)
+		v.add_child(row)
 
 
 func pet_line() -> String:
@@ -487,7 +606,7 @@ func render_thumbs() -> void:
 
 func open_book(tab := "in") -> void:
 	await render_thumbs()
-	var v := _sheet("몰랑이의 집 꾸미기 도감 1권", 660)
+	var v := _sheet("몰랑이의 집 꾸미기 도감 %d권" % int(H()["no"]), 660)
 	var tabs := HBoxContainer.new()
 	tabs.add_theme_constant_override("separation", 8)
 	v.add_child(tabs)
@@ -541,10 +660,15 @@ func open_book(tab := "in") -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
 	v.add_child(row)
-	var ob: Button = main._px_btn("상자 열기 · %d" % BOX_PRICE, main.C_YELLOW, 22)
-	ob.disabled = int(Save.d["jelly"]) < BOX_PRICE
-	ob.pressed.connect(open_box)
-	row.add_child(ob)
+	if vol_done():
+		var mvb: Button = main._px_btn("새 집 짓기", main.C_YELLOW, 22)
+		mvb.pressed.connect(ask_move)
+		row.add_child(mvb)
+	else:
+		var ob: Button = main._px_btn("상자 열기 · %d" % BOX_PRICE, main.C_YELLOW, 22)
+		ob.disabled = int(Save.d["jelly"]) < BOX_PRICE
+		ob.pressed.connect(open_box)
+		row.add_child(ob)
 	var cb: Button = main._px_btn("닫기", main.C_CREAM, 22)
 	cb.pressed.connect(_close_sheet)
 	row.add_child(cb)
@@ -662,6 +786,40 @@ func open_box() -> void:
 func open_deco() -> void:
 	var zone := "in" if inside else "out"
 	var v := _sheet("집 안 꾸미기" if inside else "집 밖 꾸미기", 620)
+	if not inside:
+		v.add_child(_wrap("집의 지붕·벽을 골라 바꿀 수 있어요. 단계를 깰수록 고를 수 있는 모양이 늘어나요.", 20))
+		var look: Dictionary = H().get("house", {})
+		for key in main.PARTS:
+			var P: Dictionary = main.PARTS[key]
+			var prow := HBoxContainer.new()
+			prow.add_theme_constant_override("separation", 6)
+			var pl: Label = main._label(P["name"], 22, main.C_INK, false)
+			pl.custom_minimum_size.x = 60
+			prow.add_child(pl)
+			for i in (P["list"] as Array).size():
+				var opt: Array = P["list"][i]
+				var open: bool = int(Save.d["prog"]) >= int(opt[1])
+				var on: bool = int(look.get(key, 0)) == i
+				var pb: Button = main._px_btn(opt[0] if open else "%d단계" % int(opt[1]), main.C_YELLOW if on else main.C_CREAM, 17)
+				if opt[2] != "":
+					pb.add_theme_color_override("font_color", Color(opt[2]).darkened(0.35))
+				var k: String = key
+				var idx: int = i
+				var nm2: String = opt[0]
+				var need: int = int(opt[1])
+				pb.pressed.connect(func():
+					if not open:
+						main.toast("%d단계를 깨면 「%s」이 열려요" % [need, nm2])
+						return
+					var hs: Dictionary = H().get("house", {})
+					hs[k] = idx
+					H()["house"] = hs
+					Save.save()
+					main.apply_house_look()
+					open_deco())
+				prow.add_child(pb)
+			v.add_child(prow)
+		v.add_child(main._label("마당", 26, main.C_INK, false))
 	var any := false
 	for it in zone_items(zone):
 		var id: String = it["id"]
@@ -693,6 +851,57 @@ func after_deco() -> void:
 	if inside:
 		_build_interior()
 		main.set_walk_area(Vector2(-room.x + 0.3, -room.y + 0.3), Vector2(room.x - 0.3, room.y - 0.3), _blockers())
+	# 도감을 다 채우면 집마다 한 번 새 집 짓기를 권해요
+	if vol_done() and int(H().get("asked_vol", 0)) != int(H()["no"]):
+		H()["asked_vol"] = int(H()["no"])
+		Save.save()
+		ask_move()
+
+
+## 도감(실내+실외 장식)을 다 모았는지
+func vol_done() -> bool:
+	for it in items:
+		if not owned(it["id"]):
+			return false
+	return true
+
+
+func ask_move() -> void:
+	var v := _sheet("도감 %d권을 다 채웠어요!" % int(H()["no"]), 600)
+	v.add_child(_wrap("새 집을 지을 수 있어요. 집이 더 넓어지고, 도감 %d권이 새로 시작돼요. 지금까지 모은 장식은 예전 집 기록으로 남아요." % (int(H()["no"]) + 1), 22))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	var lb: Button = main._px_btn("조금 더 있을래요", main.C_CREAM, 22)
+	lb.pressed.connect(func():
+		_close_sheet()
+		main.toast("도감에서 언제든 새 집을 지을 수 있어요"))
+	row.add_child(lb)
+	var gb: Button = main._px_btn("새 집 짓기", main.C_YELLOW, 22)
+	gb.pressed.connect(move_house)
+	row.add_child(gb)
+	v.add_child(row)
+
+
+## 새 집: 예전 집을 기록해 두고, 2단계(넓은) 집에서 도감을 새로 시작해요.
+func move_house() -> void:
+	_close_sheet()
+	var h := H()
+	var no := int(h["no"])
+	h["past"][str(no)] = {"own": h["own"], "put": h["put"], "orn": h["orn"], "lvl": h["lvl"]}
+	h["no"] = no + 1
+	h["lvl"] = 2
+	h["own"] = {}
+	h["put"] = {}
+	h["orn"] = 0
+	if not h["events"].has("grew"):
+		h["events"].append("grew")
+	Save.save()
+	if inside:
+		leave()
+	after_deco()
+	main.refresh_names()
+	spawn_pets()
+	notice("새 집을 지었어요!", "%d번째 집이에요. 조금 더 넓어요. 도감 %d권을 채우면 또 새 집을 지을 수 있어요." % [no + 1, no + 1], "좋아요", func(): check_pets())
 
 
 # ───────────────────────── 트리·오너먼트 닦기 ─────────────────────────
@@ -865,6 +1074,11 @@ func open_settings() -> void:
 		Save.save()
 		open_settings())
 	v.add_child(mb)
+	var bb: Button = main._px_btn("배경 음악 %s" % ("켜짐" if Bgm.is_on() else "꺼짐"), main.C_CREAM, 22)
+	bb.pressed.connect(func():
+		Bgm.toggle()
+		open_settings())
+	v.add_child(bb)
 	var ver: Button = main._px_btn("몰랑탑 베타 1.0 · 고닷 버전", main.C_CREAM, 18)
 	ver.flat = true
 	ver.pressed.connect(func():
@@ -911,6 +1125,45 @@ func open_dev() -> void:
 			after_deco()
 			main.toast("했어요: " + str(a[0])))
 		v.add_child(b)
+	var cb: Button = main._px_btn("닫기", main.C_CREAM, 22)
+	cb.pressed.connect(_close_sheet)
+	v.add_child(cb)
+
+
+## 음악 목록: 플레이 25분마다 새 곡이 열려요.
+func open_music() -> void:
+	var v := _sheet("음악", 600)
+	var open: int = Bgm.tracks_open()
+	v.add_child(_wrap("플레이 시간이 %d분 쌓일 때마다 새 곡이 열려요. 지금 %d/%d곡." % [Bgm.TRACK_MIN, open, Bgm.NAMES.size()], 21))
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 10)
+	var on_b: Button = main._px_btn("♪ 켜짐" if Bgm.is_on() else "♪ 꺼짐", main.C_YELLOW if Bgm.is_on() else main.C_CREAM, 22)
+	on_b.pressed.connect(func():
+		Bgm.toggle()
+		open_music())
+	top.add_child(on_b)
+	var sq_b: Button = main._px_btn("차례대로 듣기" if Bgm.seq() else "한 곡만 듣기", main.C_CREAM, 22)
+	sq_b.pressed.connect(func():
+		Bgm.set_seq(not Bgm.seq())
+		open_music())
+	top.add_child(sq_b)
+	v.add_child(top)
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 10)
+	grid.add_theme_constant_override("v_separation", 8)
+	for i in Bgm.NAMES.size():
+		var idx: int = i
+		var playing: bool = Bgm.is_on() and Bgm.cur == i
+		var label: String = ("▶ " if playing else "%d. " % (i + 1)) + Bgm.NAMES[i] if i < open else "%d분 더 플레이하면 열려요" % ceili((i * Bgm.TRACK_MIN * 60.0 - float(Save.d["play_sec"])) / 60.0)
+		var b: Button = main._px_btn(label, main.C_YELLOW if playing else main.C_CREAM, 20)
+		b.custom_minimum_size = Vector2(280, 56)
+		b.disabled = i >= open
+		b.pressed.connect(func():
+			Bgm.set_track(idx)
+			open_music())
+		grid.add_child(b)
+	v.add_child(grid)
 	var cb: Button = main._px_btn("닫기", main.C_CREAM, 22)
 	cb.pressed.connect(_close_sheet)
 	v.add_child(cb)

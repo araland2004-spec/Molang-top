@@ -116,6 +116,7 @@ var extra: HomeExtra
 var synth: Node
 var outside_nodes: Array = []
 var sky_layers: Array = []
+var town_label: Label
 var hud_groups: Array = []
 var walk_min := Vector2(X0 - 0.35, Z0 - 0.35)
 var walk_max := Vector2(X1 + 0.35, Z1 + 0.35)
@@ -133,6 +134,7 @@ var hud_t := 0.0
 
 
 func _ready() -> void:
+	Bgm.unlocked.connect(func(nm: String): _toast("새 음악이 열렸어요: " + nm))
 	if OS.has_feature("web") and str(JavaScriptBridge.eval("location.hash")) == "#bench":
 		_go_game.call_deferred("endless")
 		return
@@ -159,6 +161,19 @@ func _ready() -> void:
 	outside_nodes.append(extra.yard_root)
 	_update_camera()
 	_refresh_ui()
+	_greet.call_deferred()
+
+
+## 집에 들어올 때: 맨 처음엔 무한 모드로 안내, 그다음부턴 펫 이벤트 확인 (웹과 같게)
+func _greet() -> void:
+	await get_tree().create_timer(0.4).timeout
+	var h := Save.home()
+	if not h["events"].has("intro") and int(Save.d["prog"]) == 0 and int(Save.d["best"]) == 0:
+		h["events"].append("intro")
+		Save.save()
+		extra.notice("몰랑탑에 어서 와요!", "먼저 무한 모드에서 숫자 던지는 법을 배워 봐요. 처음엔 던지기 300번, 스테이지를 깰수록 던지기와 아이템이 늘어나요.", "무한 모드 해 보기", func(): _go_game("endless"))
+		return
+	extra.check_pets()
 
 
 # ───────────────────────── 데이터 ─────────────────────────
@@ -225,6 +240,48 @@ func _spawn(asset: String) -> Node3D:
 
 
 ## 도트가 뭉개지지 않게 최근접 필터
+## 집 모양 고르기(웹 PARTS와 같게): 단계를 깰수록 지붕·벽 색이 열려요. [이름, 필요 단계, 색(없으면 원래 색)]
+const PARTS := {
+	"roof": {"name": "지붕", "mats": ["roof_tiles", "roof_edge"], "list": [["빨간 기와", 0, ""], ["숲속 초록", 6, "#4f9a5a"], ["나무 너와", 14, "#9a6a43"], ["바다 파랑", 26, "#4a78c8"]]},
+	"wall": {"name": "벽", "mats": ["wall_front", "wall_back", "wall_side", "wall_plain", "gable"], "list": [["반목조", 0, ""], ["빨간 벽돌", 10, "#c9624e"], ["통나무", 18, "#a87a52"], ["민트 회벽", 30, "#8fd6c0"]]},
+}
+const TINT_SHADER := preload("res://shaders/tint.gdshader")
+
+
+func apply_house_look() -> void:
+	if cottage == null:
+		return
+	var look: Dictionary = Save.home().get("house", {})
+	_tint_walk(cottage, look)
+
+
+func _tint_walk(n: Node, look: Dictionary) -> void:
+	if n is MeshInstance3D and n.mesh:
+		var mi := n as MeshInstance3D
+		for s in mi.mesh.get_surface_count():
+			var m: Material = mi.mesh.surface_get_material(s)
+			if not (m is BaseMaterial3D):
+				continue
+			var hit := ""
+			for key in PARTS:
+				if (PARTS[key]["mats"] as Array).has(m.resource_name):
+					hit = key
+			if hit == "":
+				continue
+			var opt: Array = PARTS[hit]["list"][clampi(int(look.get(hit, 0)), 0, 3)]
+			if opt[2] == "":
+				mi.set_surface_override_material(s, null)
+			else:
+				var sm := ShaderMaterial.new()
+				sm.shader = TINT_SHADER
+				sm.set_shader_parameter("tex", (m as BaseMaterial3D).albedo_texture)
+				sm.set_shader_parameter("tint", Color(opt[2]))
+				sm.set_shader_parameter("amt", 0.85)
+				mi.set_surface_override_material(s, sm)
+	for c in n.get_children():
+		_tint_walk(c, look)
+
+
 func _pixel(n: Node) -> void:
 	if n is MeshInstance3D and n.mesh:
 		for s in n.mesh.get_surface_count():
@@ -427,6 +484,7 @@ func _build_cottage() -> void:
 		var n := cottage.find_child(nm, true, false)
 		if n is Node3D:
 			n.visible = false
+	apply_house_look()
 	_add_lights()
 	_add_lamps()
 	var ch := cottage.find_child("chimney_cap", true, false) as Node3D
@@ -516,10 +574,10 @@ func _add_lamps() -> void:
 func _update_mood() -> void:
 	if extra and extra.inside:
 		# 집 안: 따뜻한 실내 불빛
-		sun.light_energy = 0.45
-		sun.light_color = Color(1.0, 0.92, 0.8)
-		env.ambient_light_color = Color(1.0, 0.93, 0.85)
-		env.ambient_light_energy = 0.7
+		sun.light_energy = 0.2
+		sun.light_color = Color(1.0, 0.94, 0.84)
+		env.ambient_light_color = Color(1.0, 0.96, 0.92)
+		env.ambient_light_energy = 0.45
 		env.adjustment_brightness = 1.0
 		env.adjustment_saturation = 1.0
 		env.adjustment_contrast = 1.0
@@ -811,6 +869,8 @@ func synth_tone(f0: float, f1: float, dur: float, vol: float) -> void:
 func refresh_names() -> void:
 	if name_label:
 		name_label.text = str(Save.home().get("name", "몰랑이네"))
+	if town_label:
+		town_label.text = "크리스마스 마을 · 집 %d채" % int(Save.home()["no"])
 
 
 ## 집을 가로지르면 집 모서리를 돌아서 가는 길
@@ -890,7 +950,9 @@ func _process(delta: float) -> void:
 		jelly_btn.text = "● %s" % _comma(int(Save.d.get("jelly", 0)))
 		var ps := float(Save.d.get("play_sec", 0.0))
 		var left := 30 - int(ps / 60.0) % 30
-		play_label.text = "플레이 %d분\n다음 오너먼트까지 %d분" % [int(ps / 60.0), left]
+		var rdy: int = Save.orn_ready()
+		var hm := "%d시간 %d분" % [int(ps / 3600.0), int(ps / 60.0) % 60] if ps >= 3600 else "%d분" % int(ps / 60.0)
+		play_label.text = "플레이 %s\n" % hm + ("오너먼트 %d개 받을 수 있어요" % rdy if rdy > 0 else "다음 오너먼트까지 %d분" % left)
 	if toast_t > 0:
 		toast_t -= delta
 		toast_label.modulate.a = clampf(toast_t * 2.0, 0, 1)
@@ -1195,7 +1257,8 @@ func _build_hud() -> void:
 	ph.add_child(pv)
 	name_label = _label(str(Save.home().get("name", "몰랑이네")), 30, C_INK, false)
 	pv.add_child(name_label)
-	pv.add_child(_label("크리스마스 마을 · 집 1채", 19, C_SUB, false))
+	town_label = _label("크리스마스 마을 · 집 %d채" % int(Save.home()["no"]), 19, C_SUB, false)
+	pv.add_child(town_label)
 	pet_label = _label("", 22, Color.WHITE)
 	tl.add_child(pet_label)
 	play_label = _label("", 22, Color.WHITE)
@@ -1241,7 +1304,7 @@ func _build_hud() -> void:
 		elif t == "도감":
 			b.pressed.connect(func(): extra.open_book("in" if extra.inside else "out"))
 		else:
-			b.pressed.connect(func(): _toast(tt + "은 곧 옮겨 올게요"))
+			b.pressed.connect(func(): extra.open_music())
 		row.add_child(b)
 
 	# 가운데 안내
@@ -1266,7 +1329,11 @@ func _build_hud() -> void:
 	bl.add_child(deco)
 	deco_btn = deco
 	edit_btn = _px_btn("땅 편집", C_CREAM)
-	edit_btn.pressed.connect(func(): _set_edit(true))
+	edit_btn.pressed.connect(func():
+		if extra.inside:
+			extra.start_floor_edit()
+		else:
+			_set_edit(true))
 	bl.add_child(edit_btn)
 
 	# 오른쪽 아래: 무한 모드 · 스테이지
@@ -1417,14 +1484,14 @@ func _set_edit(on: bool) -> void:
 
 
 func _refresh_ui() -> void:
-	var busy := sitting != null or edit_mode
+	var busy := sitting != null or edit_mode or (extra != null and extra.floor_edit != "")
 	for c in hud_groups:
 		c.visible = not busy
 	var ins: bool = extra != null and extra.inside
 	if out_btn:
 		out_btn.visible = ins
 		deco_btn.text = "집 안 꾸미기" if ins else "집 밖 꾸미기"
-		edit_btn.visible = not ins
+		edit_btn.text = "바닥 꾸미기" if ins else "땅 편집"
 	if hint:
 		hint.text = ("트리를 누르면 닦아요 · 의자를 누르면 앉아요" if ins else "바닥을 누르면 걸어가요 · 집을 누르면 들어가요")
 	if pet_label and extra:

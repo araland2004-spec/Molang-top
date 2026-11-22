@@ -172,6 +172,8 @@ func home() -> Dictionary:
 	if not h.has("lvl"): h["lvl"] = 1
 	if not h.has("orn"): h["orn"] = 0
 	if not h.has("name"): h["name"] = "몰랑이네"
+	if not h.has("no"): h["no"] = 1
+	if not (h.get("past") is Dictionary): h["past"] = {}
 	return h
 
 
