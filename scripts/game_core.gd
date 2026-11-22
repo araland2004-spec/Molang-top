@@ -938,6 +938,23 @@ func warp_blobs(h: float) -> void:
 						else:
 							tx = pg[0]; ty = pg[1] - need
 				tx = clampf(tx, R, W - R); ty = clampf(ty, R, H - R)
+				# 나오는 자리에 다른 숫자가 있으면 그 숫자 속으로 순간이동해 겹쳐 보여요 → 위쪽 빈자리로 살짝 옮김
+				for step in 6:
+					var moved := false
+					for o: Blob in blobs:
+						if o == b or o.row or o.lane or o.dead:
+							continue
+						var lim2 := (R + o.r * o.s) * 0.8
+						var dv := Vector2(tx - o.cx, ty - o.cy)
+						if dv.length() < lim2:
+							var dir := dv.normalized() if dv.length() > 0.5 else Vector2(0, -1)
+							if dir.y > 0.3:
+								dir = Vector2(dir.x, -0.3).normalized()
+							var p2 := Vector2(o.cx, o.cy) + dir * lim2
+							tx = clampf(p2.x, R, W - R); ty = clampf(p2.y, SHELF_BOT + R, H - R)
+							moved = true
+					if not moved:
+						break
 				var ox := tx - b.cx
 				var oy := ty - b.cy
 				var x := b.x; var y := b.y; var px := b.px; var py := b.py
