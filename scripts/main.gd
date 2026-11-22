@@ -4,11 +4,13 @@ extends Node3D
 ## 땅 편집: 바닥 칸 탭 = 고른 블록으로 바꿈(톡 튀어올랐다가 바뀌어 내려앉음), ↺↻ = 회전
 ## 의자(scenes/seat.tscn): SitPoint = 앉는 자리, ViewCamera = 앉았을 때 카메라. main.tscn 의 Seats 아래에서 옮겨 맞추면 돼요.
 
-const BLOCK_DIR := "res://assets/blocks/"
+const NATURE_GLB := "res://assets/nature/Nature_Assets.glb"
+const NATURE_LIST := "res://data/nature_assets.json"
+const PROP_SCALE := 2.13   # 자연 에셋 블록(약 0.47)이 한 칸을 채우는 배율 — 장식도 같은 배율
 const COTTAGE := "res://assets/house/cottage.glb"
 const PLAYER_SCENE := "res://scenes/player.tscn"
 const DATA_PATH := "res://data/mollang_data.json"
-const SAVE_PATH := "user://home2.json"   # 바닥 섞기 버전부터 새로
+const SAVE_PATH := "user://home3.json"   # ground_test 자연 에셋 바닥부터 새로
 const FLOOR_TOP := 1.0
 const X0 := -7
 const X1 := 7
@@ -32,18 +34,25 @@ const C_YELLOW := Color("#ffd45c")
 const C_VIOLET := Color("#c9bfff")
 const C_SUB := Color("#6b6478")
 
-const BLOCK_NAMES := {
-	"Block_Grass_01": "잔디", "Block_Grass_02": "짙은 잔디", "Block_Dirt_Light_01": "흙",
-	"Block_Dirt_Stony_01": "자갈 흙", "Block_Soil_Dark_01": "어두운 흙", "Block_Sand_01": "모래",
-	"Block_Sand_02": "고운 모래", "Block_Stone_Light_01": "밝은 돌", "Block_Stone_Slate_01": "점판암",
-	"Block_StoneBrick_01": "돌벽돌", "Block_StoneBrick_02": "밝은 돌벽돌", "Block_StoneBrick_03": "어두운 돌벽돌",
-	"Block_StoneBrick_Moss_01": "이끼 돌벽돌", "Block_Brick_Red_01": "빨간 벽돌", "Block_Wood_Crate_01": "나무 상자",
-	"Block_Water_Base_01": "물", "Block_Water_Base_02": "맑은 물", "Block_Lava_Static_01": "용암",
+# 섞기 규칙의 바닥 종류 → ground_test 블록
+const FLOOR_OF := {
+	"grass": "Block_Grass_Green_Wavy_01", "grass2": "Block_Grass_Teal_Wavy_01", "grass3": "Block_Grass_Green_Layered_01",
+	"path": "Block_Dirt_Solid_01", "path_edge": "Block_Dirt_Gravel_01", "plaza": "Block_Dirt_Layered_01", "plaza2": "Block_Sand_Solid_01",
+	"water": "Block_Water_Ripple_01", "bank": "Block_Stone_Light_01", "bank2": "Block_Dirt_Gravel_02", "bank3": "Block_Water_Gravel_01",
+	"soil": "Block_Dirt_Layered_02", "gravel": "Block_Dirt_Gravel_01",
+}
+const KO := {
+	"Block": "", "Grass": "잔디", "Dirt": "흙", "Sand": "모래", "Stone": "돌", "StoneBrick": "돌벽돌", "Lava": "용암",
+	"Water": "물", "Snow": "눈", "Ice": "얼음", "Metal": "금속", "Ore": "광석", "Coal": "석탄", "Crystal": "수정",
+	"Crystals": "수정", "Gold": "금", "Silver": "은", "Lime": "연두", "Teal": "청록", "Green": "초록", "Cyan": "하늘",
+	"Blue": "파랑", "Red": "빨강", "Yellow": "노랑", "Light": "밝은", "Dark": "어두운", "Charcoal": "숯색",
+	"Layered": "층", "Wavy": "물결", "Solid": "", "Fractured": "갈라진", "Striped": "줄무늬", "Ripple": "잔물결",
+	"Speckled": "점박이", "Gravel": "자갈", "Vein": "광맥", "Nodules": "덩이", "MixedOre": "섞인 광석",
+	"SilverOre": "은광석", "RedOre": "빨간 광석", "CyanOre": "하늘 광석", "YellowOre": "노란 광석", "DarkOre": "어두운 광석",
 }
 
 var data := {}
 var block_files: PackedStringArray = []
-var block_scenes := {}
 var selected := 0
 var floor_map := {}        # Vector2i -> 블록 파일 이름
 var floor_nodes := {}
@@ -118,6 +127,7 @@ func _ready() -> void:
 	_build_world()
 	if not _load_floor():
 		_make_floor()
+	_place_nature_deco()
 	_build_cottage()
 	_make_player()
 	_make_hamster()
@@ -135,21 +145,59 @@ func _load_data() -> void:
 		data = parsed
 
 
+var lib: Node3D
+var roots := {}
+var info := {}
+
+
 func _load_blocks() -> void:
-	var names := {}
-	var dir := DirAccess.open(BLOCK_DIR)
-	if dir:
-		for f in dir.get_files():
-			var base := f.trim_suffix(".import").trim_suffix(".remap")
-			if base.get_extension().to_lower() == "glb":
-				names[base.get_basename()] = true
-	for n in BLOCK_NAMES:     # 웹 버전 블록 순서대로
-		if names.has(n):
-			var ps := load(BLOCK_DIR + n + ".glb") as PackedScene
-			if ps:
-				block_files.append(n)
-				block_scenes[n] = ps
-	selected = maxi(block_files.find("Block_Grass_01"), 0)
+	var ps := load(NATURE_GLB) as PackedScene
+	if ps == null:
+		return
+	lib = ps.instantiate() as Node3D
+	var list = JSON.parse_string(FileAccess.get_file_as_string(NATURE_LIST))
+	if list is Array:
+		for a in list:
+			info[a["n"]] = a
+	for cat in lib.get_children():
+		for r in cat.get_children():
+			if info.has(str(r.name)):
+				roots[str(r.name)] = r
+	var names := roots.keys()
+	names.sort()
+	for n in names:
+		if info[n]["k"] == "block" and str(n).begins_with("Block_"):
+			block_files.append(n)
+	selected = maxi(block_files.find(FLOOR_OF["grass"]), 0)
+
+
+func _bname(asset: String) -> String:
+	var words: PackedStringArray = []
+	var num := ""
+	for b in asset.split("_"):
+		if b.is_valid_int():
+			num = str(b.to_int())
+		elif KO.has(b):
+			if KO[b] != "":
+				words.append(KO[b])
+		else:
+			words.append(b)
+	var s := " ".join(words)
+	return s + (" " + num if num != "" and num != "1" else "")
+
+
+## 자연 에셋 하나를 통째로 복제 (메시·재질·아틀라스는 공유), 진열 위치는 버림
+func _spawn(asset: String) -> Node3D:
+	if not roots.has(asset):
+		return null
+	var n := (roots[asset] as Node3D).duplicate() as Node3D
+	n.position = Vector3.ZERO
+	var sc := PROP_SCALE
+	if info[asset]["k"] == "block":
+		var d: Array = info[asset]["d"]
+		sc = 1.0 / maxf((float(d[0]) + float(d[2])) * 0.5, 0.01)
+	n.scale = Vector3.ONE * sc
+	return n
 
 
 ## 도트가 뭉개지지 않게 최근접 필터
@@ -221,38 +269,36 @@ func _floor_pick(x: int, z: int, noise: FastNoiseLite, n2: FastNoiseLite) -> Str
 	var river_x := 5.5 + sin(z * 0.45) * 0.9
 	var dr := absf(x - river_x)
 	if dr < 0.6:
-		return "Block_Water_Base_01"
+		return FLOOR_OF["water"]
 	if dr < 1.3:
-		return "Block_StoneBrick_Moss_01" if w > 0.15 else ("Block_Stone_Light_01" if w > -0.2 else "Block_Dirt_Stony_01")
+		return FLOOR_OF["bank3"] if w > 0.15 else (FLOOR_OF["bank"] if w > -0.2 else FLOOR_OF["gravel"])
 	# 집 앞 마당 (둥근 흙 광장)
 	var plaza := Vector2(x - 0.2, (z - 3.0) * 1.15).length()
 	if plaza < 1.6:
-		return "Block_Dirt_Light_01" if w < 0.35 else "Block_Sand_02"
+		return FLOOR_OF["plaza"] if w < 0.35 else FLOOR_OF["plaza2"]
 	# 굽은 흙길: 마당에서 아래(앞)로
 	if z > 3:
 		var path_x := 0.4 + sin(z * 0.55) * 1.4
 		var dp := absf(x - path_x)
 		if dp < 0.55:
-			return "Block_Dirt_Light_01"
+			return FLOOR_OF["path"]
 		if dp < 1.1 and w > 0.0:
-			return "Block_Dirt_Stony_01"
+			return FLOOR_OF["path_edge"]
 	# 가장자리는 어둡게
 	var edge := mini(mini(x - X0, X1 - x), mini(z - Z0, Z1 - z))
 	if edge == 0 and v < 0.1:
-		return "Block_Soil_Dark_01"
+		return FLOOR_OF["soil"]
 	if v > 0.25:
-		return "Block_Grass_02"
+		return FLOOR_OF["grass2"]
+	if v < -0.2 and w < -0.1:
+		return FLOOR_OF["grass3"]
 	if v < -0.45 and w > 0.3:
-		return "Block_Dirt_Stony_01"
-	return "Block_Grass_01"
+		return FLOOR_OF["gravel"]
+	return FLOOR_OF["grass"]
 
 
 func _make_block(asset: String) -> Node3D:
-	if not block_scenes.has(asset):
-		return null
-	var n := (block_scenes[asset] as PackedScene).instantiate() as Node3D
-	_pixel(n)
-	return n
+	return _spawn(asset)
 
 
 ## 블록은 돌리지 않고 같은 방향으로만 놓아서 무늬가 이어지게
@@ -268,6 +314,53 @@ func _set_floor(c: Vector2i, asset: String, save := true) -> void:
 	floor_nodes[c] = n
 	if save:
 		_save_floor()
+
+
+## 숲 느낌: 가장자리를 나무로 둘러 액자처럼, 잔디엔 풀·꽃·버섯을 조금, 시냇가엔 바위
+func _place_nature_deco() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 11
+	var trees := ["Tree_Pine_DarkGreen_01", "Tree_Pine_Green_01", "Tree_Round_Green_01", "Tree_Branching_Green_01", "Tree_Pine_Teal_01", "Tree_Round_Lime_01"]
+	var small := ["Grass_Tuft_Green_01", "Grass_Tuft_DarkGreen_01", "Grass_Blade_Green_01", "Flower_Round_White_01", "Flower_Star_Teal_01",
+		"Mushroom_Red_WhiteSpots_01", "Mushroom_White_CyanRing_01", "Plant_Sprout_Green_01", "Plant_Bush_DarkGreen_01", "Plant_Bush_Green_01"]
+	var grass := [FLOOR_OF["grass"], FLOOR_OF["grass2"], FLOOR_OF["grass3"], FLOOR_OF["soil"]]
+	var keep_clear := [Vector2(-1.6, 2.3), Vector2(-1.1, 4.2), Vector2(1.8, 5.6), Vector2(-0.6, 7.3), Vector2(1.6, 2.2), Vector2(0.75, 1.75)]
+	for c in floor_map:
+		var cell: Vector2i = c
+		var p := Vector3(cell.x, FLOOR_TOP, cell.y)
+		if not grass.has(floor_map[cell]) or _in_house(p, 0.6):
+			continue
+		var near := false
+		for k in keep_clear:
+			if Vector2(p.x, p.z).distance_to(k) < 1.2:
+				near = true
+		if near:
+			continue
+		var edge := mini(mini(cell.x - X0, X1 - cell.x), mini(cell.y - Z0, Z1 - cell.y))
+		var name := ""
+		if edge == 0 and rng.randf() < 0.75 or edge == 1 and rng.randf() < 0.25:
+			name = trees[rng.randi() % trees.size()]
+		elif rng.randf() < 0.12:
+			name = small[rng.randi() % small.size()]
+		if name == "":
+			continue
+		var n := _spawn(name)
+		if n == null:
+			continue
+		n.position = p + Vector3(rng.randf_range(-0.25, 0.25), 0, rng.randf_range(-0.25, 0.25))
+		n.rotation.y = rng.randf() * TAU
+		if name.begins_with("Tree"):
+			n.scale *= rng.randf_range(0.85, 1.15)
+		land_root.add_child(n)
+	for c in floor_map:
+		var cell: Vector2i = c
+		if floor_map[cell] == FLOOR_OF["bank"] and rng.randf() < 0.35:
+			var r := _spawn(["Rock_Gray_01", "Rock_Slate_02", "Rock_DarkGreen_03", "Rock_WarmGray_01"][rng.randi() % 4])
+			if r:
+				r.position = Vector3(cell.x, FLOOR_TOP, cell.y)
+				r.rotation.y = rng.randf() * TAU
+				r.scale *= 0.6
+				land_root.add_child(r)
 
 
 ## 블록 바꾸기: 톡 튀어 올랐다가 꼭대기에서 바뀌고, 다시 내려와 살짝 눌리며 안착
@@ -570,7 +663,7 @@ func _load_floor() -> bool:
 	if not (parsed is Dictionary) or not parsed.has("floor_map"):
 		return false
 	for t in parsed["floor_map"]:
-		if block_scenes.has(str(t[2])):
+		if roots.has(str(t[2])):
 			_set_floor(Vector2i(int(t[0]), int(t[1])), str(t[2]), false)
 	return floor_map.size() > 0
 
@@ -1129,7 +1222,7 @@ func _build_hud() -> void:
 	pal.add_theme_constant_override("separation", 12)
 	scroll.add_child(pal)
 	for i in block_files.size():
-		var b := _px_btn(BLOCK_NAMES[block_files[i]], C_CREAM, 22)
+		var b := _px_btn(_bname(block_files[i]), C_CREAM, 20)
 		b.custom_minimum_size = Vector2(140, 80)
 		b.toggle_mode = true
 		var sel := _px_style(C_YELLOW)
@@ -1220,6 +1313,6 @@ func _refresh_ui() -> void:
 	edit_bar.visible = edit_mode and not sitting
 	stand_btn.visible = sitting != null
 	if block_files.size() > 0:
-		edit_info.text = "칸을 누르면 " + BLOCK_NAMES[block_files[selected]] + "(으)로 바뀌어요"
+		edit_info.text = "칸을 누르면 " + _bname(block_files[selected]) + "(으)로 바뀌어요"
 	for i in palette_buttons.size():
 		palette_buttons[i].button_pressed = (i == selected)
