@@ -169,7 +169,7 @@ func _ready() -> void:
 	_build_world()
 	if not _load_floor():
 		_make_floor()
-	_place_nature_deco()
+	# 맵 둘레 나무·풀·버섯 자동 배치는 끔 → 자연 장식은 상자 보상으로 모아서 직접 심어요 (home_extra NATURE)
 	_land_init()
 	_build_cottage()
 	_make_player()
@@ -374,9 +374,10 @@ func _make_floor() -> void:
 	var n2 := FastNoiseLite.new()
 	n2.seed = 21
 	n2.frequency = 0.35
+	# 처음엔 한 톤 잔디 바닥에 집만 덩그러니 — 길·물·풀무늬·나무는 꾸미기로 채워 가요 (_floor_pick 은 예전 무늬, 지금은 안 씀)
 	for x in range(X0, X1 + 1):
 		for z in range(Z0, Z1 + 1):
-			_set_floor(Vector2i(x, z), _floor_pick(x, z, noise, n2), false)
+			_set_floor(Vector2i(x, z), FLOOR_OF["grass"], false)
 	_save_floor()
 
 

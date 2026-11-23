@@ -47,6 +47,9 @@ func setup(m: Node3D, ui_root: Control) -> void:
 	Boxes.ensure()
 	M = Boxes.data
 	items = M.get("ITEMS", [])
+	for it in items:
+		if NATURE.has(it["id"]):
+			it["name"] = NATURE[it["id"]]["name"]
 	yard_root = Node3D.new()
 	main.add_child(yard_root)
 	rebuild_yard()
@@ -90,7 +93,24 @@ func rebuild_yard() -> void:
 			for nm in glb[id]:
 				var n := cot.find_child(nm, true, false)
 				if n is Node3D:
-					n.visible = is_put(id)
+					# 예전 도트 나무·전나무·바위·꽃덤불은 안 씀 → 자연 에셋 모델로 직접 심어요 (NATURE)
+					n.visible = is_put(id) and not NATURE.has(id)
+	# 심어 둔 자연 장식 (나무·버섯·바위): 칸마다 하나
+	var props: Dictionary = H()["props"]
+	for key in props:
+		var xz: PackedStringArray = str(key).split(",")
+		var n: Node3D = main._spawn(str(props[key]))
+		if n == null:
+			continue
+		var cx := int(xz[0]); var cz := int(xz[1])
+		var h := hash(key)
+		n.position = Vector3(cx + ((h % 7) - 3) * 0.04, main.FLOOR_TOP, cz + (((h / 7) % 7) - 3) * 0.04)
+		n.rotation.y = float(h % 360) / 360.0 * TAU
+		if str(props[key]).begins_with("Tree"):
+			n.scale *= 0.62      # 마당 나무는 집보다 작게 (맵 둘레용 크기 그대로면 집을 가림)
+		elif str(props[key]).begins_with("Rock"):
+			n.scale *= 0.4
+		yard_root.add_child(n)
 	# 상자 모델 장식 (우체통·벤치·가로등)
 	for id in ["mailbox", "bench", "streetlamp"]:
 		if is_put(id) and M["items"]["out"].has(id):
@@ -407,6 +427,9 @@ func stop_floor_edit() -> void:
 
 func tap(pos: Vector2) -> bool:
 	var cam: Camera3D = main.cam
+	if plant_asset != "" and not inside:
+		_plant_at(pos)
+		return true
 	if inside and floor_edit != "":
 		var p = main._floor_point(pos)
 		if p != null:
@@ -759,6 +782,149 @@ func _wrap(text: String, size := 20, col: Color = Mol.TEXT_SUB, width := 580) ->
 	return l
 
 
+# ───────────────────────── 자연 장식 (나무·버섯·바위) ─────────────────────────
+## 예전 도트 나무 대신 맵 둘레와 같은 자연 에셋 모델을 보상으로. 도감 칸은 그대로(동글 나무·뾰족 나무·버섯·바위).
+## 색: 처음 얻으면 기본색 1개, 상자에서 같은 장식이 또 나올 때마다(중복) 색이 하나씩 더 열려요.
+## 열린 색은 몇 개든 내 땅 칸에 자유롭게 심을 수 있어요 (칸마다 하나, 다시 누르면 뽑기).
+const NATURE := {
+	"tree": {"name": "동글 나무", "colors": [["Tree_Round_Green_01", "초록"], ["Tree_Round_Lime_01", "연두"], ["Tree_Round_Autumn_01", "가을"], ["Tree_Round_Red_01", "빨강"], ["Tree_Round_Snow_01", "눈꽃"]]},
+	"pine": {"name": "뾰족 나무", "colors": [["Tree_Pine_Green_01", "초록"], ["Tree_Pine_DarkGreen_01", "진초록"], ["Tree_Pine_Teal_01", "청록"], ["Tree_Pine_Lime_01", "연두"], ["Tree_Pine_YellowGreen_01", "노랑초록"], ["Tree_Pine_Snow_01", "눈꽃"]]},
+	"flowerbed": {"name": "버섯", "colors": [["Mushroom_Red_WhiteSpots_01", "빨간 점박이"], ["Mushroom_White_01", "하양"], ["Mushroom_Red_01", "빨강"], ["Mushroom_Teal_01", "청록"], ["Mushroom_Red_GoldRing_01", "금테 빨강"], ["Mushroom_White_CyanRing_01", "하늘테 하양"], ["Mushroom_Red_GreenRing_01", "초록테 빨강"], ["Mushroom_Blue_WhiteRing_01", "파랑"]]},
+	"rock": {"name": "바위", "colors": [["Rock_Boulder_Gray_01", "회색"], ["Rock_Boulder_Coral_01", "산호"], ["Rock_Slate_02", "청회색"], ["Rock_Sand_03", "모래"], ["Rock_DarkGreen_03", "이끼"]]},
+}
+var plant_asset := ""       # 심기 중인 모델 ("" = 꺼짐)
+var plant_bar: Control
+
+
+func nature_colors(id: String) -> int:
+	return int(H()["colors"].get(id, 0))
+
+
+func _unlock_colors(id: String, copies: int) -> void:
+	var n: int = (NATURE[id]["colors"] as Array).size()
+	H()["colors"][id] = maxi(nature_colors(id), mini(n, copies))
+
+
+## 처음 받은 자연 장식은 집 근처 빈 내 땅에 하나 심어 줌
+func _auto_plant(id: String) -> void:
+	var cells: Array = main.land_set.keys()
+	cells.shuffle()
+	for c in cells:
+		var cell: Vector2i = c
+		var key := "%d,%d" % [cell.x, cell.y]
+		if H()["props"].has(key) or main._in_house(Vector3(cell.x, main.FLOOR_TOP, cell.y), 0.6):
+			continue
+		H()["props"][key] = NATURE[id]["colors"][0][0]
+		H()["put"][id] = true
+		return
+
+
+func _nature_row(v: VBoxContainer, row: HBoxContainer, id: String) -> void:
+	var cols: Array = NATURE[id]["colors"]
+	var open := nature_colors(id)
+	if open <= 0 and owned(id):
+		_unlock_colors(id, int(H()["own"].get(id, 1)))
+		open = nature_colors(id)
+	row.add_child(main._label("색 %d/%d" % [open, cols.size()], 18, Mol.TEXT_SUB, false))
+	var chips := HFlowContainer.new()
+	chips.add_theme_constant_override("h_separation", 6)
+	chips.add_theme_constant_override("v_separation", 6)
+	v.add_child(chips)
+	for i in cols.size():
+		var ok := i < open
+		var cb: Button = main._px_btn(str(cols[i][1]) if ok else "잠김", main.C_YELLOW if (ok and i == 0) else main.C_CREAM, 17)
+		var asset: String = cols[i][0]
+		var need := i + 1 - int(H()["own"].get(id, 0))
+		cb.pressed.connect(func():
+			if not ok:
+				main.toast("상자에서 %s이(가) %d번 더 나오면 열려요" % [item_name(id), maxi(1, need)])
+				return
+			start_planting(asset, id))
+		chips.add_child(cb)
+
+
+func start_planting(asset: String, id: String) -> void:
+	_close_sheet()
+	plant_asset = asset
+	if plant_bar:
+		plant_bar.queue_free()
+	plant_bar = PanelContainer.new()
+	plant_bar.add_theme_stylebox_override("panel", main._px_style(main.C_CREAM))
+	plant_bar.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	plant_bar.offset_top = -250
+	plant_bar.offset_bottom = -20
+	plant_bar.offset_left = 20
+	plant_bar.offset_right = -20
+	ui.add_child(plant_bar)
+	main.hud_blocks.append(plant_bar)
+	for c in main.hud_groups:
+		c.visible = false
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 10)
+	plant_bar.add_child(v)
+	var cols: Array = NATURE[id]["colors"]
+	var cur := ""
+	for c in cols:
+		if c[0] == asset:
+			cur = c[1]
+	v.add_child(main._label("%s · %s 심기" % [item_name(id), cur], 26, main.C_INK, false))
+	v.add_child(_wrap("내 땅 칸을 누르면 심어요 · 심은 칸을 다시 누르면 뽑아요", 20))
+	var row := HFlowContainer.new()
+	row.add_theme_constant_override("h_separation", 6)
+	v.add_child(row)
+	for i in nature_colors(id):
+		var a: String = cols[i][0]
+		var b: Button = main._px_btn(str(cols[i][1]), main.C_YELLOW if a == asset else main.C_CREAM, 17)
+		b.pressed.connect(func(): start_planting(a, id))
+		row.add_child(b)
+	var done: Button = main._px_btn("다 했어요", main.C_VIOLET, 20)
+	done.pressed.connect(stop_planting)
+	v.add_child(done)
+
+
+func stop_planting() -> void:
+	plant_asset = ""
+	if plant_bar:
+		main.hud_blocks.erase(plant_bar)
+		plant_bar.queue_free()
+		plant_bar = null
+	for c in main.hud_groups:
+		c.visible = true
+	main.refresh_ui()
+
+
+func _plant_at(pos: Vector2) -> void:
+	var p = main._floor_point(pos)
+	if p == null:
+		return
+	var cell := Vector2i(roundi(p.x), roundi(p.z))
+	var key := "%d,%d" % [cell.x, cell.y]
+	var props: Dictionary = H()["props"]
+	if props.has(key):
+		props.erase(key)
+		main.synth_tone(520, 260, 0.08, 0.1)
+	elif not main.land_set.has(cell):
+		main.toast("내 땅에만 심을 수 있어요 · 「땅 편집」에서 넓혀요")
+		return
+	elif main._in_house(Vector3(cell.x, main.FLOOR_TOP, cell.y), 0.3):
+		main.toast("집 자리에는 못 심어요")
+		return
+	else:
+		props[key] = plant_asset
+		main.synth_tone(660, 990, 0.08, 0.1)
+		Save.buzz(8)
+	# 심어 둔 게 하나라도 있으면 그 장식은 「놓은 것」(편안함 계산)
+	for id in NATURE:
+		var any := false
+		for k in props:
+			for c in NATURE[id]["colors"]:
+				if c[0] == props[k]:
+					any = true
+		H()["put"][id] = any
+	Save.save()
+	rebuild_yard()
+
+
 # ───────────────────────── 펫 선물 ─────────────────────────
 ## 집 화면에 머무는 동안 20분마다 펫이 선물을 물고 와서 옆에 놓아요 (하루 3번). 눌러서 받기.
 ## 햄스터 = 젤리, 강아지 = 땅 칸, 고양이 = 무한 아이템. 함께한 날이 길수록 조금 더 좋아요.
@@ -1040,6 +1206,8 @@ func render_thumbs() -> void:
 	vp.add_child(envn)
 	for it in items:
 		var id: String = it["id"]
+		if NATURE.has(id):
+			continue      # 자연 장식은 아래에서 실제 모델로
 		var boxes: Array = M["items"]["in1"].get(id, M["items"]["out"].get(id, []))
 		if boxes.is_empty():
 			if id == "rock":
@@ -1059,6 +1227,9 @@ func render_thumbs() -> void:
 		thumbs[id] = ImageTexture.create_from_image(vp.get_texture().get_image())
 		mi.queue_free()
 	vp.queue_free()
+	for id in NATURE:
+		var a0: String = NATURE[id]["colors"][0][0]
+		thumbs[id] = await node_thumb("nat:" + a0, func(): return main._spawn(a0))
 
 
 # ───────────────────────── 도감·상자·꾸미기 ─────────────────────────
@@ -1183,6 +1354,13 @@ func open_box(n := 1) -> void:
 			var id: String = it["id"]
 			var c := int(H()["own"].get(id, 0)) + 1
 			H()["own"][id] = c
+			if NATURE.has(id):
+				var before := nature_colors(id)
+				_unlock_colors(id, c)
+				if c == 1:
+					_auto_plant(id)
+				elif nature_colors(id) > before:
+					main.toast("%s 새 색이 열렸어요: %s" % [item_name(id), NATURE[id]["colors"][nature_colors(id) - 1][1]])
 			if c == 1:
 				H()["put"][id] = true
 				nf += 1
@@ -1290,6 +1468,9 @@ func open_deco() -> void:
 		var nm: Label = main._label(it["name"], 22, main.C_INK, false)
 		nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(nm)
+		if NATURE.has(id):
+			_nature_row(v, row, id)
+			continue
 		var b: Button = main._px_btn("치우기" if is_put(id) else "놓기", main.C_CREAM if is_put(id) else main.C_YELLOW, 20)
 		b.pressed.connect(func():
 			H()["put"][id] = not is_put(id)

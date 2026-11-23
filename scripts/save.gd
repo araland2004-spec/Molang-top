@@ -225,6 +225,8 @@ func home() -> Dictionary:
 	if not h.has("trees"): h["trees"] = 0                # 완성한 트리 수
 	if not h.has("orn_total"): h["orn_total"] = int(h["orn"]) + 10 * int(h["trees"])   # 지금까지 단 오너먼트 (트리가 바뀌어도 이어짐)
 	if not h.has("keys"): h["keys"] = 0                  # 선물 상자 열쇠 (오너먼트 보상)
+	if not (h.get("props") is Dictionary): h["props"] = {}      # 심어 둔 자연 장식 "x,z" → 모델 이름
+	if not (h.get("colors") is Dictionary): h["colors"] = {}    # 자연 장식마다 열린 색 수
 	if not (h.get("orn_day") is Dictionary): h["orn_day"] = {"day": "", "n": 0}
 	if not (h.get("gift") is Dictionary): h["gift"] = {"day": "", "n": 0, "t": 0.0}
 	if not h.has("name"): h["name"] = "몰랑이네"
