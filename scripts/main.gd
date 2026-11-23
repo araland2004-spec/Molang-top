@@ -127,6 +127,8 @@ var sky_layers: Array = []
 var town_label: Label
 var hud_day := false
 var lofi_root: Control
+var hud_bot: Control      # 아래 묶음(이어하기·무한 모드·메뉴)
+var lofi_card: Control
 var lofi_song: Label
 var lofi_sub: Label
 var lofi_bar: Control
@@ -622,16 +624,18 @@ func _update_mood() -> void:
 		return
 	var s := _sky_now()
 	var night: float = s["night"]
-	sun.light_energy = lerpf(0.7, 0.12, night)
-	sun.light_color = Color(1.0, 0.97, 0.92).lerp(Color(0.45, 0.7, 0.85), night)
-	env.ambient_light_color = Color(0.9, 0.9, 1.0).lerp(Color(0.22, 0.42, 0.45), night)   # 밤: 짙은 청록
-	env.ambient_light_energy = lerpf(0.36, 0.42, night)
+	# 낮: 따뜻한 햇빛 + 청록 그늘(밤과 같은 색 계열), 채도는 낮추고 그림자를 진하게 → 민트색이 형광처럼 뜨지 않게
+	sun.light_energy = lerpf(0.95, 0.12, night)
+	sun.light_color = Color(1.0, 0.9, 0.76).lerp(Color(0.45, 0.7, 0.85), night)
+	sun.shadow_opacity = lerpf(0.7, 0.45, night)
+	env.ambient_light_color = Color(0.45, 0.62, 0.72).lerp(Color(0.22, 0.42, 0.45), night)   # 밤: 짙은 청록
+	env.ambient_light_energy = lerpf(0.26, 0.42, night)
 	env.adjustment_enabled = true
-	env.adjustment_brightness = lerpf(0.95, 0.85, night)
-	env.adjustment_saturation = lerpf(0.92, 0.72, night)
-	env.adjustment_contrast = lerpf(1.0, 1.08, night)
-	env.fog_light_color = (s["bot"] as Color).lerp(Color(0.06, 0.14, 0.16), 0.4 + 0.5 * night)
-	env.fog_density = lerpf(0.012, 0.035, night)
+	env.adjustment_brightness = lerpf(0.9, 0.85, night)
+	env.adjustment_saturation = lerpf(0.86, 0.72, night)
+	env.adjustment_contrast = lerpf(1.14, 1.08, night)
+	env.fog_light_color = (s["bot"] as Color).lerp(Color(0.06, 0.14, 0.16), 0.55 + 0.35 * night)
+	env.fog_density = lerpf(0.016, 0.035, night)
 	for l in lamps:
 		(l[0] as OmniLight3D).light_energy = lerpf(0.1, 1.1, night)
 		(l[1] as StandardMaterial3D).emission_energy_multiplier = lerpf(0.3, 2.2, night)
@@ -1450,6 +1454,7 @@ func _build_hud() -> void:
 	bot.add_theme_constant_override("separation", 16)
 	bot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui_root.add_child(bot)
+	hud_bot = bot
 	hud_groups.append(bot)
 	var prog := int(Save.d.get("prog", 0))
 	var cur := mini(prog, 199)
@@ -1603,6 +1608,40 @@ func _build_hud() -> void:
 	toast_label.position = Vector2(-260, 120)
 	toast_label.modulate.a = 0
 	ui_root.add_child(toast_label)
+	get_viewport().size_changed.connect(_layout_hud)
+	_layout_hud()
+
+
+## 넓은 화면(폴드 안쪽·가로 모드): 아래 묶음을 화면 폭 전체로 늘리지 않고 폰 폭 그대로 오른쪽 아래에 둬요
+const HUD_COL_W := 608.0
+
+
+func _layout_hud() -> void:
+	if hud_bot == null:
+		return
+	var vs := get_viewport().get_visible_rect().size
+	var wide := vs.x > HUD_COL_W + 112 + 260
+	if wide:
+		hud_bot.anchor_left = 1.0
+		hud_bot.offset_left = -56 - HUD_COL_W
+	else:
+		hud_bot.anchor_left = 0.0
+		hud_bot.offset_left = 56
+	hud_bot.anchor_right = 1.0
+	hud_bot.offset_right = -56
+	if lofi_card:
+		# 틀어 두기 카드는 가운데에 폰 폭만큼
+		var half := (HUD_COL_W + 112 - 192) / 2.0   # 세로 폰(720)에서와 같은 폭
+		if wide:
+			lofi_card.anchor_left = 0.5
+			lofi_card.anchor_right = 0.5
+			lofi_card.offset_left = -half
+			lofi_card.offset_right = half
+		else:
+			lofi_card.anchor_left = 0.0
+			lofi_card.anchor_right = 1.0
+			lofi_card.offset_left = 96
+			lofi_card.offset_right = -96
 
 
 func _num_text(t: int) -> String:
@@ -1681,6 +1720,7 @@ func _build_lofi() -> void:
 	card.offset_bottom = -110
 	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	lofi_root.add_child(card)
+	lofi_card = card
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 30)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE

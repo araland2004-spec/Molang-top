@@ -17,6 +17,7 @@ boot_splash/show_image=false
 
 Save="*res://scripts/save.gd"
 Bgm="*res://scripts/bgm.gd"
+UiScale="*res://scripts/ui_scale.gd"
 
 [display]
 
