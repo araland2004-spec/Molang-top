@@ -98,6 +98,7 @@ func enter() -> void:
 	main.pivot = main.player.position
 	main.zoom = 13.0
 	main.path.clear()
+	main.going_seat = null
 	_move_pets_inside(true)
 	main.refresh_ui()
 
@@ -116,6 +117,7 @@ func leave() -> void:
 	main.pivot = main.player.position
 	main.zoom = 15.0
 	main.path.clear()
+	main.going_seat = null
 	_move_pets_inside(false)
 	main.refresh_ui()
 

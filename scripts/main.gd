@@ -65,6 +65,7 @@ const LAND_NEW := 6
 const LAND_DUP := 2
 var floor_map := {}        # Vector2i -> 블록 파일 이름
 var floor_nodes := {}
+var floor_swapping := {}   # 바꾸는 중인 칸 (애니메이션이 끝날 때까지 다시 안 바꿈)
 var land_root: Node3D
 var cottage: Node3D
 var lights: Array[MeshInstance3D] = []
@@ -472,12 +473,14 @@ func _place_nature_deco() -> void:
 ## 블록 바꾸기: 톡 튀어 올랐다가 꼭대기에서 바뀌고, 다시 내려와 살짝 눌리며 안착
 func _swap_floor(c: Vector2i, asset: String) -> void:
 	var old: Node3D = floor_nodes.get(c)
-	if old == null:
+	if old == null or floor_swapping.has(c):
 		return
+	floor_swapping[c] = true
 	var base := Vector3(c.x, FLOOR_TOP - 1.0, c.y)
 	var tw := create_tween()
 	tw.tween_property(old, "position:y", base.y + 0.45, 0.13).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	tw.tween_callback(func():
+		floor_swapping.erase(c)
 		var n := _make_block(asset)
 		if n == null:
 			return
@@ -1122,6 +1125,10 @@ func _do_gesture() -> void:
 
 
 func _over_ui(pos: Vector2) -> bool:
+	# 창을 닫으면 그 안의 버튼은 지워지지만 목록에는 남아 있어서, 지워진 것은 먼저 걸러 냄
+	for i in range(hud_blocks.size() - 1, -1, -1):
+		if not is_instance_valid(hud_blocks[i]):
+			hud_blocks.remove_at(i)
 	# 창(시트·상점·상자)이 떠 있으면 뒤의 세상은 누를 수 없음
 	if (extra and extra.sheet != null and is_instance_valid(extra.sheet)) or shop_panel != null:
 		return true
