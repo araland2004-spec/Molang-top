@@ -17,7 +17,11 @@ const X1 := 7
 const Z0 := -6
 const Z1 := 8
 const HOUSE_S := 1.3                       # 웹 버전 꼬마집 크기
-const HOUSE_BOX := Rect2(-1.45, -1.35, 2.9, 2.75)   # 몰랑이·햄스터가 못 들어가는 집 자리 (x, z)
+const HOUSE_BOX0 := Rect2(-1.45, -1.35, 2.9, 2.75)   # 몰랑이·햄스터가 못 들어가는 집 자리 (x, z), 집이 (0,0) 칸일 때
+var HOUSE_BOX := HOUSE_BOX0                        # 지금 집 자리 (집을 옮기면 같이 옮겨짐)
+var house_cell := Vector2i.ZERO                     # 집 가운데 칸 (Save.home()["house_at"])
+var house_root: Node3D                              # 집 + 처마 전구 + 문 앞 등불을 한꺼번에 옮기는 뿌리
+var street_lamps: Array = []                        # [칸, [노드들]] — 내 땅이 아니면 숨김
 const HomeExtra := preload("res://scripts/home_extra.gd")
 const Synth := preload("res://scripts/synth.gd")
 const ZOOM_MIN := 5.0
@@ -213,6 +217,8 @@ func _greet() -> void:
 			Save.save()
 		if extra.run_onboarding():
 			return
+	if extra.resume_move_flow():
+		return      # 새 집 안내(땅 넓히기 → 집 놓기)를 하다 나갔으면 이어서
 	if not h["events"].has("tut1"):
 		# 이미 하던 사람도 안내가 새로 생겼으니 한 번만 보여 줌
 		h["events"].append("tut1")
@@ -591,10 +597,12 @@ func _build_cottage() -> void:
 	if ps == null:
 		return
 	cottage = ps.instantiate() as Node3D
+	house_root = Node3D.new()
+	add_child(house_root)
 	# 웹 버전처럼: 모델 (-.25, .25, -.25) 을 바닥 가운데로, 1.3배
 	cottage.scale = Vector3.ONE * HOUSE_S
 	cottage.position = Vector3(0.25 * HOUSE_S, FLOOR_TOP - 0.25 * HOUSE_S, 0.25 * HOUSE_S)
-	add_child(cottage)
+	house_root.add_child(cottage)
 	_pixel(cottage)
 	# 받침 섬·마당 장식(나무·울타리·바위·꽃)·연기 모델은 숨김 — 웹 버전 새 집과 같게
 	for nm in ["base", "tree_fr", "tree_bl", "tree_pine", "fence", "rock", "flower_f1", "flower_f2", "flower_l1", "flower_l2",
@@ -605,9 +613,11 @@ func _build_cottage() -> void:
 	apply_house_look()
 	_add_lights()
 	_add_lamps()
-	var ch := cottage.find_child("chimney_cap", true, false) as Node3D
-	if ch:
-		chimney_top = ch.global_position + Vector3(0, 0.1, 0)
+	var ha = Save.home().get("house_at")
+	if ha is Array and ha.size() == 2:
+		place_house(Vector2i(int(ha[0]), int(ha[1])), false)
+	else:
+		place_house(Vector2i.ZERO, false)
 	var sm := StandardMaterial3D.new()
 	sm.albedo_color = Color(0.97, 0.97, 1.0, 0.9)
 	sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -633,6 +643,8 @@ func _add_lamps() -> void:
 	for p in [Vector3(-1.1, 0, 4.2), Vector3(1.8, 0, 5.6), Vector3(-0.6, 0, 7.3), Vector3(1.6, 0, 2.2), Vector3(0.75, 0, 1.75)]:
 		var at: Vector3 = p + Vector3(0, FLOOR_TOP, 0)
 		var door: bool = p == Vector3(0.75, 0, 1.75)
+		var par: Node3D = house_root if door and house_root else self
+		var grp: Array = []
 		if not door:
 			var m := MeshInstance3D.new()
 			m.mesh = post
@@ -640,6 +652,7 @@ func _add_lamps() -> void:
 			add_child(m)
 			outside_nodes.append(m)
 			add_blob_shadow(m, 0.14, -0.24)
+			grp.append(m)
 		var lm := StandardMaterial3D.new()
 		lm.albedo_color = Color("#ffd9a0")
 		lm.emission_enabled = true
@@ -648,16 +661,19 @@ func _add_lamps() -> void:
 		h.mesh = head
 		h.material_override = lm
 		h.position = at + Vector3(0, 0.62 if not door else 0.9, 0)
-		add_child(h)
+		par.add_child(h)
 		outside_nodes.append(h)
 		var o := OmniLight3D.new()
 		o.light_color = Color(1.0, 0.72, 0.42)
 		o.omni_range = 2.6
 		o.omni_attenuation = 1.4
 		o.position = h.position
-		add_child(o)
+		par.add_child(o)
 		outside_nodes.append(o)
 		lamps.append([o, lm])
+		if not door:
+			grp.append_array([h, o])
+			street_lamps.append([Vector2i(roundi(p.x), roundi(p.z)), grp])
 	fireflies = CPUParticles3D.new()
 	fireflies.amount = 28
 	fireflies.lifetime = 6.0
@@ -776,7 +792,7 @@ func _add_lights() -> void:
 			var m := MeshInstance3D.new()
 			m.mesh = bm
 			m.position = Vector3(box.position.x + box.size.x * i / n, y, z)
-			add_child(m)
+			house_root.add_child(m)
 			lights.append(m)
 			outside_nodes.append(m)
 
@@ -816,7 +832,7 @@ func add_blob_shadow(n: Node3D, radius: float, y_off := 0.035) -> MeshInstance3D
 
 func _make_player() -> void:
 	player = (load(PLAYER_SCENE) as PackedScene).instantiate() as Node3D
-	player.position = Vector3(0.6, FLOOR_TOP, 2.6)
+	player.position = Vector3(0.6 + house_cell.x, FLOOR_TOP, 2.6 + house_cell.y)
 	add_child(player)
 	player_body = player.get_node_or_null("Body")
 	pivot = player.position
@@ -1034,7 +1050,74 @@ func set_walk_area(mn: Vector2, mx: Vector2, bl: Array) -> void:
 
 
 func reset_walk_area() -> void:
-	set_walk_area(Vector2(X0 - 0.35, Z0 - 0.35), Vector2(X1 + 0.35, Z1 + 0.35), [HOUSE_BOX])
+	# 내 땅을 감싸는 네모 안에서만 (내 땅이 아닌 칸은 안 보이니까 못 가게)
+	var mn := Vector2(1e9, 1e9)
+	var mx := Vector2(-1e9, -1e9)
+	for c in land_set:
+		mn = Vector2(minf(mn.x, c.x), minf(mn.y, c.y))
+		mx = Vector2(maxf(mx.x, c.x), maxf(mx.y, c.y))
+	if land_set.is_empty():
+		mn = Vector2(X0, Z0)
+		mx = Vector2(X1, Z1)
+	set_walk_area(mn - Vector2(0.4, 0.4), mx + Vector2(0.4, 0.4), [HOUSE_BOX])
+
+
+## 내 땅 아무 칸이나 (햄스터·펫이 돌아다닐 곳)
+func random_land_point() -> Vector3:
+	var ks: Array = land_set.keys()
+	if ks.is_empty():
+		return Vector3(randf_range(X0, X1), FLOOR_TOP, randf_range(Z0, Z1))
+	var c: Vector2i = ks[randi() % ks.size()]
+	return Vector3(c.x + randf_range(-0.4, 0.4), FLOOR_TOP, c.y + randf_range(-0.4, 0.4))
+
+
+## 집 옮기기: 집 가운데 칸을 c 로. 집이 덮는 칸(3×3)과 문 앞 칸까지 내 땅이어야 해요.
+func house_cells(c: Vector2i) -> Array:
+	var out: Array = []
+	for x in range(-1, 2):
+		for z in range(-1, 3):
+			out.append(c + Vector2i(x, z))
+	return out
+
+
+func place_house(c: Vector2i, anim := true) -> void:
+	house_cell = c
+	HOUSE_BOX = Rect2(HOUSE_BOX0.position + Vector2(c), HOUSE_BOX0.size)
+	if house_root:
+		var to := Vector3(c.x, 0, c.y)
+		if anim:
+			house_root.position = to + Vector3(0, 2.2, 0)
+			var tw := house_root.create_tween()
+			tw.tween_property(house_root, "position", to, 0.38).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+			tw.tween_property(house_root, "scale", Vector3(1.06, 0.9, 1.06), 0.07)
+			tw.tween_property(house_root, "scale", Vector3.ONE, 0.2).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		else:
+			house_root.position = to
+		var ch := cottage.find_child("chimney_cap", true, false) as Node3D
+		if ch:
+			# 떨어지는 중일 수 있으니 계산으로
+			chimney_top = house_root.global_transform.affine_inverse() * ch.global_position + to + Vector3(0, 0.1, 0)
+	if blockers.size() > 0 and not (extra and extra.inside):
+		blockers[0] = HOUSE_BOX
+	if player and _in_house(player.position, 0.2):
+		player.position = Vector3(c.x + 0.45, FLOOR_TOP, c.y + 2.4)
+		pivot = player.position
+		path = []
+
+
+## 내 땅이 아닌 칸은 월드에서 안 보이게. 땅 편집 중엔 넓힐 수 있는 바로 옆 칸만 살짝 보여요.
+func land_vis() -> void:
+	for c in floor_nodes:
+		var cell: Vector2i = c
+		var n: Node3D = floor_nodes[cell]
+		if is_instance_valid(n):
+			n.visible = land_set.has(cell) or (edit_mode and _claimable(cell))
+	for sl in street_lamps:
+		var on: bool = land_set.has(sl[0])
+		for n in sl[1]:
+			if is_instance_valid(n):
+				n.visible = on
+				n.set_meta("land_hidden", not on)
 
 
 func set_outside_visible(v: bool) -> void:
@@ -1046,6 +1129,8 @@ func set_outside_visible(v: bool) -> void:
 	env.background_mode = Environment.BG_CANVAS if v else Environment.BG_COLOR
 	env.background_color = Color("#2a2533")
 	_update_mood()
+	if v:
+		land_vis()
 	if fireflies and not v:
 		fireflies.emitting = false
 
@@ -1178,7 +1263,7 @@ func _process(delta: float) -> void:
 		ham_wait -= delta
 		if ham_wait <= 0:
 			ham_wait = randf_range(0.8, 3.0)
-			var t := Vector3(randf_range(X0, X1), FLOOR_TOP, randf_range(Z0, Z1))
+			var t := random_land_point()
 			ham_path = _route(ham.position, t)
 	if follow and not sitting and not cam_busy:
 		pivot = pivot.lerp(player.position, minf(1.0, delta * 4.0))
@@ -1354,7 +1439,11 @@ func _on_tap(pos: Vector2) -> void:
 				Save.save()
 				_swap_floor(c, want)
 				_land_marks()
+				land_vis()
+				reset_walk_area()
 				_refresh_ui()
+				if extra:
+					extra.on_land_claimed()
 			else:
 				_toast("땅이 모자라요 · 「블록 뽑기」로 새 블록을 얻으면 땅이 넓어져요")
 		else:
@@ -1372,6 +1461,8 @@ func _on_tap(pos: Vector2) -> void:
 	going_seat = null
 	var fp = _floor_point(pos)
 	if fp != null:
+		if not (extra and extra.inside) and not land_set.has(Vector2i(roundi(fp.x), roundi(fp.z))):
+			return      # 내 땅 밖(안 보이는 곳)은 못 가요
 		_walk_to(fp)
 		_tap_fx(fp)
 
@@ -2106,6 +2197,8 @@ func _land_init() -> void:
 	for c in h["land_own"]:
 		var parts: PackedStringArray = str(c).split(",")
 		land_set[Vector2i(int(parts[0]), int(parts[1]))] = true
+	reset_walk_area()
+	land_vis.call_deferred()
 
 
 func _claimable(c: Vector2i) -> bool:
@@ -2137,10 +2230,10 @@ func _land_marks() -> void:
 	pm2.size = Vector2(0.8, 0.8)
 	for c in floor_map:
 		var cell: Vector2i = c
-		if land_set.has(cell):
-			continue
+		if land_set.has(cell) or not _claimable(cell):
+			continue      # 그 밖의 남의 땅은 아예 안 보여요
 		var mi := MeshInstance3D.new()
-		var cl := _claimable(cell)
+		var cl := true
 		mi.mesh = pm2 if cl else pm
 		mi.material_override = mint if cl else dark
 		mi.position = Vector3(cell.x, FLOOR_TOP + 0.06, cell.y)
@@ -2293,6 +2386,9 @@ func _set_edit(on: bool) -> void:
 	if on:
 		_build_palette()
 	_land_marks.call_deferred()
+	land_vis()
+	if not on and extra:
+		extra.on_edit_closed()
 	if on:
 		follow = false
 	else:

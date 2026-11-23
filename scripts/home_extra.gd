@@ -99,14 +99,26 @@ func rebuild_yard() -> void:
 	var props: Dictionary = H()["props"]
 	for key in props:
 		var xz: PackedStringArray = str(key).split(",")
-		var n: Node3D = main._spawn(str(props[key]))
+		var n: Node3D = main._spawn(_prop_asset(props[key]))
 		if n == null:
 			continue
-		var cx := int(xz[0]); var cz := int(xz[1])
+		var asset := _prop_asset(props[key])
+		var cx := float(xz[0]); var cz := float(xz[1])
 		var h := hash(key)
-		n.position = Vector3(cx + ((h % 7) - 3) * 0.04, main.FLOOR_TOP, cz + (((h / 7) % 7) - 3) * 0.04)
-		n.rotation.y = float(h % 360) / 360.0 * TAU
-		_fit_prop(n, str(props[key]))
+		if props[key] is Array:
+			# 새 방식: 누른 자리 그대로 + 심을 때 정한 랜덤 회전
+			n.position = Vector3(cx, main.FLOOR_TOP, cz)
+			n.rotation.y = float(props[key][1])
+		else:
+			n.position = Vector3(cx + ((h % 7) - 3) * 0.04, main.FLOOR_TOP, cz + (((h / 7) % 7) - 3) * 0.04)
+			n.rotation.y = float(h % 360) / 360.0 * TAU
+		_fit_prop(n, asset)
+		if asset.begins_with("Rock"):
+			# 바위는 땅 위에 얹힌 것보다 땅에 박힌 느낌으로: 높이의 30% 정도 묻기
+			var d: Array = main.info.get(asset, {}).get("d", [])
+			var hgt := float(d[1]) * n.scale.y if d.size() >= 3 else 0.4
+			n.position.y -= hgt * 0.3
+			n.rotation.x = (float((h / 13) % 9) - 4.0) * 0.03     # 살짝 기울여서 자연스럽게
 		yard_root.add_child(n)
 	# 상자 모델 장식 (우체통·벤치·가로등)
 	for id in ["mailbox", "bench", "streetlamp"]:
@@ -143,7 +155,7 @@ func leave() -> void:
 		interior.visible = false
 	main.set_outside_visible(true)
 	main.reset_walk_area()
-	main.player.position = Vector3(0.4, main.FLOOR_TOP, 2.1)
+	main.player.position = Vector3(0.4 + main.house_cell.x, main.FLOOR_TOP, 2.1 + main.house_cell.y)
 	main.pivot = main.player.position
 	main.zoom = 15.0
 	main.path.clear()
@@ -477,6 +489,9 @@ func stop_floor_edit() -> void:
 
 func tap(pos: Vector2) -> bool:
 	var cam: Camera3D = main.cam
+	if house_placing and not inside:
+		_house_tap(pos)
+		return true
 	if plant_asset != "" and not inside:
 		_plant_at(pos)
 		return true
@@ -523,18 +538,23 @@ func tap(pos: Vector2) -> bool:
 			enter()
 		else:
 			main.going_seat = null
-			main._walk_to(DOOR)
+			main._walk_to(door())
 			main.toast("문 앞에서 집을 한 번 더 누르면 들어가요")
 		return true
 	return false
 
 
-const DOOR := Vector3(0.45, 0.0, 1.95)     # 문 앞 칸 (y 는 몰랑이 높이를 그대로 씀)
+const DOOR := Vector3(0.45, 0.0, 1.95)     # 문 앞 칸, 집이 (0,0) 칸일 때 (y 는 몰랑이 높이를 그대로 씀)
+
+
+func door() -> Vector3:
+	return DOOR + Vector3(main.house_cell.x, 0, main.house_cell.y)
 
 
 func near_door() -> bool:
 	var pp: Vector3 = main.player.position
-	return Vector2(pp.x - DOOR.x, pp.z - DOOR.z).length() < 1.25
+	var d := door()
+	return Vector2(pp.x - d.x, pp.z - d.z).length() < 1.25
 
 
 # ───────────────────────── 펫·요정 ─────────────────────────
@@ -613,7 +633,7 @@ func _step_pets(dt: float) -> void:
 					elif inside:
 						target = Vector3(randf_range(-room.x + 0.5, room.x - 0.5), n.position.y, randf_range(-room.y + 0.5, room.y - 0.5))
 					else:
-						target = Vector3(randf_range(main.X0, main.X1), n.position.y, randf_range(main.Z0 + 4, main.Z1))
+						target = main.random_land_point()
 					target.y = n.position.y
 					p[2] = main._route(n.position, target)
 			elif not fly and float(fx.get("hop", 0.0)) <= 0 and randf() < dt * 0.8:
@@ -896,7 +916,7 @@ func _auto_plant(id: String) -> void:
 		var key := "%d,%d" % [cell.x, cell.y]
 		if H()["props"].has(key) or main._in_house(Vector3(cell.x, main.FLOOR_TOP, cell.y), 0.6):
 			continue
-		H()["props"][key] = NATURE[id]["colors"][0][0]
+		H()["props"][key] = [NATURE[id]["colors"][0][0], randf() * TAU]
 		H()["put"][id] = true
 		return
 
@@ -928,7 +948,7 @@ func start_planting(asset: String, id: String) -> void:
 		stop_planting()
 		open_deco())
 	head.add_child(done)
-	v.add_child(Mol.lbl("내 땅 칸을 누르면 심어요 · 심은 칸을 다시 누르면 뽑아요", 18, Mol.TEXT_SUB, "r"))
+	v.add_child(Mol.lbl("내 땅 아무 곳이나 누르면 심어요 · 심은 걸 다시 누르면 뽑아요", 18, Mol.TEXT_SUB, "r"))
 	var sc := _hscroll(v, 132)
 	var row: HBoxContainer = sc.get_child(0)
 	for i in nature_colors(id):
@@ -950,24 +970,40 @@ func stop_planting() -> void:
 	main.refresh_ui()
 
 
+## 심어 둔 값: 예전엔 모델 이름(String), 지금은 [모델 이름, 회전]
+func _prop_asset(v) -> String:
+	return str(v[0]) if v is Array else str(v)
+
+
+## 칸에 묶지 않고 누른 자리(0.1 칸 단위)에 심어요. 이미 심은 것 가까이를 누르면 뽑아요.
+## 심을 때마다 방향이 랜덤 (바위는 특히 같은 모양이 반복돼 보이지 않게).
 func _plant_at(pos: Vector2) -> void:
 	var p = main._floor_point(pos)
 	if p == null:
 		return
-	var cell := Vector2i(roundi(p.x), roundi(p.z))
-	var key := "%d,%d" % [cell.x, cell.y]
 	var props: Dictionary = H()["props"]
-	if props.has(key):
-		props.erase(key)
+	var near_key := ""
+	var near_d := 0.32
+	for k in props:
+		var xz: PackedStringArray = str(k).split(",")
+		var d := Vector2(float(xz[0]) - p.x, float(xz[1]) - p.z).length()
+		if d < near_d:
+			near_d = d
+			near_key = k
+	var x := snappedf(p.x, 0.1)
+	var z := snappedf(p.z, 0.1)
+	var cell := Vector2i(roundi(x), roundi(z))
+	if near_key != "":
+		props.erase(near_key)
 		main.synth_tone(520, 260, 0.08, 0.1)
 	elif not main.land_set.has(cell):
 		main.toast("내 땅에만 심을 수 있어요 · 「땅 편집」에서 넓혀요")
 		return
-	elif main._in_house(Vector3(cell.x, main.FLOOR_TOP, cell.y), 0.3):
+	elif main._in_house(Vector3(x, main.FLOOR_TOP, z), 0.2):
 		main.toast("집 자리에는 못 심어요")
 		return
 	else:
-		props[key] = plant_asset
+		props["%.2f,%.2f" % [x, z]] = [plant_asset, randf() * TAU]
 		main.synth_tone(660, 990, 0.08, 0.1)
 		Save.buzz(8)
 	# 심어 둔 게 하나라도 있으면 그 장식은 「놓은 것」(편안함 계산)
@@ -975,7 +1011,7 @@ func _plant_at(pos: Vector2) -> void:
 		var any := false
 		for k in props:
 			for c in NATURE[id]["colors"]:
-				if c[0] == props[k]:
+				if c[0] == _prop_asset(props[k]):
 					any = true
 		H()["put"][id] = any
 	Save.save()
@@ -1607,6 +1643,13 @@ func open_deco() -> void:
 		else:
 			main.open_block_box())
 	er.add_child(bb)
+	if not inside:
+		var hb := Mol.btn("집 옮기기", "sec", 22)
+		hb.custom_minimum_size.y = 72
+		hb.pressed.connect(func():
+			_close_sheet()
+			start_house_place(false))
+		v.add_child(hb)
 	await main.get_tree().process_frame
 	if is_instance_valid(sc):
 		sc.scroll_horizontal = keep
@@ -1831,7 +1874,7 @@ func move_house() -> void:
 	after_deco()
 	main.refresh_names()
 	spawn_pets()
-	notice("새 집을 지었어요!", "%d번째 집이에요. 조금 더 넓어요. 도감 %d권을 채우면 또 새 집을 지을 수 있어요." % [no + 1, no + 1], "좋아요", func(): check_pets())
+	notice("새 집을 지었어요!", "%d번째 집이에요. 도감 %d권을 채우면 또 새 집을 지을 수 있어요." % [no + 1, no + 1], "좋아요", func(): start_move_flow())
 
 
 # ───────────────────────── 트리·오너먼트 닦기 ─────────────────────────
@@ -2705,14 +2748,231 @@ func _move_at(pos: Vector2) -> void:
 		var z := clampf(snappedf(p.z, 0.2), -room.y + 0.35, room.y - 0.35)
 		_set_pos(move_id, x, z, rot)
 	else:
-		var cell := Vector2i(roundi(p.x), roundi(p.z))
+		# 밖도 칸에 묶지 않고 누른 자리(0.25 칸 단위)에
+		var x := snappedf(p.x, 0.25)
+		var z := snappedf(p.z, 0.25)
+		var cell := Vector2i(roundi(x), roundi(z))
 		if not main.land_set.has(cell):
 			main.toast("내 땅에만 놓을 수 있어요 · 「땅 편집」에서 넓혀요")
 			return
-		if main._in_house(Vector3(cell.x, main.FLOOR_TOP, cell.y), 0.3):
+		if main._in_house(Vector3(x, main.FLOOR_TOP, z), 0.3):
 			main.toast("집 자리에는 못 놓아요")
 			return
-		_set_pos(move_id, cell.x, cell.y, rot)
+		_set_pos(move_id, x, z, rot)
 	main.synth_tone(660, 990, 0.08, 0.1)
 	Save.buzz(8)
 	after_deco()
+
+
+# ───────────────────────── 새 집: 땅 넓히기 → 집 놓기 (안내) ─────────────────────────
+## 새 집을 지으면: 「땅을 넓혀보세요!」 (넓힐 칸을 줌) → 다 넓히면 「집을 놓아주세요!」 → 원하는 내 땅을 누르면 집이 쿵.
+## 단계는 H()["move_step"]: "" · land · house  (중간에 나가도 다음에 이어서)
+const MOVE_LAND := 10         # 새 집 지을 때 받는 땅 칸
+var house_placing := false
+var house_guided := false
+var coach_box: PanelContainer
+var house_ghost: Array = []
+
+
+func start_move_flow() -> void:
+	H()["land_free"] = int(H().get("land_free", 0)) + MOVE_LAND
+	H()["move_step"] = "land"
+	Save.save()
+	_move_land_step()
+
+
+## main._greet 등에서 이어 하기
+func resume_move_flow() -> bool:
+	match str(H().get("move_step", "")):
+		"land":
+			_move_land_step()
+		"house":
+			_move_house_step()
+		_:
+			return false
+	return true
+
+
+func _move_land_step() -> void:
+	say(["새 집은 땅을 더 넓게 쓸 수 있어요!",
+		"땅을 %d칸 넓힐 수 있어요. 민트색으로 빛나는 칸을 누르면 내 땅이 돼요." % int(H().get("land_free", 0)),
+		"땅을 넓혀보세요!"], func():
+		main._set_edit(true)
+		coach("땅을 넓혀보세요!", "남은 칸 %d · 빛나는 칸을 눌러요" % int(H().get("land_free", 0))))
+
+
+## main 이 땅 한 칸을 넓힐 때마다 불러요
+func on_land_claimed() -> void:
+	if str(H().get("move_step", "")) != "land":
+		return
+	var left := int(H().get("land_free", 0))
+	coach("땅을 넓혀보세요!", "남은 칸 %d · 빛나는 칸을 눌러요" % left)
+	if left <= 0:
+		await main.get_tree().create_timer(0.6).timeout
+		main._set_edit(false)      # → on_edit_closed 에서 다음 단계로
+
+
+## 땅 편집을 닫을 때 (main._set_edit(false))
+func on_edit_closed() -> void:
+	if str(H().get("move_step", "")) == "land":
+		coach("")
+		H()["move_step"] = "house"
+		Save.save()
+		_move_house_step()
+
+
+func _move_house_step() -> void:
+	say(["넓어졌어요!", "이제 새 집을 놓아 볼까요?", "내 땅에서 집을 두고 싶은 곳을 누르세요. 집을 놓아주세요!"], func():
+		start_house_place(true))
+
+
+func start_house_place(guided: bool) -> void:
+	_close_sheet()
+	house_placing = true
+	house_guided = guided
+	main.follow = false
+	main.zoom = maxf(main.zoom, 19.0)
+	main._update_camera()
+	hide_for_edit(false)
+	coach("집을 놓아주세요!", "집을 둘 내 땅을 눌러요")
+	var v := _bottom_sheet()
+	plant_bar = sheet
+	plant_bar.remove_meta("deco")
+	sheet = null
+	var head := HBoxContainer.new()
+	v.add_child(head)
+	var t := Mol.lbl("집 놓기", 26, Mol.TEXT, "b")
+	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(t)
+	var done := Mol.btn("여기로 할래요", "primary", 22)
+	done.custom_minimum_size.y = 64
+	done.pressed.connect(_house_done)
+	head.add_child(done)
+	v.add_child(Mol.lbl("놓을 수 있는 자리는 민트색, 안 되는 자리는 빨간색으로 보여요", 18, Mol.TEXT_SUB, "r"))
+	_house_marks(main.house_cell)
+
+
+func _house_ok(c: Vector2i) -> String:
+	for cell in main.house_cells(c):
+		if not main.land_set.has(cell):
+			return "집이 들어갈 땅이 모자라요 · 내 땅 안쪽을 눌러 보세요"
+	var props: Dictionary = H()["props"]
+	for k in props:
+		var xz: PackedStringArray = str(k).split(",")
+		var pc := Vector2i(roundi(float(xz[0])), roundi(float(xz[1])))
+		var rel := pc - c
+		if absi(rel.x) <= 1 and rel.y >= -1 and rel.y <= 1:
+			return "그 자리에 심어 둔 장식이 있어요 · 먼저 뽑아 주세요"
+	return ""
+
+
+func _house_tap(pos: Vector2) -> void:
+	var p = main._floor_point(pos)
+	if p == null:
+		return
+	var c := Vector2i(roundi(p.x), roundi(p.z) - 1)      # 누른 곳이 집 가운데쯤 오게 (문 앞 칸 몫만큼 위로)
+	var why := _house_ok(c)
+	_house_marks(c)
+	if why != "":
+		main.toast(why)
+		Save.buzz(20)
+		return
+	if c == main.house_cell:
+		return
+	main.place_house(c, true)
+	var tw := main.create_tween()
+	tw.tween_method(func(v: Vector3):
+		main.pivot = v
+		main._update_camera(), main.pivot, Vector3(c.x, main.FLOOR_TOP, c.y + 0.5), 0.45).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	main.synth_tone(300, 180, 0.12, 0.14)
+	Save.buzz(15)
+	H()["house_at"] = [c.x, c.y]
+	Save.save()
+
+
+func _house_marks(c: Vector2i) -> void:
+	for m in house_ghost:
+		if is_instance_valid(m):
+			m.queue_free()
+	house_ghost.clear()
+	if not house_placing:
+		return
+	var ok := _house_ok(c) == ""
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.no_depth_test = true
+	mat.albedo_color = Color(0.49, 0.94, 0.78, 0.35) if ok else Color(1.0, 0.4, 0.4, 0.4)
+	var pm := PlaneMesh.new()
+	pm.size = Vector2(0.92, 0.92)
+	for cell in main.house_cells(c):
+		var mi := MeshInstance3D.new()
+		mi.mesh = pm
+		mi.material_override = mat
+		mi.position = Vector3(cell.x, main.FLOOR_TOP + 0.05, cell.y)
+		main.add_child(mi)
+		house_ghost.append(mi)
+
+
+func _house_done() -> void:
+	house_placing = false
+	_house_marks(main.house_cell)
+	coach("")
+	if plant_bar:
+		main.hud_blocks.erase(plant_bar)
+		plant_bar.queue_free()
+		plant_bar = null
+	H()["house_at"] = [main.house_cell.x, main.house_cell.y]
+	var guided := house_guided
+	if guided:
+		H()["move_step"] = ""
+	Save.save()
+	main.follow = true
+	main.reset_walk_area()
+	main.refresh_ui()
+	if guided:
+		say(["와, 새 집이 생겼어요!", "꾸미기에서 장식도 원하는 곳에 놓아 봐요."], func(): check_pets())
+	else:
+		main.toast("집을 옮겼어요")
+
+
+## 화면 위쪽 안내 띠 (빈 글자면 숨김)
+func coach(title: String, sub := "") -> void:
+	if title == "":
+		if coach_box:
+			coach_box.queue_free()
+			coach_box = null
+		return
+	if coach_box == null:
+		coach_box = PanelContainer.new()
+		var st := Mol.sb(Mol.PANEL_SOLID, Color(0.494, 0.941, 0.784, 0.5), 28, Vector2(26, 16))
+		coach_box.add_theme_stylebox_override("panel", st)
+		coach_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		coach_box.anchor_left = 0.5
+		coach_box.anchor_right = 0.5
+		coach_box.offset_top = 150
+		coach_box.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		var vb := VBoxContainer.new()
+		vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		vb.alignment = BoxContainer.ALIGNMENT_CENTER
+		coach_box.add_child(vb)
+		ui.add_child(coach_box)
+		coach_box.scale = Vector2.ONE * 0.8
+		coach_box.create_tween().tween_property(coach_box, "scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	var vb2: VBoxContainer = coach_box.get_child(0)
+	for c in vb2.get_children():
+		c.queue_free()
+	var t := Mol.lbl(title, 32, Mol.MINT, "b")
+	t.custom_minimum_size.x = 0
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	t.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vb2.add_child(t)
+	if sub != "":
+		var s2 := Mol.lbl(sub, 19, Mol.TEXT_SUB, "r")
+		s2.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		s2.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		vb2.add_child(s2)
+	coach_box.reset_size()
+	coach_box.pivot_offset = coach_box.size / 2
+	coach_box.offset_left = -coach_box.size.x / 2
+	coach_box.offset_right = coach_box.size.x / 2
