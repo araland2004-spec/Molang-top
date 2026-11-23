@@ -90,7 +90,10 @@ func _ready() -> void:
 	core.best = int(Save.d["best"])
 	core.prog = int(Save.d["prog"])
 	_build_ui()
-	core.score_changed.connect(func(s): score_lbl.text = GameCore.score_text(s))
+	core.score_changed.connect(func(s):
+		score_lbl.text = GameCore.score_text(s)
+		_paint_info())
+	core.buzz.connect(func(ms: int): Save.buzz(ms))
 	core.info_changed.connect(_paint_info)
 	core.toast.connect(_toast)
 	core.items_changed.connect(_paint_items)
@@ -218,8 +221,9 @@ func _build_ui() -> void:
 
 	# 판
 	board_area = Control.new()
-	board_area.mouse_filter = Control.MOUSE_FILTER_STOP
-	board_area.gui_input.connect(_board_input)
+	# 웹 원본처럼 판 밖(아래 빈 곳 등) 어디를 눌러도 손가락과 가장 가까운 대기 숫자를 잡아요.
+	# 판도 PASS 라서 눌림이 화면 전체(_gui_input)로 올라가 한곳에서 처리돼요.
+	board_area.mouse_filter = Control.MOUSE_FILTER_PASS
 	add_child(board_area)
 	board_area.add_child(core)
 
@@ -422,17 +426,27 @@ func _layout() -> void:
 
 
 ## 점수·정보줄·목표 막대 갱신
+## 연속 합치기·판 기세 배율 (게임 화면 정보 줄)
+func _bonus_str() -> String:
+	var t := ""
+	if core.streak > 0:
+		t += " · 연속 ×%s" % str(1.0 + core.streak * GameCore.STREAK_STEP)
+	if core.momentum() > 0:
+		t += " · 기세 +%d%%" % roundi(core.momentum() * 100)
+	return t
+
+
 func _paint_info() -> void:
 	if core.mode != "stage":
 		stage_lbl.text = "무한 모드"
-		throws_lbl.text = "던지기 %d 남음 · 최고 %s" % [core.throws_left, GameCore.score_text(core.best)]
+		throws_lbl.text = "던지기 %d 남음 · 최고 %s" % [core.throws_left, GameCore.score_text(core.best)] + _bonus_str()
 		goal_row.visible = false
 	else:
 		var i: int = core.stage_idx
 		var st: Dictionary = core.stages[i]
 		var jump := i >= 24 and (i + 1) % 5 == 0
 		stage_lbl.text = "%d단계%s" % [i + 1, " · 고비" if jump else ""]
-		throws_lbl.text = ("던지기 %d 남음" % core.throws_left) if int(st["throws"]) else "던지기 무제한"
+		throws_lbl.text = (("던지기 %d 남음" % core.throws_left) if int(st["throws"]) else "던지기 무제한") + _bonus_str()
 		goal_row.visible = true
 		match str(st["goal"]):
 			"score":
@@ -624,26 +638,33 @@ func _use_item(k: String) -> void:
 
 # ───────────────────────── 입력 ─────────────────────────
 
+func _gui_input(e: InputEvent) -> void:
+	_board_input(e)
+
+
+## e.position 은 화면(이 Control) 좌표
 func _board_input(e: InputEvent) -> void:
 	if input_guard > 0:
 		return
 	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-		var lp: Vector2 = e.position / board_scale
+		var lp: Vector2 = (e.position - board_area.position) / board_scale
 		if e.pressed:
 			if core.over or core.clear_t > 0 or dragging:
 				return
 			if core.hammer_armed:
-				if core.hammer_at(lp.x, lp.y):
+				if core.hammer_at(lp.x, lp.y) if board_area.get_rect().has_point(e.position) else false:
 					Save.spend_item("hammer", core.mode != "stage")
 					_paint_items()
 				return
 			if core.grab(lp.x):
 				dragging = true
 				drag_start = e.position
+				Save.buzz(8)
 		else:
 			if dragging:
 				dragging = false
 				var used: String = core.release(true)
+				Save.buzz(8)
 				if used == "x2":
 					Save.spend_item("x2", core.mode != "stage")
 				if hint_lbl.visible and core.mode != "stage":

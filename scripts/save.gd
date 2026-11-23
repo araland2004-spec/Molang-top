@@ -14,6 +14,7 @@ var d := {
 signal jelly_changed
 
 var next_mode := ""
+var jelly_seen := -1     # 집 화면이 마지막으로 보여 준 젤리 수 (돌아왔을 때 「+N」 연출용)
 var work_carry := 0.0
 var save_t := 0.0      # 집 → 게임으로 넘어갈 때: "endless" | "menu" | "stage:N"
 var data := {}           # mollang_data.json
@@ -28,6 +29,35 @@ func _ready() -> void:
 		if s is Dictionary:
 			for k in s:
 				d[k] = s[k]
+	_migrate_stages()
+
+
+## 겹치던 단계를 빼서 번호가 당겨졌을 때(stageRev): 깬 단계 수·별 기록을 새 번호로 옮김
+func _migrate_stages() -> void:
+	var rev: Dictionary = data.get("stageRev", {})
+	if rev.is_empty() or int(d.get("stage_rev", 1)) >= int(rev.get("rev", 1)):
+		return
+	var removed: Array = rev.get("removed", [])
+	var prog := int(d.get("prog", 0))
+	var cut := 0
+	for r in removed:
+		if int(r) <= prog:
+			cut += 1
+	d["prog"] = maxi(0, prog - cut)
+	var old: Dictionary = d.get("stars", {})
+	var nw := {}
+	for k in old:
+		var n := int(k) + 1
+		if removed.has(n):
+			continue
+		var m := n
+		for r in removed:
+			if int(r) < n:
+				m -= 1
+		nw[str(m - 1)] = old[k]
+	d["stars"] = nw
+	d["run"] = {}
+	d["stage_rev"] = int(rev.get("rev", 1))
 
 
 ## 공방(웹 버전과 같게): 화면이 켜져 있는 동안 1분에 0.5 + 0.1 × 깬 단계 젤리. 플레이 시간도 여기서 셈.
@@ -60,6 +90,12 @@ func save() -> void:
 	var f := FileAccess.open(PATH, FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify(d))
+
+
+## 진동 (웹 버전 navigator.vibrate 와 같은 길이, ms). 설정에서 끌 수 있어요.
+func buzz(ms: int) -> void:
+	if bool(d.get("vibe", true)):
+		Input.vibrate_handheld(ms)
 
 
 static func kst_day() -> String:

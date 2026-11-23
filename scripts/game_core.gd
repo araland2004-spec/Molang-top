@@ -7,6 +7,7 @@ signal info_changed()
 signal toast(text: String)
 signal finished(kind: String, reason: String)   # kind: "over" | "clear"
 signal items_changed()
+signal buzz(ms: int)   # 진동 (웹: 합치기 8/16, 세게 던지기 12, 클리어 30, 끝 60)
 
 const INK := Color("#111113")
 const MILK := Color("#f4f4f2")
@@ -47,6 +48,12 @@ const MISS_LIMIT := 3
 const MISS_WAIT := 2.2
 const COMBO_MAX := 10
 const TILT_SECS := 8.0
+# 연속 합치기: 던질 때마다 그 숫자가 뭔가와 합쳐지면 +1, 아무것도 못 합치면 0으로.
+# 점수 = 숫자 × 연쇄 × (1 + 0.5×연속), 최대 ×5. 빨리 막 던지는 건 도움이 안 되고(던지기 단위),
+# 헛던지면 바로 끊겨서 꾸준히 맞히는 판일수록 점수가 팍팍 올라가요.
+const STREAK_STEP := 0.5
+const STREAK_MAX := 8
+const STREAK_WAIT := 2.5
 const TIER_MAX := 899
 # 몸 둘레 점 개수 (웹 버전 10 + r×0.3). GDScript 는 느려서 조금 줄임 — 모양은 곡선으로 부드럽게 그림
 const POINTS_BASE := 8.0
@@ -98,6 +105,10 @@ var miss_count := 0
 var miss_watch = null
 var held_combo := 0
 var held_shot := 0
+var streak := 0
+var streak_on := true
+var shot_wait := {}      # 던진 숫자 id → 아직 못 합친 채 지난 시간
+var streak_bonus := 0.0  # 화면 표시용
 var shot_no := 0
 
 var hammer_left := 0
@@ -180,6 +191,7 @@ class Blob:
 	var sleep := false
 	var warp_cd := 0.0
 	var warp_n := 0
+	var pop_t := 0.0     # 새로 합쳐진 젤리의 「퐁」(그림만 1→1.18→1)
 	var rx := PackedFloat64Array()
 	var ry := PackedFloat64Array()
 	var x := PackedFloat64Array()
@@ -394,6 +406,10 @@ func internal_constraints(b: Blob) -> void:
 			dev += absf(gx - x[i]) + absf(gy - y[i])
 		dev = dev / n / (b.r * s)
 		var kk := k + (small * 0.3 + (0.0 if b.wob > 0 else 0.03)) * maxf(0.0, dev - (0.15 if small > 0 else 0.4))
+		# 큰 숫자에 깔린 숫자가 납작하게 눌려 찌그러져 보이지 않게: 위에 실린 무게만큼 더 버팀
+		var heavy := minf(0.12, b.load / (b.r * b.r) * 0.01)
+		if heavy > 0.0 and b.wob <= 0:
+			kk += heavy * maxf(0.0, dev - 0.22)
 		for i in n:
 			x[i] += (gxs[i] - x[i]) * kk
 			y[i] += (gys[i] - y[i]) * kk
@@ -742,8 +758,20 @@ func collide() -> void:
 			if d == 0.0:
 				d = 0.01
 			var lim := 0.42 * maxf(a.r * a.s, b.r * b.s)
-			if d < lim:
-				var push := (lim - d) * 0.25
+			# 작은 숫자의 중심이 큰 숫자 몸 안으로 파고들면(흔들기·세게 던지기로 뚫고 들어감)
+			# 점마다 바깥으로 밀면 작은 숫자가 제자리에서 늘어나기만 하고 갇혀요(찌그러짐·겹침).
+			# 그럴 땐 몸 전체를 중심선 따라 밖으로 밀어냄.
+			var big: Blob = a if a.r >= b.r else b
+			var small: Blob = b if big == a else a
+			var deep := lim
+			if d < big.r * big.s and not (a.row or b.row) and _center_inside(small, big):
+				deep = big.r * big.s + small.r * small.s * 0.5
+				if d < 0.5:
+					dy = 1.0 if b == small else -1.0
+					dx = 0.0
+					d = 1.0
+			if d < deep:
+				var push := (deep - d) * (0.25 if deep == lim else 0.18)
 				var ma := a.r * a.r
 				var mb := b.r * b.r
 				var fa := mb / (ma + mb)
@@ -758,6 +786,23 @@ func collide() -> void:
 				for k in b.n:
 					bxs[k] += ux * fb; bys[k] += uy * fb
 				b.x = bxs; b.y = bys
+
+
+func _center_inside(s: Blob, B: Blob) -> bool:
+	var X := s.cx
+	var Y := s.cy
+	if X < B.x0 or X > B.x1 or Y < B.y0 or Y > B.y1:
+		return false
+	var bx := B.x
+	var by := B.y
+	var m := B.n
+	var inside := false
+	var k := m - 1
+	for j in m:
+		if (by[j] > Y) != (by[k] > Y) and X < (bx[k] - bx[j]) * (Y - by[j]) / (by[k] - by[j]) + bx[j]:
+			inside = not inside
+		k = j
+	return inside
 
 
 func blob_motion(b: Blob) -> Vector2:
@@ -887,6 +932,23 @@ func warp_blobs(h: float) -> void:
 						else:
 							tx = pg[0]; ty = pg[1] - need
 				tx = clampf(tx, R, W - R); ty = clampf(ty, R, H - R)
+				# 나오는 자리에 다른 숫자가 있으면 그 숫자 속으로 순간이동해 겹쳐 보여요 → 위쪽 빈자리로 살짝 옮김
+				for step in 6:
+					var moved := false
+					for o: Blob in blobs:
+						if o == b or o.row or o.lane or o.dead:
+							continue
+						var lim2 := (R + o.r * o.s) * 0.8
+						var dv := Vector2(tx - o.cx, ty - o.cy)
+						if dv.length() < lim2:
+							var dir := dv.normalized() if dv.length() > 0.5 else Vector2(0, -1)
+							if dir.y > 0.3:
+								dir = Vector2(dir.x, -0.3).normalized()
+							var p2 := Vector2(o.cx, o.cy) + dir * lim2
+							tx = clampf(p2.x, R, W - R); ty = clampf(p2.y, SHELF_BOT + R, H - R)
+							moved = true
+					if not moved:
+						break
 				var ox := tx - b.cx
 				var oy := ty - b.cy
 				var x := b.x; var y := b.y; var px := b.px; var py := b.py
@@ -1038,12 +1100,22 @@ func resolve_merges() -> void:
 		a.dead = true; b.dead = true
 		var nt := (b.t if a.wild else a.t) + 1
 		var shot_id := a.shot if a.shot else b.shot
+		if streak_on and shot_id and shot_wait.has(shot_id):
+			shot_wait.erase(shot_id)
+			streak = mini(STREAK_MAX if mode != "stage" else 2, streak + 1)   # 스테이지는 ×2까지(점수 목표 판 밸런스 유지)
+			if streak in [3, 6, 8]:
+				toast.emit("연속 합치기 %d번! 점수 ×%s" % [streak, str(1.0 + streak * STREAK_STEP)])
 		if shot_id and shot_id == held_shot:
 			if held_combo:
 				combo = maxi(combo, held_combo); combo_t = 1
 			held_shot = 0; held_combo = 0
 		var nb := make_blob(nt, X, Y, (va.x + vb.x) / 2, (va.y + vb.y) / 2, 0.94)
 		blend_shape(nb, a, b)
+		nb.pop_t = 0.28
+		for k in 8:     # 같은 색 조각 8개 (인터랙션 제안서 I)
+			var ang := k * TAU / 8.0 + randf() * 0.4
+			var sp := 90.0 + randf() * 120.0
+			particles.append([X + cos(ang) * nb.r * 0.6, Y + sin(ang) * nb.r * 0.6, cos(ang) * sp, sin(ang) * sp - 60, 2 + randf() * 2.5, 0.45, tier_color(nt)])
 		nb.age = 2
 		if shot_id:
 			nb.shot = shot_id
@@ -1058,11 +1130,16 @@ func resolve_merges() -> void:
 				sel = nb
 		combo = mini(COMBO_MAX, combo + 1) if combo_t > 0 else 1
 		combo_t = 1.5
-		var pts: int = (1 << nt if nt < 62 else 1 << 61) * combo
+		var mult := (1.0 + streak * STREAK_STEP if streak_on else 1.0) * (1.0 + momentum())
+		var pts: int = int((1 << nt if nt < 62 else 1 << 61) * combo * mult)
 		add_score(pts)
-		float_text(X, Y + tiers_r[nt] + 14 if home else Y, ("+%d · %d연쇄" % [pts, combo]) if combo > 1 else "+%d" % pts, combo > 1)
+		var tag := ""
+		if combo > 1:
+			tag += " · %d연쇄" % combo   # 배율(연속 ×N)은 정보 줄에 따로 보여서 여기선 짧게
+		float_text(X, Y + tiers_r[nt] + 14 if home else Y, "+%d%s" % [pts, tag], combo > 1 or mult >= 2.0)
 		var f := 760 * pow(0.89, nt) * (1 + (mini(combo, 10) - 1) * 0.12)
 		tone(f * 0.7, f * 1.05, 0.1, 0.16); tone(f * 0.5, f * 0.34, 0.26, 0.14)
+		buzz.emit(16 if nt >= 7 else 8)
 		if nt > board_tier:
 			board_tier = nt
 		if miss_watch:
@@ -1119,8 +1196,20 @@ func note_tier(nt: int) -> void:
 	if nt > max_tier:
 		max_tier = nt
 		if nt >= 7 and mode == "endless":
-			toast.emit("첫 " + num_text(nt) + "!")
+			if nt >= 9 and nt <= 13:
+				toast.emit("첫 %s! 이번 판 점수 +%d%%" % [num_text(nt), roundi(momentum() * 100)])
+				info_changed.emit()
+			else:
+				toast.emit("첫 " + num_text(nt) + "!")
 	check_goal()
+
+
+## 판 기세 (무한 모드): 이번 판에서 512·1024·2048·4096·8192를 처음 만들 때마다 점수 +10% (최대 +50%).
+## 큰 숫자를 만들어야만 오르니 막 던지기로는 안 오르고, 초반은 빡빡하다가 후반에 팍팍 올라가요.
+func momentum() -> float:
+	if mode == "stage":
+		return 0.0
+	return clampf((max_tier - 8) * 0.1, 0.0, 0.5)
 
 
 func check_goal() -> void:
@@ -1303,7 +1392,7 @@ func take_undo() -> void:
 	undo_snap = {
 		"blobs": blobs.map(func(b): return b.clone()), "score": score, "throws_left": throws_left,
 		"board_tier": board_tier, "up_count": up_count, "up_tier": up_tier, "gauge": gauge.duplicate(),
-		"press": press.duplicate(), "max_tier": max_tier,
+		"press": press.duplicate(), "max_tier": max_tier, "streak": streak, "shot_wait": shot_wait.duplicate(),
 	}
 	var ids := {}
 	for i in blobs.size():
@@ -1323,6 +1412,7 @@ func do_undo() -> bool:
 	score = S["score"]; throws_left = S["throws_left"]; board_tier = S["board_tier"]
 	up_count = S["up_count"]; up_tier = S["up_tier"]; gauge = S["gauge"].duplicate(); press = S["press"].duplicate()
 	max_tier = S["max_tier"]
+	streak = int(S.get("streak", 0)); shot_wait = S.get("shot_wait", {}).duplicate()
 	pending.clear(); touches.clear(); particles.clear(); sel = null; pull = 0; hammer_armed = false
 	undo_left -= 1; undo_snap = null; miss_watch = null; miss_count = maxi(0, miss_count - 1)
 	score_changed.emit(score); info_changed.emit(); items_changed.emit()
@@ -1339,6 +1429,7 @@ func do_shake() -> bool:
 		b.sleep = false
 	shake_t = 1; shake_ph = 0; shake_ang = randf() * TAU
 	shake_safe = 1.8
+	buzz.emit(150)
 	toast.emit("흔들흔들!" if mode == "stage" else "흔들흔들! 남은 흔들기 %d번" % shake_left)
 	items_changed.emit()
 	return true
@@ -1368,6 +1459,7 @@ func shoot(q: Blob, p: float) -> String:
 	combo_t = 0
 	shot_no += 1
 	q.shot = shot_no
+	shot_wait[shot_no] = 0.0
 	held_shot = q.shot
 	if x2_armed and x2_left > 0:
 		q.wild = true; x2_left -= 1; x2_armed = false; used = "x2"
@@ -1394,6 +1486,8 @@ func shoot(q: Blob, p: float) -> String:
 		for b: Blob in blobs:
 			b.sleep = false
 	tone(240 + p * 420, 110, 0.1 + p * 0.1, 0.1 + p * 0.06, "triangle")
+	if p > 0.85:
+		buzz.emit(12)
 	return used
 
 
@@ -1404,7 +1498,7 @@ func new_game() -> void:
 	blobs = []; pending = []; particles = []; floaters = []; queue = []; touches.clear(); warp_fx = []
 	score = 0; max_tier = 0; aim = 0; over = false; out_t = 0; since_merge = 0; clear_t = 0
 	board_tier = 0; up_count = 0; up_tier = 0
-	miss_count = 0; miss_watch = null; held_combo = 0; held_shot = 0
+	miss_count = 0; miss_watch = null; held_combo = 0; held_shot = 0; streak = 0; shot_wait = {}
 	var ch = stage_opt("chamfer")
 	chamfer = float(ch) if ch else CHAMFER
 	pegs = []
@@ -1442,14 +1536,55 @@ func new_game() -> void:
 			var wl: Array = st["well"]
 			var n := wl.size()
 			var w := W - 120
+			var placed: Array = []
 			for i in n:
-				var o := make_blob(int(wl[i]), 60 + (i * w / (n - 1) if n > 1 else w / 2), H - 150 - (i % 2) * 70, 0, 0, 1)
+				var t := int(wl[i])
+				var p := _free_spot(60 + (i * w / (n - 1) if n > 1 else w / 2), H - 150 - (i % 2) * 70, tiers_r[t], placed)
+				placed.append([p.x, p.y, tiers_r[t]])
+				var o := make_blob(t, p.x, p.y, 0, 0, 1)
 				o.sleep = true
 				blobs.append(o)
 	gauge = [0.0, 0.0]; press = [0.0, 0.0]; combo = 0; combo_t = 0; busy = 0; sel = null
 	score_changed.emit(0)
 	info_changed.emit()
 	items_changed.emit()
+
+
+## 시작 숫자 자리: 벽·기둥·다른 시작 숫자에 박히면 가까운 빈자리로 옮김 (박히면 시작하자마자 튕기거나 끼임)
+func _free_spot(x: float, y: float, r: float, placed: Array) -> Vector2:
+	var best := Vector2(x, y)
+	var best_d := 1e9
+	for ring in 14:
+		for k in (1 if ring == 0 else 12):
+			var a := k * TAU / 12.0
+			var c := Vector2(x, y) + Vector2(cos(a), sin(a)) * ring * 12.0
+			c.x = clampf(c.x, r + 2, W - r - 2)
+			c.y = clampf(c.y, SHELF_BOT + r + 6, H - r - 2)
+			if _spot_ok(c, r, placed):
+				var d := c.distance_to(Vector2(x, y))
+				if d < best_d:
+					best_d = d; best = c
+		if best_d < 1e9:
+			return best
+	return best
+
+
+func _spot_ok(c: Vector2, r: float, placed: Array) -> bool:
+	var rr := r * 0.85
+	if c.x + H - c.y < chamfer + rr * 1.2 or W - c.x + H - c.y < chamfer + rr * 1.2:
+		return false
+	for w in bars:
+		var a := Vector2(w[0], w[1]); var b := Vector2(w[2], w[3])
+		var q := Geometry2D.get_closest_point_to_segment(c, a, b)
+		if c.distance_to(q) < w[4] / 2.0 + rr:
+			return false
+	for p in pegs:
+		if c.distance_to(Vector2(p[0], p[1])) < p[2] + rr:
+			return false
+	for o in placed:
+		if c.distance_to(Vector2(o[0], o[1])) < (o[2] + r) * 0.9:
+			return false
+	return true
 
 
 ## 무한 모드 이어 하기(웹과 같게): 대기줄과 판 위 숫자, 점수, 남은 던지기를 저장해요.
@@ -1489,6 +1624,7 @@ func restore(d: Dictionary) -> void:
 func end_game(reason := "") -> void:
 	over = true
 	sel = null; pull = 0
+	buzz.emit(60)
 	finished.emit("over", reason if reason != "" else "양쪽 반원이 다 눌렸어요")
 
 
@@ -1538,8 +1674,20 @@ func sim_step(dt: float) -> void:
 		for i in SUB:
 			substep(H_STEP)
 	clock += dt
+	for b: Blob in blobs:
+		if b.pop_t > 0:
+			b.pop_t = maxf(0.0, b.pop_t - dt)
 	if combo_t > 0:
 		combo_t -= dt
+	if not over:
+		for k in shot_wait.keys():
+			shot_wait[k] += dt
+			if shot_wait[k] > STREAK_WAIT:
+				shot_wait.erase(k)
+				if streak >= 2:
+					float_text(W / 2, H * 0.42, "연속 끊김", false)
+				streak = 0
+				info_changed.emit()
 	if shake_t > 0 and not over:
 		shake_t -= dt; shake_ph -= dt
 		if shake_ph <= 0:
@@ -1587,6 +1735,7 @@ func sim_step(dt: float) -> void:
 			clear_t -= dt
 			if clear_t <= 0:
 				over = true
+				buzz.emit(30)
 				finished.emit("clear", "")
 		elif (mode != "stage" or int(stages[stage_idx]["throws"])) and throws_left <= 0:
 			out_t += dt
@@ -1614,6 +1763,12 @@ func blob_points(b: Blob) -> PackedVector2Array:
 		pts[k] = a; k += 1
 		pts[k] = a * 0.25 + c * 0.5 + e * 0.25; k += 1
 		pts[k] = a.lerp(c, 0.75).lerp(c.lerp(e, 0.75), 0.75); k += 1
+	if b.pop_t > 0:
+		var q := 1.0 - b.pop_t / 0.28
+		var kk := 1.0 + 0.18 * sin(q * PI) if q < 0.6 else 1.0 + 0.18 * sin(0.6 * PI) * (1.0 - (q - 0.6) / 0.4)
+		var cc := Vector2(b.cx, b.cy)
+		for i in pts.size():
+			pts[i] = cc + (pts[i] - cc) * kk
 	return pts
 
 
