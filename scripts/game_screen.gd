@@ -694,7 +694,9 @@ func _restart_same() -> void:
 
 
 func persist() -> void:
-	if core and core.mode != "stage":
+	# core.over 는 게임 오버뿐 아니라 「목록」을 열었을 때도 켜짐 → 그때 저장하면 이어 하기가 사라져서 건너뜀
+	# (「목록」 버튼은 목록을 열기 전에 먼저 저장하고, 진짜 게임 오버는 _on_finished 에서 run 을 비움)
+	if core and core.mode != "stage" and not core.over:
 		Save.d["run"] = core.snapshot()
 		Save.save()
 
