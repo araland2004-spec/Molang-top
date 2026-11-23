@@ -96,7 +96,7 @@ func enter() -> void:
 	main.set_walk_area(Vector2(-room.x + 0.3, -room.y + 0.3), Vector2(room.x - 0.3, room.y - 0.3), _blockers())
 	main.player.position = Vector3(0, main.FLOOR_TOP, room.y - 0.6)
 	main.pivot = main.player.position
-	main.zoom = 9.0
+	main.zoom = 13.0
 	main.path.clear()
 	_move_pets_inside(true)
 	main.refresh_ui()
@@ -114,7 +114,7 @@ func leave() -> void:
 	main.reset_walk_area()
 	main.player.position = Vector3(0.4, main.FLOOR_TOP, 2.1)
 	main.pivot = main.player.position
-	main.zoom = 11.0
+	main.zoom = 15.0
 	main.path.clear()
 	_move_pets_inside(false)
 	main.refresh_ui()
@@ -309,8 +309,15 @@ func _paint_floor_bar() -> void:
 	g.add_theme_constant_override("h_separation", 6)
 	g.add_theme_constant_override("v_separation", 6)
 	v.add_child(g)
+	var gb: Button = main._px_btn("실내 블록 뽑기 · 100", main.C_VIOLET, 18)
+	gb.custom_minimum_size.x = 150
+	gb.pressed.connect(open_floor_box)
+	g.add_child(gb)
+	var own: Dictionary = H().get("blocks_in", {"plank": 1})
 	for b in M.get("BLOCKS_IN", []):
 		var id: String = b["id"]
+		if not own.has(id):
+			continue
 		var bt: Button = main._px_btn(b["n"], main.C_YELLOW if id == floor_edit else main.C_CREAM, 18)
 		bt.custom_minimum_size.x = 150
 		bt.pressed.connect(func():
@@ -320,6 +327,41 @@ func _paint_floor_bar() -> void:
 	var done: Button = main._px_btn("다 했어요", main.C_VIOLET, 20)
 	done.pressed.connect(stop_floor_edit)
 	v.add_child(done)
+
+
+## 실내 블록 뽑기 (선물 상자)
+func open_floor_box() -> void:
+	if int(Save.d["jelly"]) < 100:
+		main.toast("젤리가 %d개 더 필요해요" % (100 - int(Save.d["jelly"])))
+		return
+	var list: Array = M.get("BLOCKS_IN", [])
+	var b: Dictionary = list[randi() % list.size()]
+	var tex: Texture2D = await node_thumb("in:" + str(b["id"]), func():
+		return Boxes.build([{"b": [-0.5, 0, -0.5, 0.5, 0.25, 0.5], "t": b["top"], "tile": 0.5}]))
+	var pop := func() -> Dictionary:
+		Save.d["jelly"] = int(Save.d["jelly"]) - 100
+		var own: Dictionary = H().get("blocks_in", {"plank": 1})
+		H()["blocks_in"] = own
+		var fresh := not own.has(b["id"])
+		own[b["id"]] = int(own.get(b["id"], 0)) + 1
+		H()["land_free"] = int(H().get("land_free", 0)) + (6 if fresh else 2)
+		Save.save()
+		return {"tex": tex, "title": str(b["n"]), "fresh": fresh,
+			"sub": "새 바닥 블록! 「바닥 꾸미기」에서 써 봐요 · 땅도 6칸 넓힐 수 있어요" if fresh else "이미 있는 블록이에요 · 땅을 2칸 넓힐 수 있어요",
+			"more": int(Save.d["jelly"]) >= 100}
+	if floor_bar:
+		floor_bar.visible = false
+	_show_gift("실내 블록 상자 · 잡고 옆으로 돌려 보세요", pop, func():
+		_fb_show(true), func():
+		_fb_show(false)
+		open_floor_box(), func(): _fb_show(false))
+
+
+func _fb_show(repaint: bool) -> void:
+	if floor_bar:
+		floor_bar.visible = true
+		if repaint:
+			_paint_floor_bar()
 
 
 func stop_floor_edit() -> void:
@@ -358,8 +400,12 @@ func tap(pos: Vector2) -> bool:
 				return true
 		return false
 	# 밖: 집을 누르면 들어감
-	var hw := Vector3(0, main.FLOOR_TOP + 0.9, 0)
-	if not cam.is_position_behind(hw) and cam.unproject_position(hw).distance_to(pos) < 110:
+	# 화면을 누른 곳에서 나가는 빛줄기가 집(벽·지붕) 상자에 닿으면 들어가요
+	var from := cam.project_ray_origin(pos)
+	var dir := cam.project_ray_normal(pos)
+	var hb: Rect2 = main.HOUSE_BOX
+	var box := AABB(Vector3(hb.position.x - 0.2, main.FLOOR_TOP, hb.position.y - 0.2), Vector3(hb.size.x + 0.4, 3.6, hb.size.y + 0.4))
+	if box.intersects_ray(from, dir) != null:
 		enter()
 		return true
 	return false
@@ -499,7 +545,7 @@ func _close_sheet() -> void:
 func _sheet(title: String, width := 640) -> VBoxContainer:
 	_close_sheet()
 	var p := PanelContainer.new()
-	p.add_theme_stylebox_override("panel", main._px_style(main.C_CREAM))
+	p.add_theme_stylebox_override("panel", Mol.card(40))
 	p.set_anchors_preset(Control.PRESET_CENTER)
 	p.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	p.grow_vertical = Control.GROW_DIRECTION_BOTH
@@ -514,7 +560,7 @@ func _sheet(title: String, width := 640) -> VBoxContainer:
 	return v
 
 
-func _wrap(text: String, size := 20, col: Color = Color("#6b6478"), width := 580) -> Label:
+func _wrap(text: String, size := 20, col: Color = Mol.TEXT_SUB, width := 580) -> Label:
 	var l: Label = main._label(text, size, col, false)
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	l.custom_minimum_size.x = width
@@ -555,6 +601,44 @@ func ask_name(title: String, def: String, cb: Callable) -> void:
 ## 가구 모델을 한 번 그려서 작은 그림으로
 func thumb(id: String) -> Texture2D:
 	return thumbs.get(id)
+
+
+## 아무 3D 모델이나 작은 그림으로 (블록 뽑기용)
+func node_thumb(key: String, make: Callable) -> Texture2D:
+	if thumbs.has(key):
+		return thumbs[key]
+	var vp := SubViewport.new()
+	vp.size = Vector2i(128, 128)
+	vp.transparent_bg = true
+	vp.own_world_3d = true
+	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	main.add_child(vp)
+	var c := Camera3D.new()
+	vp.add_child(c)
+	var l := DirectionalLight3D.new()
+	l.rotation_degrees = Vector3(-50, -30, 0)
+	vp.add_child(l)
+	var envn := WorldEnvironment.new()
+	var e := Environment.new()
+	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	e.ambient_light_color = Color.WHITE
+	e.ambient_light_energy = 0.6
+	e.background_mode = Environment.BG_CLEAR_COLOR
+	envn.environment = e
+	vp.add_child(envn)
+	var n: Node3D = make.call()
+	if n:
+		vp.add_child(n)
+		var ctr := n.position + Vector3(0, 0.5, 0)
+		c.position = ctr + Vector3(1, 0.85, 1).normalized() * 2.6
+		c.look_at(ctr)
+		c.fov = 40
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	var tex := ImageTexture.create_from_image(vp.get_texture().get_image())
+	thumbs[key] = tex
+	vp.queue_free()
+	return tex
 
 
 func render_thumbs() -> void:
@@ -697,95 +781,78 @@ func open_exchange(from: String, zone: String) -> void:
 
 
 ## 선물 상자: 흔들흔들 → 팡! 하고 열리며 가구가 나옴 (새 것 노란 빛, 중복 흰 빛)
+const GiftBox := preload("res://scripts/gift_box.gd")
+
+
+## 선물 상자: 3D 상자를 손가락으로 휙 돌리면 팡! (웹 버전과 같게)
 func open_box() -> void:
+	if vol_done():
+		main.toast("도감을 다 채웠어요! 이제 트리를 꾸며 봐요")
+		return
 	if int(Save.d["jelly"]) < BOX_PRICE:
+		main.toast("젤리가 %d개 더 필요해요. 스테이지나 무한 모드에서 모아요" % (BOX_PRICE - int(Save.d["jelly"])))
 		return
 	await render_thumbs()
-	Save.d["jelly"] = int(Save.d["jelly"]) - BOX_PRICE
-	var it: Dictionary = items[randi() % items.size()]
-	var id: String = it["id"]
-	var fresh := not owned(id)
-	H()["own"][id] = int(H()["own"].get(id, 0)) + 1
-	if fresh:
-		H()["put"][id] = true
-	Save.save()
 	_close_sheet()
-	var ov := ColorRect.new()
-	ov.color = Color(0.05, 0.04, 0.08, 0.8)
-	ov.set_anchors_preset(Control.PRESET_FULL_RECT)
-	ui.add_child(ov)
-	main.hud_blocks.append(ov)
-	sheet = ov
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	ov.add_child(center)
-	var v := VBoxContainer.new()
-	v.alignment = BoxContainer.ALIGNMENT_CENTER
-	v.add_theme_constant_override("separation", 18)
-	center.add_child(v)
-	var stage := Control.new()
-	stage.custom_minimum_size = Vector2(320, 320)
-	v.add_child(stage)
-	var halo := Panel.new()
-	var hs := StyleBoxFlat.new()
-	hs.bg_color = Color(1, 0.85, 0.3, 0.0) if fresh else Color(1, 1, 1, 0.0)
-	hs.set_corner_radius_all(160)
-	halo.add_theme_stylebox_override("panel", hs)
-	halo.size = Vector2(320, 320)
-	stage.add_child(halo)
-	var box := Panel.new()
-	var bs := StyleBoxFlat.new()
-	bs.bg_color = Color("#f27a66")
-	bs.border_color = Color("#ffd45c")
-	bs.set_border_width_all(12)
-	box.add_theme_stylebox_override("panel", bs)
-	box.size = Vector2(170, 170)
-	box.position = Vector2(75, 90)
-	box.pivot_offset = Vector2(85, 85)
-	stage.add_child(box)
-	var pic := TextureRect.new()
-	pic.texture = thumb(id)
-	pic.size = Vector2(220, 220)
-	pic.position = Vector2(50, 50)
-	pic.pivot_offset = Vector2(110, 110)
-	pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	pic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	pic.scale = Vector2.ZERO
-	stage.add_child(pic)
-	var title: Label = main._label("상자를 여는 중…", 30, Color.WHITE, true)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	v.add_child(title)
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 12)
-	row.modulate.a = 0
-	v.add_child(row)
-	var more: Button = main._px_btn("하나 더 · %d" % BOX_PRICE, main.C_YELLOW, 22)
-	more.disabled = int(Save.d["jelly"]) < BOX_PRICE
-	more.pressed.connect(func(): open_box())
-	row.add_child(more)
-	var ok: Button = main._px_btn("좋아요", main.C_CREAM, 22)
-	ok.pressed.connect(func():
-		_close_sheet()
-		after_deco())
-	row.add_child(ok)
-	var tw := create_tween()
-	for k in 6:
-		tw.tween_property(box, "rotation", 0.12 if k % 2 == 0 else -0.12, 0.09)
-	tw.tween_property(box, "rotation", 0.0, 0.06)
-	tw.tween_callback(func():
-		main.synth_tone(660, 990, 0.12, 0.12)
-		box.visible = false
-		hs.bg_color.a = 0.55
-		title.text = ("새 장식! " if fresh else "중복 · ") + str(it["name"]))
-	tw.tween_property(pic, "scale", Vector2.ONE * 1.1, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tw.tween_property(pic, "scale", Vector2.ONE, 0.12)
-	tw.tween_property(row, "modulate:a", 1.0, 0.2)
+	var pop := func() -> Dictionary:
+		Save.d["jelly"] = int(Save.d["jelly"]) - BOX_PRICE
+		var it: Dictionary = items[randi() % items.size()]
+		var id: String = it["id"]
+		var n := int(H()["own"].get(id, 0)) + 1
+		H()["own"][id] = n
+		if n == 1:
+			H()["put"][id] = true
+		Save.save()
+		main.refresh_ui()
+		return {"tex": thumb(id), "title": str(it["name"]), "fresh": n == 1,
+			"sub": ("새로 나왔어요! %s 바로 놓았어요" % ("집 안에" if it["zone"] == "in" else "집 밖에")) if n == 1 else "중복이에요 (중복 %d개) · 중복 3개를 모으면 다른 가구로 바꿀 수 있어요" % (n - 1),
+			"more": int(Save.d["jelly"]) >= BOX_PRICE and not vol_done()}
+	_show_gift("상자를 잡고 옆으로 돌려 보세요", pop, func():
+		after_deco()
+		open_book("in" if inside else "out"), open_box)
+
+
+func _show_gift(line: String, pop: Callable, done: Callable, again: Callable, quit := Callable()) -> void:
+	var g = GiftBox.new(line, pop, func():
+		main.hud_blocks.erase(sheet)
+		sheet = null
+		done.call(), func():
+		main.hud_blocks.erase(sheet)
+		sheet = null
+		again.call(), func():
+		main.hud_blocks.erase(sheet)
+		sheet = null
+		if quit.is_valid():
+			quit.call(), func(a: float, b: float, d: float, v: float): main.synth_tone(a, b, d, v))
+	ui.add_child(g)
+	main.hud_blocks.append(g)
+	sheet = g
 
 
 func open_deco() -> void:
 	var zone := "in" if inside else "out"
 	var v := _sheet("집 안 꾸미기" if inside else "집 밖 꾸미기", 620)
+	var er := HBoxContainer.new()
+	er.add_theme_constant_override("separation", 12)
+	v.add_child(er)
+	var eb: Button = main._px_btn("바닥 꾸미기" if inside else "땅 편집 · 넓히기", main.C_YELLOW, 24)
+	eb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	eb.pressed.connect(func():
+		_close_sheet()
+		if inside:
+			start_floor_edit()
+		else:
+			main._set_edit(true))
+	er.add_child(eb)
+	var bb: Button = main._px_btn("블록 뽑기 · 100", main.C_VIOLET, 24)
+	bb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bb.pressed.connect(func():
+		_close_sheet()
+		if inside:
+			open_floor_box()
+		else:
+			main.open_block_box())
+	er.add_child(bb)
 	if not inside:
 		v.add_child(_wrap("집의 지붕·벽을 골라 바꿀 수 있어요. 단계를 깰수록 고를 수 있는 모양이 늘어나요.", 20))
 		var look: Dictionary = H().get("house", {})

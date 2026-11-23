@@ -21,7 +21,7 @@ const HOUSE_BOX := Rect2(-1.45, -1.35, 2.9, 2.75)   # 몰랑이·햄스터가 �
 const HomeExtra := preload("res://scripts/home_extra.gd")
 const Synth := preload("res://scripts/synth.gd")
 const ZOOM_MIN := 5.0
-const ZOOM_MAX := 18.0
+const ZOOM_MAX := 22.0
 const WALK_SPEED := 1.5
 const CAM_TWEEN := 1.1
 
@@ -30,11 +30,12 @@ const SKY := [[0, "#0b1030", "#25305a"], [4.5, "#141a44", "#3a3a6a"], [6, "#4a5a
 	[13, "#5aaef0", "#c4e6fb"], [16, "#78b6ea", "#e4eefa"], [17.8, "#6a70b0", "#f6a878"], [19, "#3a3a78", "#c87890"], [20.5, "#18204a", "#3a4070"], [24, "#0b1030", "#25305a"]]
 
 # 웹 버전 UI 색
-const C_INK := Color("#2a2533")
-const C_CREAM := Color("#fff8e8")
-const C_YELLOW := Color("#ffd45c")
-const C_VIOLET := Color("#c9bfff")
-const C_SUB := Color("#6b6478")
+# UI 리뉴얼 v4: 예전 도트 색 이름은 그대로 두고 값만 유리 패널 색으로
+const C_INK := Color("#E9F2EE")        # 글씨
+const C_CREAM := Color(0.047, 0.137, 0.149, 0.94)   # 패널 바탕
+const C_YELLOW := Color("#FFC171")     # 주 버튼 (등불)
+const C_VIOLET := Color("#B9A2FF")     # 보조 강조
+const C_SUB := Color(0.624, 0.737, 0.714)
 
 # 섞기 규칙의 바닥 종류 → ground_test 블록
 const FLOOR_OF := {
@@ -56,6 +57,12 @@ const KO := {
 var data := {}
 var block_files: PackedStringArray = []
 var selected := 0
+var pal_files: Array = []          # 가진 블록만 (땅 편집 팔레트)
+var pal_box: HBoxContainer
+var land_set := {}                 # 내 땅 칸 (Vector2i → true)
+var land_marks: Array = []         # 편집 중 표시 (넓힐 수 있는 칸·남의 땅)
+const LAND_NEW := 6
+const LAND_DUP := 2
 var floor_map := {}        # Vector2i -> 블록 파일 이름
 var floor_nodes := {}
 var land_root: Node3D
@@ -73,7 +80,7 @@ var cam: Camera3D
 var pivot := Vector3(0, FLOOR_TOP, 2)
 var yaw := deg_to_rad(45.0)
 var pitch := deg_to_rad(-34.0)
-var zoom := 11.0
+var zoom := 15.0
 var fov := 30.0
 
 var player: Node3D
@@ -117,6 +124,15 @@ var synth: Node
 var outside_nodes: Array = []
 var sky_layers: Array = []
 var town_label: Label
+var hud_day := false
+var lofi_root: Control
+var lofi_song: Label
+var lofi_sub: Label
+var lofi_bar: Control
+var lofi_time: Label
+var lofi_work: Label
+var lofi_orn: Label
+var lofi_start_jelly := 0
 var hud_groups: Array = []
 var walk_min := Vector2(X0 - 0.35, Z0 - 0.35)
 var walk_max := Vector2(X1 + 0.35, Z1 + 0.35)
@@ -133,7 +149,14 @@ var shop_panel: Control
 var hud_t := 0.0
 
 
+var input_guard := 0.0
+
+
 func _ready() -> void:
+	# 화면이 바뀔 때 손을 뗀 터치가 새 화면 버튼에 눌리지 않게 잠깐 입력을 막아요
+	get_viewport().gui_disable_input = true
+	get_tree().create_timer(0.35).timeout.connect(func(): get_viewport().gui_disable_input = false)
+	input_guard = 0.35
 	Bgm.unlocked.connect(func(nm: String): _toast("새 음악이 열렸어요: " + nm))
 	if OS.has_feature("web") and str(JavaScriptBridge.eval("location.hash")) == "#bench":
 		_go_game.call_deferred("endless")
@@ -144,6 +167,7 @@ func _ready() -> void:
 	if not _load_floor():
 		_make_floor()
 	_place_nature_deco()
+	_land_init()
 	_build_cottage()
 	_make_player()
 	_make_hamster()
@@ -161,6 +185,7 @@ func _ready() -> void:
 	outside_nodes.append(extra.yard_root)
 	_update_camera()
 	_refresh_ui()
+	_update_mood()
 	_greet.call_deferred()
 
 
@@ -585,13 +610,13 @@ func _update_mood() -> void:
 		return
 	var s := _sky_now()
 	var night: float = s["night"]
-	sun.light_energy = lerpf(0.95, 0.12, night)
+	sun.light_energy = lerpf(0.7, 0.12, night)
 	sun.light_color = Color(1.0, 0.97, 0.92).lerp(Color(0.45, 0.7, 0.85), night)
 	env.ambient_light_color = Color(0.9, 0.9, 1.0).lerp(Color(0.22, 0.42, 0.45), night)   # 밤: 짙은 청록
-	env.ambient_light_energy = lerpf(0.5, 0.42, night)
+	env.ambient_light_energy = lerpf(0.36, 0.42, night)
 	env.adjustment_enabled = true
-	env.adjustment_brightness = lerpf(1.0, 0.85, night)
-	env.adjustment_saturation = lerpf(1.0, 0.72, night)
+	env.adjustment_brightness = lerpf(0.95, 0.85, night)
+	env.adjustment_saturation = lerpf(0.92, 0.72, night)
 	env.adjustment_contrast = lerpf(1.0, 1.08, night)
 	env.fog_light_color = (s["bot"] as Color).lerp(Color(0.06, 0.14, 0.16), 0.4 + 0.5 * night)
 	env.fog_density = lerpf(0.012, 0.035, night)
@@ -688,14 +713,17 @@ func _build_sky() -> void:
 	sky_rect.texture = gt
 	sky_rect.stretch_mode = TextureRect.STRETCH_SCALE
 	sky_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	sky_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE   # 하늘이 터치를 먹지 않게 (집·바닥 터치가 안 되던 원인)
 	back.add_child(sky_rect)
 	star_layer = Control.new()
 	star_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	star_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	back.add_child(star_layer)
 	for i in 40:
 		var s := ColorRect.new()
 		s.size = Vector2(3, 3)
 		s.color = Color("#fff8dc")
+		s.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		star_layer.add_child(s)
 		stars.append([s, randf(), randf() * 0.55, randf() * 9.0])
 	_update_sky(0.0)
@@ -773,7 +801,7 @@ func _load_floor() -> bool:
 
 func _follow_transform() -> Transform3D:
 	var dir := Vector3(0, 0, 1).rotated(Vector3.RIGHT, pitch).rotated(Vector3.UP, yaw)
-	var look := pivot + Vector3(0, 0.35, 0)
+	var look := pivot + Vector3(0, -0.6 if not (extra and extra.inside) else 0.35, 0)
 	return Transform3D(Basis(), look + dir * zoom).looking_at(look, Vector3.UP)
 
 
@@ -781,13 +809,20 @@ func _update_camera() -> void:
 	if sitting or cam_busy:
 		return
 	cam.global_transform = _follow_transform()
-	cam.fov = fov
+	cam.fov = _vfov()
+
+
+## 세로 화면에서도 가로로 보이는 범위가 같게 (가로 시야 20도 기준)
+func _vfov() -> float:
+	var vs := get_viewport().get_visible_rect().size
+	var asp := vs.x / maxf(1.0, vs.y)
+	return clampf(rad_to_deg(2.0 * atan(tan(deg_to_rad(20.0) / 2.0) / asp)), 25.0, 60.0)
 
 
 func _pan_by(delta_px: Vector2) -> void:
 	follow = false
 	var vp_h := get_viewport().get_visible_rect().size.y
-	var per_px := 2.0 * zoom * tan(deg_to_rad(fov) * 0.5) / vp_h
+	var per_px := 2.0 * zoom * tan(deg_to_rad(_vfov()) * 0.5) / vp_h
 	var right := cam.global_transform.basis.x
 	right.y = 0
 	right = right.normalized()
@@ -870,7 +905,7 @@ func refresh_names() -> void:
 	if name_label:
 		name_label.text = str(Save.home().get("name", "몰랑이네"))
 	if town_label:
-		town_label.text = "크리스마스 마을 · 집 %d채" % int(Save.home()["no"])
+		town_label.text = "크리스마스 마을" + ("" if int(Save.home()["no"]) <= 1 else " · %d번째 집" % int(Save.home()["no"]))
 
 
 ## 집을 가로지르면 집 모서리를 돌아서 가는 길
@@ -927,6 +962,8 @@ func _walk_to(p: Vector3) -> void:
 
 
 func _process(delta: float) -> void:
+	if input_guard > 0:
+		input_guard -= delta
 	var now := Time.get_ticks_msec() / 1000.0
 	_update_sky(now)
 	if Engine.get_process_frames() % 30 == 0:
@@ -947,12 +984,14 @@ func _process(delta: float) -> void:
 	hud_t -= delta
 	if hud_t <= 0 and jelly_btn:
 		hud_t = 1.0
-		jelly_btn.text = "● %s" % _comma(int(Save.d.get("jelly", 0)))
+		jelly_btn.text = _comma(int(Save.d.get("jelly", 0)))
 		var ps := float(Save.d.get("play_sec", 0.0))
 		var left := 30 - int(ps / 60.0) % 30
 		var rdy: int = Save.orn_ready()
 		var hm := "%d시간 %d분" % [int(ps / 3600.0), int(ps / 60.0) % 60] if ps >= 3600 else "%d분" % int(ps / 60.0)
-		play_label.text = "플레이 %s\n" % hm + ("오너먼트 %d개 받을 수 있어요" % rdy if rdy > 0 else "다음 오너먼트까지 %d분" % left)
+		play_label.text = "플레이  %s   |   " % hm + ("오너먼트 %d개 받을 수 있어요" % rdy if rdy > 0 else "오너먼트까지  %d분" % left)
+		if lofi_root and lofi_root.visible:
+			_lofi_paint()
 	if toast_t > 0:
 		toast_t -= delta
 		toast_label.modulate.a = clampf(toast_t * 2.0, 0, 1)
@@ -1007,7 +1046,7 @@ func _stand() -> void:
 	cam_busy = true
 	var tw := create_tween().set_parallel(true).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	tw.tween_property(cam, "global_transform", _follow_transform(), CAM_TWEEN)
-	tw.tween_property(cam, "fov", fov, CAM_TWEEN)
+	tw.tween_property(cam, "fov", _vfov(), CAM_TWEEN)
 	tw.chain().tween_callback(func(): cam_busy = false)
 	follow = true
 	_refresh_ui()
@@ -1016,6 +1055,8 @@ func _stand() -> void:
 # ───────────────────────── 입력 ─────────────────────────
 
 func _unhandled_input(e: InputEvent) -> void:
+	if input_guard > 0:
+		return
 	if e is InputEventMouseButton and e.pressed:
 		if sitting:
 			return
@@ -1081,6 +1122,9 @@ func _do_gesture() -> void:
 
 
 func _over_ui(pos: Vector2) -> bool:
+	# 창(시트·상점·상자)이 떠 있으면 뒤의 세상은 누를 수 없음
+	if (extra and extra.sheet != null and is_instance_valid(extra.sheet)) or shop_panel != null:
+		return true
 	for c in hud_blocks:
 		if c.is_visible_in_tree() and c.get_global_rect().has_point(pos):
 			return true
@@ -1122,8 +1166,26 @@ func _on_tap(pos: Vector2) -> void:
 		if p == null:
 			return
 		var c := Vector2i(roundi(p.x), roundi(p.z))
-		if floor_map.has(c) and block_files.size() > 0 and floor_map[c] != block_files[selected]:
-			_swap_floor(c, block_files[selected])
+		if not floor_map.has(c) or pal_files.is_empty():
+			return
+		var want: String = pal_files[clampi(selected, 0, pal_files.size() - 1)]
+		if land_set.has(c):
+			if floor_map[c] != want:
+				_swap_floor(c, want)
+		elif _claimable(c):
+			var h := Save.home()
+			if int(h["land_free"]) > 0:
+				h["land_free"] = int(h["land_free"]) - 1
+				land_set[c] = true
+				(h["land_own"] as Array).append("%d,%d" % [c.x, c.y])
+				Save.save()
+				_swap_floor(c, want)
+				_land_marks()
+				_refresh_ui()
+			else:
+				_toast("땅이 모자라요 · 「블록 뽑기」로 새 블록을 얻으면 땅이 넓어져요")
+		else:
+			_toast("내 땅 바로 옆 칸만 넓힐 수 있어요")
 		return
 	var seat := _seat_at(pos)
 	if seat == null and extra and extra.tap(pos):
@@ -1143,33 +1205,39 @@ func _on_tap(pos: Vector2) -> void:
 # ───────────────────────── HUD (웹 버전 도트 UI) ─────────────────────────
 
 func _px_style(bg: Color) -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = bg
-	sb.border_color = C_INK
-	sb.set_border_width_all(3)
-	sb.shadow_color = Color(0.165, 0.145, 0.2, 0.35)
-	sb.shadow_size = 1
-	sb.shadow_offset = Vector2(4, 4)
-	sb.content_margin_left = 12
-	sb.content_margin_right = 12
-	sb.content_margin_top = 8
-	sb.content_margin_bottom = 8
-	return sb
+	if bg == C_YELLOW:
+		return Mol.primary_solid(28)
+	if bg == C_VIOLET:
+		return Mol.sb(Color(0.725, 0.635, 1.0, 0.16), Color(0.725, 0.635, 1.0, 0.45), 28, Vector2(24, 14))
+	if bg == C_CREAM:
+		return Mol.sb(C_CREAM, Color(0.494, 0.941, 0.784, 0.16), 28, Vector2(24, 14))
+	return Mol.sb(bg, Color(0.494, 0.941, 0.784, 0.16), 28, Vector2(24, 14))
 
 
 func _px_btn(text: String, bg := C_CREAM, size := 26) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.focus_mode = Control.FOCUS_NONE
+	b.add_theme_font_override("font", Mol.font("b" if bg == C_YELLOW else "m"))
 	b.add_theme_font_size_override("font_size", size)
-	for st in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
-		b.add_theme_color_override(st, C_INK)
-	b.add_theme_stylebox_override("normal", _px_style(bg))
-	b.add_theme_stylebox_override("hover", _px_style(bg))
-	b.add_theme_stylebox_override("focus", _px_style(bg))
-	var pr := _px_style(bg.darkened(0.08))
-	pr.shadow_offset = Vector2(2, 2)
+	var fg := Color("#3a2408") if bg == C_YELLOW else (Color("#E4DBFF") if bg == C_VIOLET else C_INK)
+	for st in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+		b.add_theme_color_override(st, fg)
+	b.add_theme_color_override("font_disabled_color", Color(fg, 0.35))
+	var st0 := _px_style(Mol.sb(Color(0.094, 0.231, 0.231, 0.8)).bg_color if bg == C_CREAM else bg)
+	if bg == C_CREAM:
+		st0 = Mol.secondary()
+	b.add_theme_stylebox_override("normal", st0)
+	b.add_theme_stylebox_override("hover", st0)
+	b.add_theme_stylebox_override("focus", st0)
+	var pr := st0.duplicate() as StyleBoxFlat
+	pr.bg_color = pr.bg_color.lightened(0.15)
 	b.add_theme_stylebox_override("pressed", pr)
+	b.add_theme_stylebox_override("hover_pressed", pr)
+	var ds := st0.duplicate() as StyleBoxFlat
+	ds.bg_color.a *= 0.45
+	b.add_theme_stylebox_override("disabled", ds)
+	b.custom_minimum_size.y = maxf(b.custom_minimum_size.y, 76)
 	hud_blocks.append(b)
 	return b
 
@@ -1177,12 +1245,14 @@ func _px_btn(text: String, bg := C_CREAM, size := 26) -> Button:
 func _label(text: String, size: int, col: Color, outline := true) -> Label:
 	var l := Label.new()
 	l.text = text
+	l.add_theme_font_override("font", Mol.font("b" if size >= 28 else "m"))
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", col)
 	if outline:
-		l.add_theme_color_override("font_shadow_color", C_INK)
-		l.add_theme_constant_override("shadow_offset_x", 2)
+		l.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.55))
+		l.add_theme_constant_override("shadow_offset_x", 0)
 		l.add_theme_constant_override("shadow_offset_y", 2)
+		l.add_theme_constant_override("shadow_outline_size", 6)
 	return l
 
 
@@ -1215,146 +1285,250 @@ func _build_hud() -> void:
 	ui_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(ui_root)
 
-	# 왼쪽 위: 프로필 카드 + 함께한 날·플레이 시간
-	var tl := VBoxContainer.new()
-	tl.position = Vector2(24, 28)
-	tl.add_theme_constant_override("separation", 10)
+	# ── UI 리뉴얼 v4 홈: 바깥 브래킷(메인만) · 위 프로필/젤리 · 상태 알약 · 아래 이어하기/무한/틀어 두기/독
+	var day := Mol.is_day()
+	hud_day = day
+	var txt := Mol.DAY_TEXT if day else Mol.TEXT
+	var sub := Mol.DAY_TEXT_SUB if day else Mol.TEXT_SUB
+	var frame := Mol.Brackets.new()
+	if day:
+		frame.col = Mol.DAY_LINE
+	ui_root.add_child(frame)
+	hud_groups.append(frame)
+
+	# 위: 프로필 (누르면 설정)
+	var tl := Button.new()
+	tl.flat = true
+	tl.focus_mode = Control.FOCUS_NONE
+	tl.position = Vector2(76, 84)
+	tl.size = Vector2(380, 100)
+	tl.pressed.connect(func(): extra.open_settings())
+	var tls := Mol.sb(Color(1, 1, 1, 0.82) if day else Color(0.031, 0.094, 0.106, 0.55), Mol.DAY_PANEL_LINE if day else Color(0.494, 0.941, 0.784, 0.14), 32, Vector2(10, 6))
+	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
+		tl.add_theme_stylebox_override(k, tls)
+	tl.flat = false
+	tl.position = Vector2(64, 80)
+	tl.size = Vector2(340, 108)
 	ui_root.add_child(tl)
 	hud_groups.append(tl)
-	var prof := _px_btn("", C_CREAM)
-	prof.custom_minimum_size = Vector2(340, 100)
-	prof.pressed.connect(func(): extra.open_settings())
-	tl.add_child(prof)
+	hud_blocks.append(tl)
 	var ph := HBoxContainer.new()
-	ph.add_theme_constant_override("separation", 14)
+	ph.add_theme_constant_override("separation", 20)
 	ph.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ph.position = Vector2(14, 10)
-	prof.add_child(ph)
+	ph.position = Vector2(10, 10)
+	tl.add_child(ph)
 	var av := Panel.new()
-	av.custom_minimum_size = Vector2(76, 76)
-	var avs := StyleBoxFlat.new()
-	avs.bg_color = Color("#bfe3ff")
-	avs.border_color = C_INK
-	avs.set_border_width_all(3)
-	av.add_theme_stylebox_override("panel", avs)
+	av.custom_minimum_size = Vector2(88, 88)
+	av.add_theme_stylebox_override("panel", Mol.sb(Color(1, 1, 1, 0.6) if day else Color(0.094, 0.231, 0.231, 0.75), Mol.DAY_LINE if day else Color(0.494, 0.941, 0.784, 0.3), 24, Vector2.ZERO))
 	av.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ph.add_child(av)
 	var face := ColorRect.new()
 	face.color = Color.WHITE
-	face.position = Vector2(14, 18)
-	face.size = Vector2(52, 44)
+	face.position = Vector2(20, 30)
+	face.size = Vector2(48, 30)
 	face.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	av.add_child(face)
-	for ex in [24, 46]:
+	for ex in [30, 52]:
 		var e := ColorRect.new()
-		e.color = C_INK
-		e.position = Vector2(ex, 32)
-		e.size = Vector2(6, 8)
+		e.color = Color("#2a2533")
+		e.position = Vector2(ex, 40)
+		e.size = Vector2(6, 6)
 		e.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		av.add_child(e)
+	for bx in [24, 58]:
+		var bl0 := ColorRect.new()
+		bl0.color = Color("#f7b7c2")
+		bl0.position = Vector2(bx, 50)
+		bl0.size = Vector2(6, 4)
+		bl0.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		av.add_child(bl0)
 	var pv := VBoxContainer.new()
+	pv.alignment = BoxContainer.ALIGNMENT_CENTER
+	pv.add_theme_constant_override("separation", 0)
 	pv.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ph.add_child(pv)
-	name_label = _label(str(Save.home().get("name", "몰랑이네")), 30, C_INK, false)
+	name_label = Mol.lbl(str(Save.home().get("name", "몰랑이네")), 36, txt, "b")
 	pv.add_child(name_label)
-	town_label = _label("크리스마스 마을 · 집 %d채" % int(Save.home()["no"]), 19, C_SUB, false)
+	town_label = Mol.lbl("크리스마스 마을", 26, sub, "r")
 	pv.add_child(town_label)
-	pet_label = _label("", 22, Color.WHITE)
-	tl.add_child(pet_label)
-	play_label = _label("", 22, Color.WHITE)
-	tl.add_child(play_label)
 
-	# 오른쪽 위: 젤리 바 + 공방 + 아이콘 버튼
+	# 위 오른쪽: 젤리 알약 (누르면 상점) + 공방
 	var tr := VBoxContainer.new()
 	tr.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	tr.position = Vector2(-280, 28)
-	tr.add_theme_constant_override("separation", 12)
-	tr.alignment = BoxContainer.ALIGNMENT_END
+	tr.position = Vector2(-80 - 260, 98)
+	tr.size = Vector2(260, 0)
+	tr.add_theme_constant_override("separation", 6)
 	ui_root.add_child(tr)
 	hud_groups.append(tr)
-	var jbar := HBoxContainer.new()
-	jbar.add_theme_constant_override("separation", 0)
-	jbar.alignment = BoxContainer.ALIGNMENT_END
-	tr.add_child(jbar)
-	var jchip := _px_btn("● %s" % str(Save.d.get("jelly", 0)), C_CREAM, 30)
+	var jchip := Button.new()
+	jchip.focus_mode = Control.FOCUS_NONE
+	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
+		jchip.add_theme_stylebox_override(k, Mol.sb(Color(1, 1, 1, 0.82) if day else Color(0.031, 0.094, 0.106, 0.7), Mol.DAY_LINE if day else Color(0.494, 0.941, 0.784, 0.28), 999, Vector2(28, 12)))
+	jchip.custom_minimum_size = Vector2(260, 88)
+	jchip.add_theme_font_override("font", Mol.font("num"))
+	jchip.add_theme_font_size_override("font_size", 36)
+	for k in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+		jchip.add_theme_color_override(k, txt)
+	jchip.icon = _jelly_icon()
+	jchip.add_theme_constant_override("h_separation", 14)
+	jchip.text = _comma(int(Save.d.get("jelly", 0)))
+	jchip.pressed.connect(_open_shop)
 	jelly_btn = jchip
-	jchip.add_theme_color_override("font_color", C_INK)
-	jchip.custom_minimum_size = Vector2(176, 60)
-	jchip.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	jchip.pressed.connect(func(): _toast("젤리는 스테이지와 무한 모드에서 모아요"))
-	jbar.add_child(jchip)
-	var plus := _px_btn("+", C_YELLOW, 32)
-	plus.custom_minimum_size = Vector2(60, 60)
-	plus.pressed.connect(_open_shop)
-	jbar.add_child(plus)
-	var work := _label("공방 +%s/분" % str(snappedf(Save.work_rate(), 0.1)), 22, C_YELLOW, false)
+	tr.add_child(jchip)
+	hud_blocks.append(jchip)
+	var work := Mol.lbl("공방 +%s/분" % str(snappedf(Save.work_rate(), 0.1)), 22, Mol.DAY_PRIMARY_TEXT if day else Mol.AMBER, "m")
 	work_label = work
-	work.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	work.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	tr.add_child(work)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 10)
-	row.alignment = BoxContainer.ALIGNMENT_END
-	tr.add_child(row)
-	for t in ["도감", "상점", "음악"]:
-		var b := _px_btn(t, C_CREAM, 22)
-		b.custom_minimum_size = Vector2(78, 78)
-		var tt: String = t
-		if t == "상점":
-			b.pressed.connect(_open_shop)
-		elif t == "도감":
-			b.pressed.connect(func(): extra.open_book("in" if extra.inside else "out"))
-		else:
-			b.pressed.connect(func(): extra.open_music())
-		row.add_child(b)
 
-	# 가운데 안내
-	hint = _label("바닥을 누르면 걸어가요 · 의자를 누르면 앉아요", 24, Color.WHITE)
-	hint.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	hint.position = Vector2(-280, 360)
-	ui_root.add_child(hint)
-	hud_groups.append(hint)
-
-	# 왼쪽 아래: 꾸미기 · 땅 편집
-	var bl := VBoxContainer.new()
-	bl.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	bl.position = Vector2(24, -190)
-	bl.add_theme_constant_override("separation", 16)
-	ui_root.add_child(bl)
-	hud_groups.append(bl)
-	out_btn = _px_btn("← 밖으로", C_CREAM)
+	# 상태 알약 (하늘 위 글씨는 반투명 바탕) + 점 달린 구분선
+	var mid := VBoxContainer.new()
+	mid.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	mid.position = Vector2(0, 226)
+	mid.add_theme_constant_override("separation", 12)
+	mid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_root.add_child(mid)
+	hud_groups.append(mid)
+	var gl := Mol.GradLine.new(Mol.DAY_LINE if day else Color(0.494, 0.941, 0.784, 0.4), true)
+	gl.custom_minimum_size = Vector2(560, 14)
+	gl.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	mid.add_child(gl)
+	var pill_sb := Mol.sb(Color(1, 1, 1, 0.82) if day else Color(0, 0, 0, 0.55), Mol.DAY_PANEL_LINE if day else Color(0.494, 0.941, 0.784, 0.18), 999, Vector2(32, 12))
+	play_label = Mol.lbl("", 28, txt, "m")
+	play_label.add_theme_stylebox_override("normal", pill_sb)
+	play_label.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	mid.add_child(play_label)
+	pet_label = Mol.lbl("", 24, sub, "m")
+	pet_label.add_theme_stylebox_override("normal", pill_sb)
+	pet_label.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	mid.add_child(pet_label)
+	hint = Mol.lbl("", 24, sub, "r")
+	hint.add_theme_stylebox_override("normal", pill_sb)
+	hint.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	mid.add_child(hint)
+	# 집 안: 밖으로
+	out_btn = Mol.btn("← 밖으로", "sec", 26, day)
+	out_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	out_btn.custom_minimum_size = Vector2(220, 80)
 	out_btn.pressed.connect(func(): extra.leave())
-	bl.add_child(out_btn)
-	var deco := _px_btn("집 밖 꾸미기", C_VIOLET)
-	deco.pressed.connect(func(): extra.open_deco())
-	bl.add_child(deco)
-	deco_btn = deco
-	edit_btn = _px_btn("땅 편집", C_CREAM)
-	edit_btn.pressed.connect(func():
-		if extra.inside:
-			extra.start_floor_edit()
-		else:
-			_set_edit(true))
-	bl.add_child(edit_btn)
+	mid.add_child(out_btn)
+	hud_blocks.append(out_btn)
+	# 예전 버튼(안 보임, 다른 코드 호환)
+	deco_btn = Button.new()
+	edit_btn = Button.new()
 
-	# 오른쪽 아래: 무한 모드 · 스테이지
-	var br := VBoxContainer.new()
-	br.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	br.position = Vector2(-360, -250)
-	br.add_theme_constant_override("separation", 18)
-	ui_root.add_child(br)
-	hud_groups.append(br)
+	# 아래 묶음
+	var bot := VBoxContainer.new()
+	bot.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	bot.offset_left = 56
+	bot.offset_right = -56
+	bot.offset_bottom = -96
+	bot.offset_top = -96 - 520
+	bot.alignment = BoxContainer.ALIGNMENT_END
+	bot.add_theme_constant_override("separation", 16)
+	bot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_root.add_child(bot)
+	hud_groups.append(bot)
 	var prog := int(Save.d.get("prog", 0))
-	var et := roundi(550 + (prog - 20) * 450.0 / 80.0) if prog >= 20 else 300
-	var endless := _px_btn("무한 모드\n던지기 %d · 최고 %s · 보상 %d/%d" % [et, _comma(int(Save.d.get("best", 0))), Save.endless_paid_left(), Save.ENDLESS_PAID], C_CREAM, 24)
-	endless.custom_minimum_size = Vector2(330, 100)
-	endless.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	var cur := mini(prog, 199)
+	var cont := Button.new()
+	cont.focus_mode = Control.FOCUS_NONE
+	var csb := Mol.primary(32)
+	csb.bg_color = Color(1.0, 0.92, 0.78, 0.92) if day else Color(0.17, 0.15, 0.1, 0.88)
+	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
+		cont.add_theme_stylebox_override(k, csb)
+	cont.custom_minimum_size.y = 152
+	cont.pressed.connect(func(): _go_game("stage:%d" % cur))
+	bot.add_child(cont)
+	hud_blocks.append(cont)
+	var crow := HBoxContainer.new()
+	crow.set_anchors_preset(Control.PRESET_FULL_RECT)
+	crow.offset_left = 40
+	crow.offset_right = -40
+	crow.add_theme_constant_override("separation", 24)
+	crow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cont.add_child(crow)
+	var ccol := VBoxContainer.new()
+	ccol.alignment = BoxContainer.ALIGNMENT_CENTER
+	ccol.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ccol.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	crow.add_child(ccol)
+	var amber := Mol.DAY_PRIMARY_TEXT if day else Mol.AMBER
+	ccol.add_child(Mol.lbl("이어하기", 44, amber, "b"))
+	var stg: Array = Save.data.get("stages", [])
+	var gtxt := ""
+	if cur < stg.size():
+		var st: Dictionary = stg[cur]
+		match str(st["goal"]):
+			"tier": gtxt = "%s 만들기" % _num_text(int(st["t"]))
+			"score": gtxt = "점수 %s" % _comma(int(st["v"]))
+			"up": gtxt = "위로 %d번 합치기" % int(st["v"])
+			_: gtxt = "대기줄에서 %s" % _num_text(int(st["t"]))
+		if cur >= 24 and (cur + 1) % 5 == 0:
+			gtxt += " · 고비 판"
+	ccol.add_child(Mol.lbl(gtxt, 26, Color(amber, 0.8), "r"))
+	var dv := Mol.DashLine.new(Color(amber, 0.45), true)
+	dv.custom_minimum_size = Vector2(4, 100)
+	dv.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	crow.add_child(dv)
+	var scol := VBoxContainer.new()
+	scol.alignment = BoxContainer.ALIGNMENT_CENTER
+	scol.add_theme_constant_override("separation", -6)
+	scol.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	crow.add_child(scol)
+	var stl := Mol.lbl("STAGE", 20, Color(amber, 0.85), "num_m")
+	stl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	scol.add_child(stl)
+	var snl := Mol.lbl(str(cur + 1), 72, amber, "num")
+	snl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	scol.add_child(snl)
+	var row2 := HBoxContainer.new()
+	row2.add_theme_constant_override("separation", 16)
+	bot.add_child(row2)
+	var endless := Mol.btn("무한 모드 · 보상 %d판" % Save.endless_paid_left(), "sec", 28, day)
+	endless.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	endless.size_flags_stretch_ratio = 1.6
+	endless.custom_minimum_size.y = 100
 	endless.pressed.connect(func(): _go_game("endless"))
-	br.add_child(endless)
-	var stage := _px_btn("스테이지\n%d / 200 클리어" % prog, C_YELLOW, 28)
-	stage.custom_minimum_size = Vector2(300, 100)
-	stage.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	stage.pressed.connect(func(): _go_game("menu"))
-	br.add_child(stage)
+	row2.add_child(endless)
+	hud_blocks.append(endless)
+	var lofi := Mol.btn("틀어 두기", "sec", 28, day)
+	lofi.icon = Mol.icon("lofi_mode", day)
+	lofi.expand_icon = false
+	lofi.add_theme_constant_override("icon_max_width", 44)
+	lofi.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lofi.custom_minimum_size.y = 100
+	lofi.pressed.connect(_lofi_on)
+	row2.add_child(lofi)
+	hud_blocks.append(lofi)
+	var mrow := HBoxContainer.new()
+	mrow.add_theme_constant_override("separation", 18)
+	mrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bot.add_child(mrow)
+	for k in 3:
+		if k == 1:
+			var ml := Mol.lbl("MENU", 19, sub, "num_m")
+			mrow.add_child(ml)
+		else:
+			var g := Mol.GradLine.new(Mol.DAY_LINE if day else Color(0.494, 0.941, 0.784, 0.35))
+			g.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			g.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			mrow.add_child(g)
+	var dock := HBoxContainer.new()
+	dock.add_theme_constant_override("separation", 16)
+	bot.add_child(dock)
+	for d in [["book", "도감"], ["shop", "상점"], ["decorate", "꾸미기"], ["music", "음악"]]:
+		var b := Mol.icon_btn(d[0], d[1], day, 132)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		match d[0]:
+			"book": b.pressed.connect(func(): extra.open_book("in" if extra.inside else "out"))
+			"shop": b.pressed.connect(_open_shop)
+			"decorate": b.pressed.connect(func(): extra.open_deco())
+			"music": b.pressed.connect(func(): extra.open_music())
+		dock.add_child(b)
+		hud_blocks.append(b)
+
+	_build_lofi()
 
 	# 앉아 있을 때: 일어나기
 	stand_btn = _px_btn("일어나기", C_YELLOW)
@@ -1399,24 +1573,264 @@ func _build_hud() -> void:
 	var pal := HBoxContainer.new()
 	pal.add_theme_constant_override("separation", 12)
 	scroll.add_child(pal)
-	for i in block_files.size():
-		var b := _px_btn(_bname(block_files[i]), C_CREAM, 20)
-		b.custom_minimum_size = Vector2(140, 80)
-		b.toggle_mode = true
-		var sel := _px_style(C_YELLOW)
-		b.add_theme_stylebox_override("pressed", sel)
-		var idx := i
-		b.pressed.connect(func():
-			selected = idx
-			_refresh_ui())
-		pal.add_child(b)
-		palette_buttons.append(b)
+	pal_box = pal
+	_build_palette()
 
 	toast_label = _label("", 26, Color.WHITE)
 	toast_label.set_anchors_preset(Control.PRESET_CENTER)
 	toast_label.position = Vector2(-260, 120)
 	toast_label.modulate.a = 0
 	ui_root.add_child(toast_label)
+
+
+func _num_text(t: int) -> String:
+	var n := 1 << t
+	return _comma(n) if n < 100000 else "%dK" % (n / 1000)
+
+
+## 젤리 아이콘 (분홍 말랑 네모)
+func _jelly_icon() -> ImageTexture:
+	var img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
+	for y in 16:
+		for x in 16:
+			var inside := x >= 1 and x <= 14 and y >= 3 and y <= 13 and not ((x <= 2 or x >= 13) and (y <= 4 or y >= 12))
+			if inside:
+				var c := Color("#FF9DBB")
+				if y <= 5 and x >= 3 and x <= 8:
+					c = Color("#ffd2df")
+				elif y >= 11:
+					c = Color("#e77a9b")
+				img.set_pixel(x, y, c)
+	var t := ImageTexture.create_from_image(img)
+	t.set_size_override(Vector2i(40, 40))
+	return t
+
+
+# ───────────────────────── 틀어 두기 모드 ─────────────────────────
+## UI를 거의 숨기고 곡 이름·진행 막대·함께한 시간·공방 수입만. 화면을 누르면 메뉴가 돌아와요.
+
+class LofiBar extends Control:
+	var frac := 0.0
+	func _draw() -> void:
+		var y := size.y / 2
+		draw_line(Vector2(0, y), Vector2(size.x, y), Color(0.494, 0.941, 0.784, 0.3), 2)
+		draw_line(Vector2(0, y), Vector2(size.x * frac, y), Color("#7EF0C8"), 3)
+		draw_circle(Vector2(size.x * frac, y), 12, Color(0.494, 0.941, 0.784, 0.25))
+		draw_circle(Vector2(size.x * frac, y), 7, Color("#7EF0C8"))
+
+
+func _build_lofi() -> void:
+	lofi_root = Control.new()
+	lofi_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	lofi_root.mouse_filter = Control.MOUSE_FILTER_STOP
+	lofi_root.visible = false
+	lofi_root.gui_input.connect(func(e: InputEvent):
+		if e is InputEventMouseButton and e.pressed:
+			_lofi_off())
+	ui_root.add_child(lofi_root)
+	var top := VBoxContainer.new()
+	top.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	top.offset_left = 120
+	top.offset_right = -120
+	top.offset_top = 150
+	top.add_theme_constant_override("separation", 10)
+	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lofi_root.add_child(top)
+	lofi_song = Mol.lbl("", 40, Mol.TEXT, "b")
+	top.add_child(lofi_song)
+	lofi_sub = Mol.lbl("", 26, Mol.TEXT_SUB, "r")
+	top.add_child(lofi_sub)
+	lofi_bar = LofiBar.new()
+	lofi_bar.custom_minimum_size.y = 30
+	lofi_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	top.add_child(lofi_bar)
+	var tip := Mol.lbl("화면을 누르면 메뉴가 돌아와요", 26, Color(Mol.TEXT_SUB, 0.7), "r")
+	tip.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	tip.position = Vector2(-200, 380)
+	tip.size = Vector2(400, 40)
+	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lofi_root.add_child(tip)
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", Mol.sb(Color(0.031, 0.094, 0.106, 0.7), Color(0.494, 0.941, 0.784, 0.18), 40, Vector2(48, 32)))
+	card.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	card.offset_left = 96
+	card.offset_right = -96
+	card.offset_top = -330
+	card.offset_bottom = -110
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lofi_root.add_child(card)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 30)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(row)
+	var lc := VBoxContainer.new()
+	lc.alignment = BoxContainer.ALIGNMENT_CENTER
+	lc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(lc)
+	lofi_time = Mol.lbl("0:00:00", 60, Mol.TEXT, "num")
+	lc.add_child(lofi_time)
+	lc.add_child(Mol.lbl("함께한 시간", 26, Mol.TEXT_SUB, "r"))
+	var dvv := Mol.DashLine.new(Color(0.494, 0.941, 0.784, 0.3), true)
+	dvv.custom_minimum_size = Vector2(4, 100)
+	dvv.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(dvv)
+	var rc := VBoxContainer.new()
+	rc.alignment = BoxContainer.ALIGNMENT_CENTER
+	rc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(rc)
+	lofi_work = Mol.lbl("", 28, Mol.TEXT_SUB, "m")
+	lofi_work.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	rc.add_child(lofi_work)
+	lofi_orn = Mol.lbl("", 28, Mol.TEXT_SUB, "m")
+	lofi_orn.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	rc.add_child(lofi_orn)
+
+
+func _lofi_on() -> void:
+	for c in hud_groups:
+		c.visible = false
+	lofi_start_jelly = int(Save.d.get("work_total", 0))
+	lofi_root.visible = true
+	if not Bgm.is_on():
+		Bgm.set_on(true)
+	_lofi_paint()
+
+
+func _lofi_off() -> void:
+	lofi_root.visible = false
+	_refresh_ui()
+
+
+func _lofi_paint() -> void:
+	lofi_song.text = "♪ " + Bgm.NAMES[Bgm.cur]
+	lofi_sub.text = "%d / %d곡 · %s" % [Bgm.cur + 1, Bgm.NAMES.size(), "차례대로" if Bgm.seq() else "한 곡 반복"]
+	var st: AudioStream = Bgm.player.stream
+	if st and st.get_length() > 0:
+		lofi_bar.frac = Bgm.player.get_playback_position() / st.get_length()
+		lofi_bar.queue_redraw()
+	var ps := int(float(Save.d.get("play_sec", 0.0)))
+	lofi_time.text = "%d:%02d:%02d" % [ps / 3600, (ps / 60) % 60, ps % 60]
+	lofi_work.text = "공방  +%d" % (int(Save.d.get("work_total", 0)) - lofi_start_jelly)
+	lofi_orn.text = "오너먼트까지  %d분" % (30 - (ps / 60) % 30)
+
+
+## 땅 편집 팔레트: 가진 블록만 + 맨 앞에 「블록 뽑기」
+func _build_palette() -> void:
+	for c in pal_box.get_children():
+		c.queue_free()
+	palette_buttons.clear()
+	var gb := _px_btn("블록 뽑기\n젤리 100", C_VIOLET, 18)
+	gb.custom_minimum_size = Vector2(140, 80)
+	gb.pressed.connect(open_block_box)
+	pal_box.add_child(gb)
+	var own: Dictionary = Save.home().get("blocks_out", {})
+	pal_files = []
+	for f in block_files:
+		if own.has(f):
+			pal_files.append(f)
+	for i in pal_files.size():
+		var b := _px_btn(_bname(pal_files[i]) + ("" if int(own[pal_files[i]]) < 2 else " ×%d" % int(own[pal_files[i]])), C_CREAM, 20)
+		b.custom_minimum_size = Vector2(150, 80)
+		b.toggle_mode = true
+		b.add_theme_stylebox_override("pressed", _px_style(C_YELLOW))
+		var idx := i
+		b.pressed.connect(func():
+			selected = idx
+			_refresh_ui())
+		pal_box.add_child(b)
+		palette_buttons.append(b)
+	selected = clampi(selected, 0, maxi(0, pal_files.size() - 1))
+
+
+## 내 땅: 처음엔 집 둘레 5×6칸만. 블록 뽑기로 새 블록 +6칸, 중복 +2칸 (웹과 같게)
+func _land_init() -> void:
+	var h := Save.home()
+	if not (h.get("land_own") is Array):
+		var own: Array = []
+		for x in range(-2, 3):
+			for z in range(-2, 4):
+				own.append("%d,%d" % [x, z])
+		h["land_own"] = own
+		h["land_free"] = 0
+		var bo := {}
+		for c in own:
+			var parts: PackedStringArray = str(c).split(",")
+			var f = floor_map.get(Vector2i(int(parts[0]), int(parts[1])))
+			if f != null:
+				bo[f] = 1
+		h["blocks_out"] = bo
+		Save.save()
+	if not (h.get("blocks_in") is Dictionary):
+		h["blocks_in"] = {"plank": 1}
+	land_set.clear()
+	for c in h["land_own"]:
+		var parts: PackedStringArray = str(c).split(",")
+		land_set[Vector2i(int(parts[0]), int(parts[1]))] = true
+
+
+func _claimable(c: Vector2i) -> bool:
+	if land_set.has(c) or not floor_map.has(c):
+		return false
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		if land_set.has(c + d):
+			return true
+	return false
+
+
+## 편집 중: 넓힐 수 있는 칸은 민트 테두리, 아직 내 땅이 아닌 칸은 어둡게
+func _land_marks() -> void:
+	for m in land_marks:
+		m.queue_free()
+	land_marks.clear()
+	if not edit_mode or (extra and extra.inside):
+		return
+	var dark := StandardMaterial3D.new()
+	dark.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	dark.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	dark.albedo_color = Color(0.02, 0.05, 0.06, 0.55)
+	dark.no_depth_test = true
+	var mint := dark.duplicate() as StandardMaterial3D
+	mint.albedo_color = Color(0.49, 0.94, 0.78, 0.35) if int(Save.home().get("land_free", 0)) > 0 else Color(0.49, 0.94, 0.78, 0.12)
+	var pm := PlaneMesh.new()
+	pm.size = Vector2(0.98, 0.98)
+	var pm2 := PlaneMesh.new()
+	pm2.size = Vector2(0.8, 0.8)
+	for c in floor_map:
+		var cell: Vector2i = c
+		if land_set.has(cell):
+			continue
+		var mi := MeshInstance3D.new()
+		var cl := _claimable(cell)
+		mi.mesh = pm2 if cl else pm
+		mi.material_override = mint if cl else dark
+		mi.position = Vector3(cell.x, FLOOR_TOP + 0.06, cell.y)
+		add_child(mi)
+		land_marks.append(mi)
+
+
+## 블록 뽑기 (선물 상자 그대로)
+func open_block_box() -> void:
+	if int(Save.d["jelly"]) < 100:
+		_toast("젤리가 %d개 더 필요해요" % (100 - int(Save.d["jelly"])))
+		return
+	var pick: String = block_files[randi() % block_files.size()]
+	var tex: Texture2D = await extra.node_thumb("blk:" + pick, func(): return _spawn(pick))
+	var pop := func() -> Dictionary:
+		Save.d["jelly"] = int(Save.d["jelly"]) - 100
+		var h := Save.home()
+		var bo: Dictionary = h["blocks_out"]
+		var fresh := not bo.has(pick)
+		bo[pick] = int(bo.get(pick, 0)) + 1
+		h["land_free"] = int(h["land_free"]) + (LAND_NEW if fresh else LAND_DUP)
+		Save.save()
+		return {"tex": tex, "title": _bname(pick), "fresh": fresh,
+			"sub": ("새 블록! 땅을 %d칸 넓힐 수 있어요" % LAND_NEW) if fresh else ("이미 있는 블록이에요 · 땅을 %d칸 넓힐 수 있어요" % LAND_DUP),
+			"more": int(Save.d["jelly"]) >= 100}
+	extra._show_gift("실외 블록 상자 · 잡고 옆으로 돌려 보세요", pop, func():
+		_build_palette()
+		_land_marks()
+		_refresh_ui(), open_block_box)
 
 
 ## 상점 (웹 버전과 같게): 무한 모드용 아이템을 젤리로 사서 가방에
@@ -1439,18 +1853,46 @@ func _open_shop() -> void:
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	desc.custom_minimum_size.x = 580
 	v.add_child(desc)
-	v.add_child(_label("● %s" % _comma(int(Save.d["jelly"])), 26, C_INK, false))
+	var jl := Mol.lbl(" " + _comma(int(Save.d["jelly"])), 30, Mol.TEXT, "num")
+	var jh := HBoxContainer.new()
+	var ji := TextureRect.new()
+	ji.texture = _jelly_icon()
+	ji.custom_minimum_size = Vector2(40, 40)
+	ji.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	ji.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	jh.add_child(ji)
+	jh.add_child(jl)
+	v.add_child(jh)
+	v.add_child(Mol.DashLine.new())
 	var prog := int(Save.d.get("prog", 0))
-	for it in Save.data.get("shop", []):
+	var ICON := {"shake": "item_shake", "undo": "item_undo", "hammer": "item_hammer", "tilt": "tilt_right", "x2": "item_x2star"}
+	var list: Array = Save.data.get("shop", []).duplicate()
+	list.sort_custom(func(a, b): return int(a["at"]) < int(b["at"]))
+	for it in list:
 		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 12)
+		row.add_theme_constant_override("separation", 18)
+		row.custom_minimum_size.y = 96
 		v.add_child(row)
 		var open: bool = prog >= int(it["at"]) - 1
-		var nm := _label((str(it["n"]) + "\n" + str(it["d"]) + " · 가방 %d개" % Save.bag_count(str(it["k"]))) if open else ("???\n%d단계를 깨면 열려요" % (int(it["at"]) - 1)), 20, C_INK if open else C_SUB, false)
-		nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		row.add_child(nm)
+		var ic := TextureRect.new()
+		ic.texture = Mol.icon(ICON.get(str(it["k"]), "shop"))
+		ic.custom_minimum_size = Vector2(64, 64)
+		ic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		ic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		ic.modulate.a = 1.0 if open else 0.35
+		row.add_child(ic)
+		var col := VBoxContainer.new()
+		col.alignment = BoxContainer.ALIGNMENT_CENTER
+		col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(col)
+		col.add_child(Mol.lbl(str(it["n"]), 28, Mol.TEXT if open else Mol.TEXT_SUB, "b"))
+		var d := Mol.lbl((str(it["d"]) + " · 가방 %d개" % Save.bag_count(str(it["k"]))) if open else "무한 모드에서 쓰는 아이템", 22, Mol.TEXT_SUB, "r")
+		d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		col.add_child(d)
 		if open:
-			var b := _px_btn("● %d" % int(it["p"]), C_YELLOW, 22)
+			var b := _px_btn("젤리 %d" % int(it["p"]), C_YELLOW, 24)
+			b.custom_minimum_size = Vector2(150, 76)
 			b.disabled = int(Save.d["jelly"]) < int(it["p"])
 			var item: Dictionary = it
 			b.pressed.connect(func():
@@ -1463,6 +1905,11 @@ func _open_shop() -> void:
 				hud_t = 0
 				_open_shop())
 			row.add_child(b)
+		else:
+			var lk := Mol.lbl("%d단계에 열림" % (int(it["at"]) - 1), 24, Mol.AMBER, "b")
+			lk.add_theme_stylebox_override("normal", Mol.sb(Color(1.0, 0.757, 0.443, 0.12), Color(1.0, 0.757, 0.443, 0.35), 999, Vector2(20, 10)))
+			lk.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			row.add_child(lk)
 	var close := _px_btn("닫기", C_CREAM, 22)
 	close.pressed.connect(func():
 		hud_blocks.erase(shop_panel)
@@ -1474,6 +1921,9 @@ func _open_shop() -> void:
 func _set_edit(on: bool) -> void:
 	edit_mode = on
 	if on:
+		_build_palette()
+	_land_marks.call_deferred()
+	if on:
 		follow = false
 	else:
 		var tw := create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
@@ -1484,7 +1934,7 @@ func _set_edit(on: bool) -> void:
 
 
 func _refresh_ui() -> void:
-	var busy := sitting != null or edit_mode or (extra != null and extra.floor_edit != "")
+	var busy := sitting != null or edit_mode or (extra != null and extra.floor_edit != "") or (lofi_root != null and lofi_root.visible)
 	for c in hud_groups:
 		c.visible = not busy
 	var ins: bool = extra != null and extra.inside
@@ -1496,9 +1946,10 @@ func _refresh_ui() -> void:
 		hint.text = ("트리를 누르면 닦아요 · 의자를 누르면 앉아요" if ins else "바닥을 누르면 걸어가요 · 집을 누르면 들어가요")
 	if pet_label and extra:
 		pet_label.text = extra.pet_line()
+		pet_label.visible = pet_label.text != "" and not (sitting != null or edit_mode)
 	edit_bar.visible = edit_mode and not sitting
 	stand_btn.visible = sitting != null
-	if block_files.size() > 0:
-		edit_info.text = "칸을 누르면 " + _bname(block_files[selected]) + "(으)로 바뀌어요"
+	if pal_files.size() > 0:
+		edit_info.text = "%s · 넓힐 수 있는 땅 %d칸" % [_bname(pal_files[clampi(selected, 0, pal_files.size() - 1)]), int(Save.home().get("land_free", 0))]
 	for i in palette_buttons.size():
 		palette_buttons[i].button_pressed = (i == selected)

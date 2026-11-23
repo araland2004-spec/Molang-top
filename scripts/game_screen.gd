@@ -57,13 +57,22 @@ var acc := 0.0
 var board_scale := 1.0
 
 
+var input_guard := 0.0
+
+
 func _ready() -> void:
-	font_num = load("res://assets/fonts/Poppins-Light.ttf")
-	font_txt = load("res://assets/fonts/NotoSansKR-Light-sub.otf")
-	font_bold = load("res://assets/fonts/NotoSansKR-Bold-sub.otf")
-	var bg := ColorRect.new()
-	bg.color = PAGE
+	# 화면이 바뀔 때 손을 뗀 터치가 새 화면 버튼에 눌리지 않게 잠깐 입력을 막아요
+	get_viewport().gui_disable_input = true
+	get_tree().create_timer(0.35).timeout.connect(func(): get_viewport().gui_disable_input = false)
+	input_guard = 0.35
+	font_num = Mol.font("num")
+	font_txt = Mol.font("r")
+	font_bold = Mol.font("b")
+	var bg := TextureRect.new()
+	bg.texture = _bg_tex()
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.stretch_mode = TextureRect.STRETCH_SCALE
+	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(bg)
 	synth = Synth.new()
@@ -82,7 +91,7 @@ func _ready() -> void:
 	core.prog = int(Save.d["prog"])
 	_build_ui()
 	core.score_changed.connect(func(s): score_lbl.text = GameCore.score_text(s))
-	core.info_changed.connect(func(): info_lbl.text = core.info_text())
+	core.info_changed.connect(_paint_info)
 	core.toast.connect(_toast)
 	core.items_changed.connect(_paint_items)
 	core.finished.connect(_on_finished)
@@ -102,80 +111,110 @@ func _ready() -> void:
 		start_endless()
 
 
-# ───────────────────────── UI 만들기 ─────────────────────────
+# ───────────────────────── UI 만들기 (UI 리뉴얼 v4) ─────────────────────────
 
-func _style(bg: Color, radius := 12) -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = bg
-	sb.set_corner_radius_all(radius)
-	sb.content_margin_left = 14
-	sb.content_margin_right = 14
-	sb.content_margin_top = 8
-	sb.content_margin_bottom = 8
-	return sb
-
-
-func _btn(text: String, bg := BTN, fg := MILK, size := 26) -> Button:
-	var b := Button.new()
-	b.text = text
-	b.focus_mode = Control.FOCUS_NONE
-	b.add_theme_font_override("font", font_txt)
-	b.add_theme_font_size_override("font_size", size)
-	for st in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_disabled_color"]:
-		b.add_theme_color_override(st, fg)
-	b.add_theme_stylebox_override("normal", _style(bg))
-	b.add_theme_stylebox_override("hover", _style(bg))
-	b.add_theme_stylebox_override("focus", _style(bg))
-	b.add_theme_stylebox_override("pressed", _style(bg.lightened(0.12)))
-	b.add_theme_stylebox_override("disabled", _style(bg.darkened(0.3)))
-	return b
+const ITEM_ICON := {"shake": "item_shake", "undo": "item_undo", "hammer": "item_hammer", "tilt": "tilt_right", "x2": "item_x2star"}
+var stage_lbl: Label
+var throws_lbl: Label
+var goal_row: Control
+var goal_name: Label
+var goal_val: Label
+var goal_bar: Control
+var goal_frac := 0.0
+var item_badges := {}
+var card_head: Label
+var card_chips: HBoxContainer
+var card_retry: Button
+var card_links: HBoxContainer
 
 
-func _lbl(text: String, size: int, col := MILK, font: Font = null) -> Label:
-	var l := Label.new()
-	l.text = text
-	l.add_theme_font_override("font", font if font else font_txt)
-	l.add_theme_font_size_override("font_size", size)
-	l.add_theme_color_override("font_color", col)
+func _btn(text: String, _bg := BTN, _fg := MILK, size := 26) -> Button:
+	return Mol.btn(text, "sec", size)
+
+
+func _lbl(text: String, size: int, col := Mol.TEXT, font: Font = null) -> Label:
+	var l := Mol.lbl(text, size, col, "r")
+	if font:
+		l.add_theme_font_override("font", font)
 	return l
 
 
+class GoalBar extends Control:
+	var frac := 0.0
+	func _draw() -> void:
+		var r := Rect2(0, 0, size.x, size.y)
+		draw_rect(r, Color(0.494, 0.941, 0.784, 0.10))
+		var w := size.x * clampf(frac, 0, 1)
+		if w > 0:
+			for k in 8:
+				var t0 := float(k) / 8
+				var c := Color("#4CC6B1").lerp(Color("#7EF0C8"), t0)
+				draw_rect(Rect2(w * t0, 0, w / 8 + 1, size.y), c)
+			draw_rect(Rect2(0, -3, w, size.y + 6), Color(0.494, 0.941, 0.784, 0.12))
+		for k in [1, 2, 3]:
+			var x: float = size.x * k / 4.0
+			draw_line(Vector2(x, -6), Vector2(x, size.y + 6), Color(0.494, 0.941, 0.784, 0.35), 2)
+
+
 func _build_ui() -> void:
-	# 위: 점수·안내·버튼
+	# 위: 점수 + 아이콘 버튼
 	var top := HBoxContainer.new()
 	top.name = "Top"
-	top.position = Vector2(24, 24)
-	top.add_theme_constant_override("separation", 10)
+	top.add_theme_constant_override("separation", 12)
 	add_child(top)
-	var sv := VBoxContainer.new()
-	sv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sv.add_theme_constant_override("separation", -6)
-	top.add_child(sv)
-	score_lbl = _lbl("0", 64, MILK, font_num)
-	sv.add_child(score_lbl)
-	info_lbl = _lbl("", 22, MILK)
-	sv.add_child(info_lbl)
-	var bb := HBoxContainer.new()
-	bb.add_theme_constant_override("separation", 8)
-	top.add_child(bb)
-	mute_btn = _btn("소리 끔" if synth.muted else "소리", BTN, MILK, 22)
+	score_lbl = Mol.lbl("0", 76, Mol.TEXT, "num")
+	score_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_child(score_lbl)
+	mute_btn = Mol.square_icon("sound")
+	mute_btn.modulate.a = 0.4 if synth.muted else 1.0
 	mute_btn.pressed.connect(func():
 		synth.muted = not synth.muted
 		Save.d["muted"] = synth.muted
 		Save.save()
-		mute_btn.text = "소리 끔" if synth.muted else "소리")
-	bb.add_child(mute_btn)
-	var mb := _btn("목록", BTN, MILK, 22)
+		mute_btn.modulate.a = 0.4 if synth.muted else 1.0
+		_toast("효과음 꺼짐" if synth.muted else "효과음 켜짐"))
+	top.add_child(mute_btn)
+	var hb := Mol.square_icon("home")
+	hb.pressed.connect(go_home)
+	top.add_child(hb)
+	var mb := Mol.square_icon("list", true)
 	mb.pressed.connect(func():
 		persist()
 		show_menu())
-	bb.add_child(mb)
-	restart_btn = _btn("새 판", BTN, MILK, 22)
+	top.add_child(mb)
+	restart_btn = Mol.btn("새 판", "sec", 24)     # 단계 목록 안에서 씀
 	restart_btn.pressed.connect(_on_restart)
-	bb.add_child(restart_btn)
-	var hb := _btn("집", BTN, MILK, 22)
-	hb.pressed.connect(go_home)
-	bb.add_child(hb)
+	# 한 줄 정보: 「45단계 · 고비 ‑‑ 던지기 31 남음」
+	var info := HBoxContainer.new()
+	info.name = "Info"
+	info.add_theme_constant_override("separation", 16)
+	add_child(info)
+	stage_lbl = Mol.lbl("", 30, Mol.TEXT_SUB, "m")
+	info.add_child(stage_lbl)
+	var dl := Mol.DashLine.new(Color(0.494, 0.941, 0.784, 0.28))
+	dl.custom_minimum_size = Vector2(56, 4)
+	dl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	info.add_child(dl)
+	throws_lbl = Mol.lbl("", 30, Mol.TEXT_SUB, "m")
+	info.add_child(throws_lbl)
+	info_lbl = Label.new()      # 예전 코드 호환용 (보이지 않음)
+	info_lbl.visible = false
+	add_child(info_lbl)
+	# 목표 막대
+	goal_row = VBoxContainer.new()
+	goal_row.name = "Goal"
+	goal_row.add_theme_constant_override("separation", 10)
+	add_child(goal_row)
+	var gh := HBoxContainer.new()
+	goal_row.add_child(gh)
+	goal_name = Mol.lbl("목표 점수", 26, Mol.TEXT_SUB, "r")
+	goal_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	gh.add_child(goal_name)
+	goal_val = Mol.lbl("", 28, Mol.TEXT, "num")
+	gh.add_child(goal_val)
+	goal_bar = GoalBar.new()
+	goal_bar.custom_minimum_size.y = 18
+	goal_row.add_child(goal_bar)
 
 	# 판
 	board_area = Control.new()
@@ -184,113 +223,163 @@ func _build_ui() -> void:
 	add_child(board_area)
 	board_area.add_child(core)
 
-	# 아래: 아이템
+	# 아래: ◀ · 아이템(아이콘 + 이름 + 개수 배지) · ▶
 	items_box = HBoxContainer.new()
-	items_box.add_theme_constant_override("separation", 10)
+	items_box.add_theme_constant_override("separation", 12)
 	add_child(items_box)
-	tilt_l = _btn("◀", BTN, MILK, 28)
+	tilt_l = Mol.icon_btn("tilt_left", "", false, 148)
 	tilt_l.button_down.connect(func(): core.tilt_btn = -1)
 	tilt_l.button_up.connect(func(): core.tilt_btn = 0)
 	items_box.add_child(tilt_l)
 	for k in ["shake", "undo", "hammer", "tilt", "x2"]:
-		var b := _btn(ITEM_NAMES[k], BTN2, MILK, 22)
+		var b := Mol.icon_btn(ITEM_ICON[k], ITEM_NAMES[k], false, 148)
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var kk: String = k
 		b.pressed.connect(func(): _use_item(kk))
+		var badge := Mol.lbl("1", 24, Color("#3a2408"), "num")
+		badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		badge.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		badge.add_theme_stylebox_override("normal", Mol.sb(Mol.STAR, Color(0, 0, 0, 0), 999, Vector2(6, 0)))
+		badge.custom_minimum_size = Vector2(44, 44)
+		badge.position = Vector2(0, 8)
+		b.add_child(badge)
+		item_badges[k] = badge
+		b.resized.connect(func(): badge.position = Vector2(b.size.x * 0.5 + 14, 8))
 		items_box.add_child(b)
 		item_btns[k] = b
-	tilt_r = _btn("▶", BTN, MILK, 28)
+	tilt_r = Mol.icon_btn("tilt_right", "", false, 148)
 	tilt_r.button_down.connect(func(): core.tilt_btn = 1)
 	tilt_r.button_up.connect(func(): core.tilt_btn = 0)
 	items_box.add_child(tilt_r)
 
-	hint_lbl = _lbl("위에 있는 숫자 하나를 골라\n끌었다 놓으면 그 방향으로 날아가요.\n같은 숫자끼리 닿으면 합쳐져요.\n양쪽 반원이 납작해지면 끝나요.", 24, MILK)
+	hint_lbl = Mol.lbl("위에 있는 숫자 하나를 골라\n끌었다 놓으면 그 방향으로 날아가요.\n같은 숫자끼리 닿으면 합쳐져요.\n양쪽 반원이 납작해지면 끝나요.", 26, Mol.TEXT_SUB, "r")
 	hint_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hint_lbl.visible = false
 	add_child(hint_lbl)
 
-	toast_lbl = _lbl("", 24, MILK)
+	toast_lbl = Mol.lbl("", 26, Mol.TEXT, "m")
 	toast_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	toast_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var tsb := _style(Color(0.1, 0.1, 0.11, 0.9), 22)
-	toast_lbl.add_theme_stylebox_override("normal", tsb)
+	toast_lbl.add_theme_stylebox_override("normal", Mol.sb(Color(0.03, 0.09, 0.1, 0.92), Color(0.494, 0.941, 0.784, 0.22), 999, Vector2(32, 14)))
 	toast_lbl.visible = false
 	add_child(toast_lbl)
 
 	# 단계 시작 배너
 	mission = PanelContainer.new()
-	mission.add_theme_stylebox_override("panel", _style(Color(0.16, 0.16, 0.17, 0.96), 18))
+	mission.add_theme_stylebox_override("panel", Mol.card(36))
 	mission.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	mission.visible = false
 	add_child(mission)
 	var mvb := VBoxContainer.new()
 	mvb.alignment = BoxContainer.ALIGNMENT_CENTER
+	mvb.add_theme_constant_override("separation", 6)
 	mission.add_child(mvb)
 	for i in 3:
-		var l := _lbl("", [24, 34, 20][i], [SOFT, MILK, SOFT][i])
+		var l := Mol.lbl("", [26, 40, 24][i], [Mol.MINT, Mol.TEXT, Mol.TEXT_SUB][i], ["num_m", "b", "r"][i])
 		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		mvb.add_child(l)
 
-	# 결과 카드
-	card = _overlay(Color(0, 0, 0, 0.45))
+	# 결과 카드 (반지름 24, 위 테두리 민트 하이라이트, 점선 구분선, 주 버튼만 발광)
+	card = _overlay(Color(0.01, 0.04, 0.05, 0.72))
 	var cp := PanelContainer.new()
-	cp.add_theme_stylebox_override("panel", _style(PAGE, 26))
-	cp.custom_minimum_size = Vector2(560, 0)
+	cp.add_theme_stylebox_override("panel", Mol.card(48))
+	cp.custom_minimum_size = Vector2(604, 0)
 	cp.set_anchors_preset(Control.PRESET_CENTER)
 	cp.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	cp.grow_vertical = Control.GROW_DIRECTION_BOTH
 	card.add_child(cp)
 	var cv := VBoxContainer.new()
-	cv.add_theme_constant_override("separation", 14)
+	cv.add_theme_constant_override("separation", 18)
 	cp.add_child(cv)
-	card_title = _lbl("", 36)
-	card_stars = _lbl("", 40, Color("#ffd45c"))
-	card_big = _lbl("", 84, MILK, font_num)
-	card_note = _lbl("", 24, SOFT)
-	card_reward = _lbl("", 28, Color("#ff8fb1"), font_bold)
-	for l in [card_title, card_stars, card_big, card_note, card_reward]:
+	var hl := HBoxContainer.new()
+	hl.alignment = BoxContainer.ALIGNMENT_CENTER
+	hl.add_theme_constant_override("separation", 14)
+	cv.add_child(hl)
+	var g1 := Mol.GradLine.new(Color(0.494, 0.941, 0.784, 0.4))
+	g1.custom_minimum_size.x = 100
+	hl.add_child(g1)
+	card_head = Mol.lbl("", 26, Mol.MINT, "num_m")
+	hl.add_child(card_head)
+	var g2 := Mol.GradLine.new(Color(0.494, 0.941, 0.784, 0.4))
+	g2.custom_minimum_size.x = 100
+	hl.add_child(g2)
+	card_title = Mol.lbl("", 44, Mol.TEXT, "b")
+	card_stars = Mol.lbl("", 56, Mol.STAR, "b")
+	card_big = Mol.lbl("", 104, Mol.TEXT, "num")
+	card_note = Mol.lbl("", 26, Mol.TEXT_SUB, "r")
+	for l in [card_title, card_stars, card_big, card_note]:
 		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		l.custom_minimum_size.x = 520
 		cv.add_child(l)
-	card_main = _btn("다시 하기", MILK, INK, 30)
-	card_main.custom_minimum_size.y = 92
+	var dsh := Mol.DashLine.new()
+	cv.add_child(dsh)
+	card_chips = HBoxContainer.new()
+	card_chips.alignment = BoxContainer.ALIGNMENT_CENTER
+	card_chips.add_theme_constant_override("separation", 14)
+	cv.add_child(card_chips)
+	card_reward = Mol.lbl("", 30, Mol.JELLY, "num")   # 칩 안 글자
+	card_main = Mol.btn("다시 하기", "primary", 32)
+	card_main.custom_minimum_size.y = 104
 	card_main.pressed.connect(_on_card_main)
 	cv.add_child(card_main)
-	card_menu = _btn("단계 목록", PAGE, MILK, 26)
-	card_menu.add_theme_stylebox_override("normal", _outline())
+	card_retry = Mol.btn("다시 하기", "sec", 30)
+	card_retry.custom_minimum_size.y = 100
+	card_retry.pressed.connect(_restart_same)
+	cv.add_child(card_retry)
+	card_links = HBoxContainer.new()
+	card_links.alignment = BoxContainer.ALIGNMENT_CENTER
+	cv.add_child(card_links)
+	card_menu = Mol.btn("단계 목록", "ghost", 26)
 	card_menu.pressed.connect(show_menu)
-	cv.add_child(card_menu)
-	var ch := _btn("집으로", PAGE, MILK, 26)
-	ch.add_theme_stylebox_override("normal", _outline())
+	card_links.add_child(card_menu)
+	card_links.add_child(Mol.lbl("·", 26, Mol.TEXT_DIM))
+	var ch := Mol.btn("집으로", "ghost", 26)
 	ch.pressed.connect(go_home)
-	cv.add_child(ch)
+	card_links.add_child(ch)
 
-	# 단계 목록
-	menu = _overlay(Color(0.16, 0.16, 0.17, 0.97))
+	# 단계 목록 (스테이지 지도)
+	menu = _overlay(Color(0.02, 0.07, 0.08, 1.0))
+	var mbg := TextureRect.new()
+	mbg.texture = _bg_tex()
+	mbg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	mbg.stretch_mode = TextureRect.STRETCH_SCALE
+	mbg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	mbg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	menu.add_child(mbg)
 	var sc := ScrollContainer.new()
 	sc.set_anchors_preset(Control.PRESET_FULL_RECT)
-	sc.offset_top = 30
+	sc.offset_top = 40
 	sc.offset_bottom = -30
-	sc.offset_left = 30
-	sc.offset_right = -30
+	sc.offset_left = 40
+	sc.offset_right = -40
 	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	menu.add_child(sc)
 	menu_grid_box = VBoxContainer.new()
 	menu_grid_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	menu_grid_box.add_theme_constant_override("separation", 12)
+	menu_grid_box.add_theme_constant_override("separation", 24)
 	sc.add_child(menu_grid_box)
 
 	# 가이드 카드
-	guide = _overlay(Color(0, 0, 0, 0.55))
+	guide = _overlay(Color(0.01, 0.04, 0.05, 0.72))
+
+
+func _bg_tex() -> GradientTexture2D:
+	var g := Gradient.new()
+	g.set_color(0, Mol.GAME_CENTER)
+	g.add_point(0.55, Mol.GAME_MID)
+	g.set_color(g.get_point_count() - 1, Mol.GAME_EDGE)
+	var t := GradientTexture2D.new()
+	t.gradient = g
+	t.fill = GradientTexture2D.FILL_RADIAL
+	t.fill_from = Vector2(0.5, 0.0)
+	t.fill_to = Vector2(1.1, 1.0)
+	t.width = 64
+	t.height = 128
+	return t
 
 
 func _outline() -> StyleBoxFlat:
-	var sb := _style(PAGE)
-	sb.border_color = Color("#5a5a60")
-	sb.set_border_width_all(2)
-	return sb
+	return Mol.secondary()
 
 
 func _overlay(col: Color) -> Control:
@@ -305,24 +394,66 @@ func _overlay(col: Color) -> Control:
 
 func _layout() -> void:
 	var vs := size
+	var mx := 44.0
 	var top: Control = get_node("Top")
-	top.size = Vector2(vs.x - 48, 0)
-	top.position = Vector2(24, 24)
-	var top_h := 170.0
-	var bottom_h := 120.0
-	var avail := Vector2(vs.x - 48, vs.y - top_h - bottom_h - 30)
+	top.position = Vector2(mx, 40)
+	top.size = Vector2(vs.x - mx * 2, 96)
+	var info: Control = get_node("Info")
+	info.position = Vector2(mx, 132)
+	info.size = Vector2(vs.x - mx * 2, 40)
+	var goal: Control = get_node("Goal")
+	goal.position = Vector2(mx, 190)
+	goal.size = Vector2(vs.x - mx * 2, 60)
+	var top_h := 270.0 if goal_row.visible else 200.0
+	var bottom_h := 200.0 if items_box.visible else 40.0
+	var avail := Vector2(vs.x - mx * 2 - 24, vs.y - top_h - bottom_h - 24)
 	board_scale = minf(avail.x / GameCore.W, avail.y / GameCore.H)
 	var bw := GameCore.W * board_scale
 	var bh := GameCore.H * board_scale
-	board_area.position = Vector2((vs.x - bw) / 2, top_h + (avail.y - bh) / 2)
+	board_area.position = Vector2((vs.x - bw) / 2, top_h + maxf(0, (avail.y - bh) * 0.35))
 	board_area.size = Vector2(bw, bh)
 	core.scale = Vector2.ONE * board_scale
-	items_box.position = Vector2(24, vs.y - bottom_h + 10)
-	items_box.size = Vector2(vs.x - 48, 90)
+	items_box.position = Vector2(mx, vs.y - 180)
+	items_box.size = Vector2(vs.x - mx * 2, 148)
 	hint_lbl.position = board_area.position + Vector2(0, bh * 0.38)
 	hint_lbl.size = Vector2(bw, 0)
-	mission.position = Vector2(vs.x * 0.1, board_area.position.y + 60)
+	mission.position = Vector2(vs.x * 0.1, board_area.position.y + 120)
 	mission.size = Vector2(vs.x * 0.8, 0)
+
+
+## 점수·정보줄·목표 막대 갱신
+func _paint_info() -> void:
+	if core.mode != "stage":
+		stage_lbl.text = "무한 모드"
+		throws_lbl.text = "던지기 %d 남음 · 최고 %s" % [core.throws_left, GameCore.score_text(core.best)]
+		goal_row.visible = false
+	else:
+		var i: int = core.stage_idx
+		var st: Dictionary = core.stages[i]
+		var jump := i >= 24 and (i + 1) % 5 == 0
+		stage_lbl.text = "%d단계%s" % [i + 1, " · 고비" if jump else ""]
+		throws_lbl.text = ("던지기 %d 남음" % core.throws_left) if int(st["throws"]) else "던지기 무제한"
+		goal_row.visible = true
+		match str(st["goal"]):
+			"score":
+				goal_name.text = "목표 점수"
+				goal_val.text = "%s / %s" % [GameCore.score_text(core.score), GameCore.score_text(int(st["v"]))]
+				goal_frac = float(core.score) / maxf(1.0, float(st["v"]))
+			"tier":
+				goal_name.text = "목표 · " + GameCore.num_text(int(st["t"])) + " 만들기"
+				goal_val.text = "%s / %s" % [GameCore.num_text(maxi(0, core.board_tier)), GameCore.num_text(int(st["t"]))]
+				goal_frac = pow(2.0, core.board_tier - int(st["t"]))
+			"up":
+				goal_name.text = "목표 · 대기줄 합치기"
+				goal_val.text = "%d / %d" % [mini(core.up_count, int(st["v"])), int(st["v"])]
+				goal_frac = float(core.up_count) / maxf(1.0, float(st["v"]))
+			_:
+				goal_name.text = "목표 · 대기줄에서 " + GameCore.num_text(int(st["t"]))
+				goal_val.text = "%s / %s" % [GameCore.num_text(maxi(0, core.up_tier)), GameCore.num_text(int(st["t"]))]
+				goal_frac = pow(2.0, core.up_tier - int(st["t"]))
+		goal_bar.frac = goal_frac
+		goal_bar.queue_redraw()
+	_layout()
 
 
 # ───────────────────────── 흐름 ─────────────────────────
@@ -345,6 +476,7 @@ func start_endless(resume := true) -> void:
 		core.new_game()
 	restart_btn.text = "새 판"
 	_close_overlays()
+	_paint_info()
 	hint_lbl.visible = not bool(Save.d["seen_hint"])
 	if not Save.d["guides"].has("endless"):
 		show_guide("endless", func(): pass)
@@ -357,10 +489,15 @@ func start_stage(i: int) -> void:
 	core.new_game()
 	restart_btn.text = "다시"
 	_close_overlays()
+	_paint_info()
 	var st: Dictionary = core.stages[i]
-	if st.get("tip"):
+	var tips: Array = Save.d.get("tips_seen", [])
+	if st.get("tip") and not tips.has(i):
+		# 단계 안내문은 그 단계를 처음 할 때만
 		hint_lbl.text = str(st["tip"]).replace("<br>", "\n")
 		hint_lbl.visible = true
+		tips.append(i)
+		Save.d["tips_seen"] = tips
 	else:
 		hint_lbl.visible = false
 	var g = st.get("guide")
@@ -415,8 +552,8 @@ func _show_mission(i: int) -> void:
 	var st: Dictionary = core.stages[i]
 	var jump := i >= 24 and (i + 1) % 5 == 0
 	var labels := mission.get_child(0).get_children()
-	labels[0].text = "%d단계%s" % [i + 1, " · 고비!" if jump else ""]
-	labels[0].add_theme_color_override("font_color", Color("#ff8fb1") if jump else SOFT)
+	labels[0].text = "STAGE %d%s" % [i + 1, " · 고비" if jump else ""]
+	labels[0].add_theme_color_override("font_color", Mol.VIOLET if jump else Mol.MINT)
 	labels[1].text = core.goal_text(st)
 	var has_items := false
 	for k in core.item_at:
@@ -444,16 +581,20 @@ func _paint_items() -> void:
 		b.visible = open
 		any = any or open
 		var left: int = {"shake": core.shake_left, "undo": core.undo_left, "hammer": core.hammer_left, "tilt": core.tilt_left, "x2": core.x2_left}[k]
-		b.text = "%s %d" % [ITEM_NAMES[k], left]
+		item_badges[k].text = str(left)
+		item_badges[k].visible = left > 0
 		b.disabled = left <= 0 and not (k == "hammer" and core.hammer_armed) and not (k == "x2" and core.x2_armed)
-		var on: bool = (k == "hammer" and core.hammer_armed) or (k == "x2" and core.x2_armed)
-		b.add_theme_stylebox_override("normal", _style(Color("#e2574c") if on else BTN2))
+		var on: bool = (k == "hammer" and core.hammer_armed) or (k == "x2" and core.x2_armed) or (k == "tilt" and core.tilt_t > 0)
+		b.add_theme_stylebox_override("normal", Mol.primary() if on else Mol.secondary())
+		var tl: Label = b.find_child("Text", true, false)
+		if tl:
+			tl.text = ("기울이기 %d초" % ceili(core.tilt_t)) if (k == "tilt" and core.tilt_t > 0) else ITEM_NAMES[k]
 	var tilting: bool = core.tilt_t > 0
 	tilt_l.visible = tilting
 	tilt_r.visible = tilting
-	if tilting:
-		item_btns["tilt"].text = "기울이기 %d초" % ceili(core.tilt_t)
-	items_box.visible = any
+	if items_box.visible != any:
+		items_box.visible = any
+		_layout()
 
 
 func _use_item(k: String) -> void:
@@ -482,6 +623,8 @@ func _use_item(k: String) -> void:
 # ───────────────────────── 입력 ─────────────────────────
 
 func _board_input(e: InputEvent) -> void:
+	if input_guard > 0:
+		return
 	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
 		var lp: Vector2 = e.position / board_scale
 		if e.pressed:
@@ -537,6 +680,8 @@ func _read_tilt() -> void:
 
 
 func _process(delta: float) -> void:
+	if input_guard > 0:
+		input_guard -= delta
 	var dt := minf(0.05, delta)
 	if core.tilt_t > 0:
 		_read_tilt()
@@ -634,21 +779,38 @@ func _stage_clear() -> void:
 	sd[str(i)] = maxi(int(sd.get(str(i), 0)), stars)
 	Save.save()
 	card_stars.text = "★".repeat(stars) + "☆".repeat(3 - stars)
+	card_stars.visible = true
 	var big := GameCore.num_text(int(st["t"])) if st["goal"] == "tier" else GameCore.score_text(core.score)
 	var note := ("던지기 %d번 남기고 성공" % core.throws_left if throws else "점수 " + GameCore.score_text(core.score)) + extra
-	_show_card("모든 단계를 깼어요" if last else "%d단계 클리어" % (i + 1), big, note,
-		("첫 클리어 보상" if first else "다시 깨기 보상") + " 젤리 +%d" % j, "목록으로" if last else "다음 단계", not last)
+	_show_card("모든 단계를 깼어요!" if last else "클리어!", big, note,
+		("첫 클리어 " if first else "다시 깨기 ") + "젤리 +%d" % j, "목록으로" if last else "다음 단계 · %d" % (i + 2), not last)
 	card_act = "menu" if last else "next"
+	card_retry.visible = true
 
 
 func _show_card(title: String, big: String, note: String, reward: String, main: String, with_menu: bool) -> void:
+	if core.mode == "stage":
+		var i: int = core.stage_idx
+		var jump := i >= 24 and (i + 1) % 5 == 0
+		card_head.text = "STAGE %d%s" % [i + 1, " · 고비" if jump else ""]
+	else:
+		card_head.text = "ENDLESS"
 	card_title.text = title
 	card_big.text = big
 	card_note.text = note
-	card_reward.text = reward
-	card_reward.visible = reward != ""
+	card_stars.visible = card_stars.text != ""
+	for c in card_chips.get_children():
+		c.queue_free()
+	if reward != "":
+		var chip := PanelContainer.new()
+		chip.add_theme_stylebox_override("panel", Mol.chip())
+		var cl := Mol.lbl(reward, 26, Mol.JELLY, "b")
+		chip.add_child(cl)
+		card_chips.add_child(chip)
+	card_chips.visible = reward != ""
 	card_main.text = main
-	card_menu.visible = with_menu
+	card_retry.visible = card_act == "next" or main != "다시 하기"
+	card_menu.visible = true
 	card.visible = true
 	var cp: Control = card.get_child(0)
 	cp.reset_size()
@@ -663,51 +825,197 @@ func _on_card_main() -> void:
 
 # ───────────────────────── 단계 목록 ─────────────────────────
 
+var open_chapter := -1
+
+
+func _chapter_name(start: int) -> String:
+	var bk := -1
+	for k in SECTIONS:
+		if int(k) <= start + 4 and int(k) > bk:
+			bk = int(k)
+	var n: String = SECTIONS.get(bk, "기본")
+	var cut := n.find("· ")
+	return n.substr(cut + 2) if cut >= 0 else n
+
+
 func show_menu() -> void:
 	core.over = true
 	dragging = false
 	core.sel = null
 	for c in menu_grid_box.get_children():
 		c.queue_free()
+	var prog := int(Save.d["prog"])
+	var total: int = core.stages.size()
+	var cur := mini(prog, total - 1)
+	if open_chapter < 0:
+		open_chapter = cur / 10
+	# 머리
 	var head := HBoxContainer.new()
 	menu_grid_box.add_child(head)
-	var t := _lbl("스테이지 · 베타 200단계", 34)
+	var t := Mol.lbl("스테이지", 48, Mol.TEXT, "b")
 	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(t)
-	var eb := _btn("무한 모드", MILK, INK, 24)
+	head.add_child(Mol.lbl("%d" % prog, 40, Mol.TEXT, "num"))
+	head.add_child(Mol.lbl(" / %d" % total, 40, Mol.TEXT_SUB, "num_m"))
+	menu_grid_box.add_child(Mol.GradLine.new(Color(0.494, 0.941, 0.784, 0.35), true))
+	# 이어하기 카드 (주 버튼)
+	var st: Dictionary = core.stages[cur]
+	var cont := Button.new()
+	cont.focus_mode = Control.FOCUS_NONE
+	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
+		cont.add_theme_stylebox_override(k, Mol.primary(36))
+	cont.custom_minimum_size.y = 192
+	cont.pressed.connect(func(): start_stage(cur))
+	menu_grid_box.add_child(cont)
+	var ch := HBoxContainer.new()
+	ch.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ch.offset_left = 36
+	ch.offset_right = -36
+	ch.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cont.add_child(ch)
+	var cl := VBoxContainer.new()
+	cl.alignment = BoxContainer.ALIGNMENT_CENTER
+	cl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ch.add_child(cl)
+	cl.add_child(Mol.lbl("이어하기", 26, Color(Mol.AMBER, 0.8), "r"))
+	cl.add_child(Mol.lbl(core.goal_text(st), 36, Mol.AMBER, "b"))
+	var items_txt: Array = []
+	var jump := cur >= 24 and (cur + 1) % 5 == 0
+	if jump:
+		items_txt.append("고비 판")
+	for k in ["shake", "undo", "hammer", "tilt", "x2"]:
+		if cur + 1 >= int(core.item_at.get(k, 9999)):
+			items_txt.append(ITEM_NAMES[k])
+	cl.add_child(Mol.lbl(" · ".join(items_txt) if items_txt.size() else ("던지기 %d번" % int(st["throws"]) if int(st["throws"]) else "던지기 무제한"), 24, Color(Mol.AMBER, 0.75), "r"))
+	var cr := VBoxContainer.new()
+	cr.alignment = BoxContainer.ALIGNMENT_CENTER
+	cr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ch.add_child(cr)
+	var sl := Mol.lbl("STAGE", 20, Color(Mol.AMBER, 0.8), "num_m")
+	sl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	cr.add_child(sl)
+	var nl := Mol.lbl(str(cur + 1), 76, Mol.AMBER, "num")
+	nl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	cr.add_child(nl)
+	# 다른 버튼
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 14)
+	menu_grid_box.add_child(row)
+	var eb := Mol.btn("무한 모드", "sec", 26)
+	eb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	eb.pressed.connect(start_endless)
-	head.add_child(eb)
-	var hb := _btn("집으로", BTN, MILK, 24)
+	row.add_child(eb)
+	if not core.blobs.is_empty() and not card.visible:
+		var rb := Mol.btn("이 판 다시", "sec", 26)
+		rb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		rb.pressed.connect(_restart_same)
+		row.add_child(rb)
+	var hb := Mol.btn("집으로", "sec", 26)
+	hb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hb.pressed.connect(go_home)
-	head.add_child(hb)
+	row.add_child(hb)
+	# 챕터 (10단계씩, 지금 챕터만 펼침) — 위에서부터 최근 챕터
+	var stars: Dictionary = Save.d.get("stars", {})
+	var chapters := ceili(total / 10.0)
+	var top_ch := mini(chapters - 1, cur / 10 + 1)
+	for ci in range(top_ch, -1, -1):
+		var a := ci * 10
+		var b := mini(total, a + 10)
+		var done_n := clampi(prog - a, 0, b - a)
+		var star_n := 0
+		for k in range(a, b):
+			star_n += int(stars.get(str(k), 0))
+		var rowc := HBoxContainer.new()
+		rowc.add_theme_constant_override("separation", 18)
+		menu_grid_box.add_child(rowc)
+		var dot := Control.new()
+		dot.custom_minimum_size = Vector2(28, 0)
+		var is_cur := ci == cur / 10
+		var dot_col: Color = Mol.AMBER if is_cur else (Mol.LINE if done_n == b - a else Color(0.494, 0.941, 0.784, 0.25))
+		dot.draw.connect(func():
+			dot.draw_line(Vector2(14, 0), Vector2(14, dot.size.y), Color(0.494, 0.941, 0.784, 0.25), 2)
+			dot.draw_circle(Vector2(14, 46), 12, dot_col)
+			if is_cur:
+				dot.draw_circle(Vector2(14, 46), 20, Color(Mol.AMBER, 0.2)))
+		rowc.add_child(dot)
+		var panel := PanelContainer.new()
+		panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		panel.add_theme_stylebox_override("panel", Mol.sb(Color(0.03, 0.09, 0.1, 0.7), Color(0.494, 0.941, 0.784, 0.14), 36, Vector2(36, 28)))
+		rowc.add_child(panel)
+		var pv := VBoxContainer.new()
+		pv.add_theme_constant_override("separation", 20)
+		panel.add_child(pv)
+		var hh := Button.new()
+		hh.flat = true
+		hh.focus_mode = Control.FOCUS_NONE
+		hh.custom_minimum_size.y = 40
+		var hrow := HBoxContainer.new()
+		hrow.set_anchors_preset(Control.PRESET_FULL_RECT)
+		hrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hh.add_child(hrow)
+		var expanded := ci == open_chapter
+		var tl := Mol.lbl("%d–%d · %s" % [a + 1, b, _chapter_name(a)], 30, Mol.TEXT if expanded else Mol.TEXT_SUB, "b")
+		tl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tl.clip_text = true
+		hrow.add_child(tl)
+		hrow.add_child(Mol.lbl("%d/%d ★%d%s" % [done_n, b - a, star_n, "" if expanded else " ›"], 26, Mol.TEXT_SUB, "num_m"))
+		var cc := ci
+		hh.pressed.connect(func():
+			open_chapter = cc
+			show_menu())
+		pv.add_child(hh)
+		if not expanded:
+			continue
+		var grid := GridContainer.new()
+		grid.columns = 5
+		grid.add_theme_constant_override("h_separation", 16)
+		grid.add_theme_constant_override("v_separation", 16)
+		pv.add_child(grid)
+		for k in range(a, b):
+			var done := k < prog
+			var now := k == prog
+			var boss := k >= 24 and (k + 1) % 5 == 0
+			var bt := Button.new()
+			bt.focus_mode = Control.FOCUS_NONE
+			bt.text = str(k + 1)
+			bt.add_theme_font_override("font", Mol.font("num"))
+			bt.add_theme_font_size_override("font_size", 30)
+			bt.custom_minimum_size = Vector2(0, 80)
+			bt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			var bg := Color(1.0, 0.757, 0.443) if now else (Color(0.494, 0.941, 0.784, 0.12) if done else Color(0.02, 0.07, 0.08, 0.6))
+			var ln := Mol.VIOLET if boss else Color(0.494, 0.941, 0.784, 0.18)
+			var stl := Mol.sb(bg, ln, 24, Vector2(4, 4), 3 if boss else 2)
+			if now:
+				stl.shadow_color = Color(1.0, 0.757, 0.443, 0.3)
+				stl.shadow_size = 14
+			for sname in ["normal", "hover", "focus", "pressed", "hover_pressed", "disabled"]:
+				bt.add_theme_stylebox_override(sname, stl)
+			var fc := Color("#3a2408") if now else (Mol.MINT if done else Mol.TEXT_DIM)
+			for cn in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_disabled_color", "font_hover_pressed_color"]:
+				bt.add_theme_color_override(cn, fc)
+			bt.disabled = k > prog
+			var idx: int = k
+			bt.pressed.connect(func(): start_stage(idx))
+			grid.add_child(bt)
+		var nd := Mol.DashLine.new()
+		pv.add_child(nd)
+		var nx := ""
+		for kk in ["shake", "undo", "hammer", "tilt", "x2"]:
+			var at := int(core.item_at.get(kk, 9999))
+			if at > b and nx == "":
+				nx = kk
+		var ft := HBoxContainer.new()
+		pv.add_child(ft)
+		var fl := Mol.lbl(("다음 아이템 · " + ITEM_NAMES[nx]) if nx != "" else "아이템을 모두 열었어요", 24, Mol.TEXT_SUB, "r")
+		fl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		ft.add_child(fl)
+		if nx != "":
+			ft.add_child(Mol.lbl("%d단계" % int(core.item_at[nx]), 24, Mol.TEXT, "num"))
 	if OS.has_feature("web"):
-		var ib := _btn("원래 몰랑탑 기록 불러오기", BTN, SOFT, 20)
+		var ib := Mol.btn("원래 몰랑탑 기록 불러오기", "ghost", 22)
 		ib.pressed.connect(_import_web)
 		menu_grid_box.add_child(ib)
-	var prog := int(Save.d["prog"])
-	var grid: GridContainer = null
-	for i in core.stages.size():
-		if SECTIONS.has(i):
-			var s := _lbl(SECTIONS[i], 20, SOFT)
-			menu_grid_box.add_child(s)
-			grid = GridContainer.new()
-			grid.columns = 4
-			grid.add_theme_constant_override("h_separation", 10)
-			grid.add_theme_constant_override("v_separation", 10)
-			grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			menu_grid_box.add_child(grid)
-		var st: Dictionary = core.stages[i]
-		var done := i < prog
-		var jump := i >= 24 and (i + 1) % 5 == 0
-		var bg := Color("#2e4a35") if done else (Color("#4a3540") if jump else BTN)
-		var b := _btn("%d\n%s" % [i + 1, "완료" if done else core.goal_text(st)], bg, MILK, 20)
-		b.custom_minimum_size = Vector2(0, 120)
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		b.disabled = i > prog
-		var idx: int = i
-		b.pressed.connect(func(): start_stage(idx))
-		grid.add_child(b)
 	card.visible = false
 	guide.visible = false
 	hint_lbl.visible = false
@@ -724,8 +1032,8 @@ func show_guide(k: String, done: Callable) -> void:
 	for c in guide.get_children():
 		c.queue_free()
 	var p := PanelContainer.new()
-	p.add_theme_stylebox_override("panel", _style(PAGE, 26))
-	p.custom_minimum_size = Vector2(580, 0)
+	p.add_theme_stylebox_override("panel", Mol.card(48))
+	p.custom_minimum_size = Vector2(604, 0)
 	p.set_anchors_preset(Control.PRESET_CENTER)
 	p.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	p.grow_vertical = Control.GROW_DIRECTION_BOTH
@@ -733,9 +1041,9 @@ func show_guide(k: String, done: Callable) -> void:
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 14)
 	p.add_child(v)
-	var rib := _lbl(str(g.get("rib", "")), 22, Color("#ff8fb1") if not g.get("ob") else Color("#7ab8ff"), font_bold)
+	var rib := Mol.lbl(str(g.get("rib", "")), 24, Mol.JELLY if not g.get("ob") else Mol.MINT, "b")
 	v.add_child(rib)
-	var tt := _lbl(str(g.get("title", "")), 36)
+	var tt := Mol.lbl(str(g.get("title", "")), 40, Mol.TEXT, "b")
 	v.add_child(tt)
 	var tx := _lbl(str(g.get("text", "")), 24, SOFT)
 	tx.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -746,7 +1054,7 @@ func show_guide(k: String, done: Callable) -> void:
 		sl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		sl.custom_minimum_size.x = 540
 		v.add_child(sl)
-	var ok := _btn("해 볼게요!", MILK, INK, 28)
+	var ok := Mol.btn("해 볼게요!", "primary", 30)
 	ok.custom_minimum_size.y = 84
 	ok.pressed.connect(func():
 		var arr: Array = Save.d["guides"]

@@ -28,7 +28,7 @@ window/handheld/orientation=1
 
 [gui]
 
-theme/custom_font="res://assets/fonts/NotoSansKR-Bold-sub.otf"
+theme/custom_font="res://assets/fonts/NotoSansKR-Medium-ui.otf"
 
 [input_devices]
 
