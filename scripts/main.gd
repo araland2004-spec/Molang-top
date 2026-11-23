@@ -188,7 +188,7 @@ func _ready() -> void:
 	_build_hud()
 	synth = Synth.new()
 	add_child(synth)
-	outside_nodes.append_array([land_root, cottage, ham])
+	outside_nodes.append_array([land_root, cottage])     # ham(임시 햄스터)은 펫이 생기면 숨겨서, 집 밖으로 나올 때 다시 보이면 안 돼요
 	var seats_node := get_node_or_null("Seats")
 	if seats_node:
 		outside_nodes.append(seats_node)
@@ -1025,11 +1025,22 @@ func _zoom_to(z: float) -> void:
 	_update_camera()
 
 
+var turn_tw: Tween
+var turn_goal := 0.0
+
+
 func _turn(deg: float) -> void:
-	var tw := create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tw.tween_method(func(v: float):
+	# 도는 중에 또 누르면 돌던 목표에서 이어서 (전엔 반쯤 돈 각도에서 시작해 45° 어긋남)
+	var from := yaw
+	var base := yaw
+	if turn_tw and turn_tw.is_valid() and turn_tw.is_running():
+		turn_tw.kill()
+		base = turn_goal
+	turn_goal = base + deg_to_rad(deg)
+	turn_tw = create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	turn_tw.tween_method(func(v: float):
 		yaw = v
-		_update_camera(), yaw, yaw + deg_to_rad(deg), 0.35)
+		_update_camera(), from, turn_goal, 0.35)
 
 
 # ───────────────────────── 걷기 ─────────────────────────

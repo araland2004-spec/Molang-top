@@ -435,6 +435,14 @@ func open_floor_box(n := 1) -> void:
 		_fb_show(true), func(k := 1):
 		_fb_show(false)
 		open_floor_box(k), func(): _fb_show(false))
+	_preset_x10(n)
+
+
+## 결과 화면의 「10개 더」로 다시 열 때: 새 상자 창도 ×10 을 켜 둠 (전엔 1개만 열렸어요)
+func _preset_x10(n: int) -> void:
+	var g = sheet
+	if n == 10 and g is GiftBox and g.x10_btn and not g.x10_btn.disabled:
+		g.x10_btn.button_pressed = true
 
 
 func _fb_show(repaint: bool) -> void:
@@ -1495,6 +1503,7 @@ func open_box(n := 1, tut_done := Callable()) -> void:
 			tut_done.call()
 		elif not quest_greet():
 			open_book("in" if inside else "out"), open_box)
+	_preset_x10(n)
 
 
 func _show_gift(line: String, pop: Callable, done: Callable, again: Callable, quit := Callable()) -> void:
@@ -2411,7 +2420,7 @@ func say(lines: Array, done: Callable) -> void:
 	var blink := nx.create_tween().set_loops()
 	blink.tween_property(nx, "modulate:a", 0.3, 0.6)
 	blink.tween_property(nx, "modulate:a", 1.0, 0.6)
-	var state := {"i": 0, "tw": null}
+	var state := {"i": 0, "tw": null, "end": false}
 	var show_line := func():
 		tl.text = str(lines[state["i"]])
 		tl.visible_ratio = 0.0
@@ -2424,8 +2433,10 @@ func say(lines: Array, done: Callable) -> void:
 		main.synth_tone(620 + state["i"] * 40, 760 + state["i"] * 40, 0.06, 0.05)
 		_hop(main.player)
 	ov.gui_input.connect(func(e: InputEvent):
-		var tap: bool = (e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT) or (e is InputEventScreenTouch and e.pressed)
-		if not tap:
+		# 터치는 마우스로도 한 번 더 들어오고(emulate_mouse_from_touch), 마우스는 터치로도 들어와서(emulate_touch_from_mouse)
+		# 둘 다 받으면 한 번 누를 때 두 번 넘어가요 → 마우스 버튼만 받음
+		var tap: bool = e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT
+		if not tap or state["end"]:
 			return
 		if tl.visible_ratio < 1.0:
 			if state["tw"]:
@@ -2434,6 +2445,7 @@ func say(lines: Array, done: Callable) -> void:
 			return
 		state["i"] = int(state["i"]) + 1
 		if int(state["i"]) >= lines.size():
+			state["end"] = true
 			if sheet == ov:
 				_close_sheet()
 			done.call()
@@ -3036,7 +3048,12 @@ func quest_intro(i: int) -> void:
 		"stage30":
 			say(["다음은 스테이지 30단계까지!", "깨면 새 바닥 블록을 선물로 줄게요."], func(): pass)
 		"floor1":
-			var pick: String = main.grant_block()
+			# 블록 선물은 한 번만 (「하러 가기」를 누를 때마다 블록·땅 칸이 또 생기던 문제)
+			var pick: String = str(Save.d.get("floor1_block", ""))
+			if pick == "":
+				pick = main.grant_block()
+				Save.d["floor1_block"] = pick
+				Save.save()
 			say(["새 바닥 블록을 받았어요: 「%s」!" % main._bname(pick),
 				"땅 편집에서 블록을 고르고 내 땅 칸을 누르면 바닥이 바뀌어요.",
 				"블록을 받으면 땅도 넓힐 수 있어요 (민트색 칸). 바꿔 볼까요?"], func():

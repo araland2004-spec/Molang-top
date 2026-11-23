@@ -590,6 +590,7 @@ func _notification(what: int) -> void:
 
 
 func go_home() -> void:
+	_flush_clear()
 	persist()
 	get_tree().change_scene_to_file("res://scenes/main.tscn")
 
@@ -797,6 +798,7 @@ func _check_endless_goal() -> void:
 	if got:
 		Save.buzz(30)
 		synth.tone(660, 1320, 0.12, 0.12)
+		persist()       # 받은 아이템 수(got)도 이어 하기 기록에 같이 저장 (웹 새로고침 뒤 같은 목표 보상을 또 받던 문제)
 		Save.save()
 		_paint_items()
 
@@ -935,7 +937,7 @@ func _show_card(title: String, big: String, note: String, reward: String, main: 
 		card_chips.add_child(chip)
 	card_chips.visible = reward != ""
 	card_main.text = main
-	card_retry.visible = card_act == "next" or main != "다시 하기"
+	card_retry.visible = main != "다시 하기"     # card_act 는 이 함수가 끝난 뒤에 정해져서(앞 판 값) 여기서 보면 안 돼요
 	card_menu.visible = true
 	card.visible = true
 	var cp: Control = card.get_child(0)
@@ -965,7 +967,19 @@ func _chapter_name(start: int) -> String:
 	return n.substr(cut + 2) if cut >= 0 else n
 
 
+## 스테이지 목표를 이룬 뒤 클리어 연출(0.8초) 사이에 목록·홈을 누르면 클리어가 사라지던 문제: 그 자리에서 클리어 처리
+func _flush_clear() -> bool:
+	if core and core.mode == "stage" and core.clear_t > 0 and not core.over:
+		core.over = true
+		core.clear_t = 0
+		_stage_clear()
+		return true
+	return false
+
+
 func show_menu() -> void:
+	if _flush_clear():
+		return      # 클리어 카드를 먼저 보여 줌 (카드에서 목록으로 갈 수 있어요)
 	core.over = true
 	dragging = false
 	core.sel = null
