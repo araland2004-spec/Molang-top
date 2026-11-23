@@ -507,9 +507,12 @@ func _swap_floor(c: Vector2i, asset: String) -> void:
 		floor_nodes[c] = n
 		_save_floor()
 		var t2 := create_tween()
+		# 블록 glb 는 원래 크기가 1이 아니라서(정규화 배율) 그 배율 기준으로 찌그러졌다 돌아와야 함
+		# (예전엔 Vector3.ONE 으로 돌아가서 블록이 작아지며 땅속으로 꺼졌음)
+		var s0 := n.scale
 		t2.tween_property(n, "position:y", base.y, 0.16).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-		t2.tween_property(n, "scale", Vector3(1.12, 0.82, 1.12), 0.07)
-		t2.tween_property(n, "scale", Vector3.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT))
+		t2.tween_property(n, "scale", s0 * Vector3(1.12, 0.82, 1.12), 0.07)
+		t2.tween_property(n, "scale", s0, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT))
 
 
 func _build_cottage() -> void:
