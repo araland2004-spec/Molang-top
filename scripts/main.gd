@@ -1412,7 +1412,7 @@ func _build_hud() -> void:
 	var mid := VBoxContainer.new()
 	mid.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	mid.position = Vector2(0, 226)
-	mid.add_theme_constant_override("separation", 12)
+	mid.add_theme_constant_override("separation", 8)
 	mid.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui_root.add_child(mid)
 	hud_groups.append(mid)
@@ -1452,7 +1452,7 @@ func _build_hud() -> void:
 	bot.offset_bottom = -96
 	bot.offset_top = -96 - 520
 	bot.alignment = BoxContainer.ALIGNMENT_END
-	bot.add_theme_constant_override("separation", 16)
+	bot.add_theme_constant_override("separation", 10)
 	bot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui_root.add_child(bot)
 	hud_bot = bot
@@ -1465,7 +1465,7 @@ func _build_hud() -> void:
 	csb.bg_color = Color(1.0, 0.92, 0.78, 0.92) if day else Color(0.17, 0.15, 0.1, 0.88)
 	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
 		cont.add_theme_stylebox_override(k, csb)
-	cont.custom_minimum_size.y = 152
+	cont.custom_minimum_size.y = 136
 	cont.pressed.connect(func(): _go_game("stage:%d" % cur))
 	bot.add_child(cont)
 	hud_blocks.append(cont)
@@ -1511,12 +1511,12 @@ func _build_hud() -> void:
 	snl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	scol.add_child(snl)
 	var row2 := HBoxContainer.new()
-	row2.add_theme_constant_override("separation", 16)
+	row2.add_theme_constant_override("separation", 12)
 	bot.add_child(row2)
 	var endless := Mol.btn("무한 모드 · 보상 %d판" % Save.endless_paid_left(), "sec", 28, day)
 	endless.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	endless.size_flags_stretch_ratio = 1.6
-	endless.custom_minimum_size.y = 100
+	endless.custom_minimum_size.y = 88
 	endless.pressed.connect(func(): _go_game("endless"))
 	row2.add_child(endless)
 	hud_blocks.append(endless)
@@ -1525,7 +1525,7 @@ func _build_hud() -> void:
 	lofi.expand_icon = false
 	lofi.add_theme_constant_override("icon_max_width", 44)
 	lofi.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	lofi.custom_minimum_size.y = 100
+	lofi.custom_minimum_size.y = 88
 	lofi.pressed.connect(_lofi_on)
 	row2.add_child(lofi)
 	hud_blocks.append(lofi)
@@ -1543,10 +1543,10 @@ func _build_hud() -> void:
 			g.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			mrow.add_child(g)
 	var dock := HBoxContainer.new()
-	dock.add_theme_constant_override("separation", 16)
+	dock.add_theme_constant_override("separation", 12)
 	bot.add_child(dock)
 	for d in [["book", "도감"], ["shop", "상점"], ["decorate", "꾸미기"], ["music", "음악"]]:
-		var b := Mol.icon_btn(d[0], d[1], day, 132)
+		var b := Mol.icon_btn(d[0], d[1], day, 116)
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		match d[0]:
 			"book": b.pressed.connect(func(): extra.open_book("in" if extra.inside else "out"))

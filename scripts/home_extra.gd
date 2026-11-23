@@ -106,10 +106,7 @@ func rebuild_yard() -> void:
 		var h := hash(key)
 		n.position = Vector3(cx + ((h % 7) - 3) * 0.04, main.FLOOR_TOP, cz + (((h / 7) % 7) - 3) * 0.04)
 		n.rotation.y = float(h % 360) / 360.0 * TAU
-		if str(props[key]).begins_with("Tree"):
-			n.scale *= 0.62      # 마당 나무는 집보다 작게 (맵 둘레용 크기 그대로면 집을 가림)
-		elif str(props[key]).begins_with("Rock"):
-			n.scale *= 0.4
+		_fit_prop(n, str(props[key]))
 		yard_root.add_child(n)
 	# 상자 모델 장식 (우체통·벤치·가로등)
 	for id in ["mailbox", "bench", "streetlamp"]:
@@ -792,6 +789,17 @@ const NATURE := {
 	"flowerbed": {"name": "버섯", "colors": [["Mushroom_Red_WhiteSpots_01", "빨간 점박이"], ["Mushroom_White_01", "하양"], ["Mushroom_Red_01", "빨강"], ["Mushroom_Teal_01", "청록"], ["Mushroom_Red_GoldRing_01", "금테 빨강"], ["Mushroom_White_CyanRing_01", "하늘테 하양"], ["Mushroom_Red_GreenRing_01", "초록테 빨강"], ["Mushroom_Blue_WhiteRing_01", "파랑"]]},
 	"rock": {"name": "바위", "colors": [["Rock_Boulder_Gray_01", "회색"], ["Rock_Boulder_Coral_01", "산호"], ["Rock_Slate_02", "청회색"], ["Rock_Sand_03", "모래"], ["Rock_DarkGreen_03", "이끼"]]},
 }
+## 마당 장식 크기: 모델마다 원래 크기가 제각각이라 종류별 목표 높이·폭에 맞춰요 (집 처마보다 낮게)
+const FIT := {"Tree_Round": [1.25, 0.9], "Tree_Pine": [1.45, 0.85], "Mushroom": [0.42, 0.5], "Rock": [0.4, 0.6]}
+func _fit_prop(n: Node3D, asset: String) -> void:
+	var d: Array = main.info.get(asset, {}).get("d", [])
+	if d.size() < 3:
+		return
+	for k in FIT:
+		if asset.begins_with(k):
+			var s := minf(FIT[k][0] / maxf(float(d[1]), 0.01), FIT[k][1] / maxf(maxf(float(d[0]), float(d[2])), 0.01))
+			n.scale = Vector3.ONE * s
+			return
 var plant_asset := ""       # 심기 중인 모델 ("" = 꺼짐)
 var plant_bar: Control
 

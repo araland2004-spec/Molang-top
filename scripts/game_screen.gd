@@ -130,6 +130,7 @@ var card_head: Label
 var card_chips: HBoxContainer
 var card_retry: Button
 var card_links: HBoxContainer
+var menu_sc: ScrollContainer
 
 
 func _btn(text: String, _bg := BTN, _fg := MILK, size := 26) -> Button:
@@ -352,6 +353,7 @@ func _build_ui() -> void:
 	mbg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	menu.add_child(mbg)
 	var sc := ScrollContainer.new()
+	menu_sc = sc
 	sc.set_anchors_preset(Control.PRESET_FULL_RECT)
 	sc.offset_top = 40
 	sc.offset_bottom = -30
@@ -361,7 +363,7 @@ func _build_ui() -> void:
 	menu.add_child(sc)
 	menu_grid_box = VBoxContainer.new()
 	menu_grid_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	menu_grid_box.add_theme_constant_override("separation", 24)
+	menu_grid_box.add_theme_constant_override("separation", 14)
 	sc.add_child(menu_grid_box)
 
 	# 가이드 카드
@@ -397,17 +399,24 @@ func _overlay(col: Color) -> Control:
 	return o
 
 
+## 가로 화면(PC 웹·폴드·태블릿)에서는 폰 폭 기둥 하나로 가운데에 모아요. 화면 끝까지 늘어나면 눈이 멀리 오가요.
+const COL_W := 760.0
+
+
 func _layout() -> void:
-	var vs := size
+	var full := size
+	var cw := minf(full.x, COL_W)
+	var x0 := (full.x - cw) / 2.0
+	var vs := Vector2(cw, full.y)
 	var mx := 44.0
 	var top: Control = get_node("Top")
-	top.position = Vector2(mx, 40)
+	top.position = Vector2(x0 + mx, 40)
 	top.size = Vector2(vs.x - mx * 2, 96)
 	var info: Control = get_node("Info")
-	info.position = Vector2(mx, 132)
+	info.position = Vector2(x0 + mx, 132)
 	info.size = Vector2(vs.x - mx * 2, 40)
 	var goal: Control = get_node("Goal")
-	goal.position = Vector2(mx, 190)
+	goal.position = Vector2(x0 + mx, 190)
 	goal.size = Vector2(vs.x - mx * 2, 60)
 	var top_h := 270.0 if goal_row.visible else 200.0
 	var bottom_h := 200.0 if items_box.visible else 40.0
@@ -415,15 +424,18 @@ func _layout() -> void:
 	board_scale = minf(avail.x / GameCore.W, avail.y / GameCore.H)
 	var bw := GameCore.W * board_scale
 	var bh := GameCore.H * board_scale
-	board_area.position = Vector2((vs.x - bw) / 2, top_h + maxf(0, (avail.y - bh) * 0.35))
+	board_area.position = Vector2(x0 + (vs.x - bw) / 2, top_h + maxf(0, (avail.y - bh) * 0.35))
 	board_area.size = Vector2(bw, bh)
 	core.scale = Vector2.ONE * board_scale
-	items_box.position = Vector2(mx, vs.y - 180)
+	items_box.position = Vector2(x0 + mx, vs.y - 180)
 	items_box.size = Vector2(vs.x - mx * 2, 148)
 	hint_lbl.position = board_area.position + Vector2(0, bh * 0.38)
 	hint_lbl.size = Vector2(bw, 0)
-	mission.position = Vector2(vs.x * 0.1, board_area.position.y + 120)
+	mission.position = Vector2(x0 + vs.x * 0.1, board_area.position.y + 120)
 	mission.size = Vector2(vs.x * 0.8, 0)
+	if menu_sc:
+		menu_sc.offset_left = x0 + 40
+		menu_sc.offset_right = -(x0 + 40)
 
 
 ## 점수·정보줄·목표 막대 갱신
@@ -890,7 +902,7 @@ func show_menu() -> void:
 	cont.focus_mode = Control.FOCUS_NONE
 	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
 		cont.add_theme_stylebox_override(k, Mol.primary(36))
-	cont.custom_minimum_size.y = 192
+	cont.custom_minimum_size.y = 160
 	cont.pressed.connect(func(): start_stage(cur))
 	menu_grid_box.add_child(cont)
 	var ch := HBoxContainer.new()
@@ -953,7 +965,7 @@ func show_menu() -> void:
 		for k in range(a, b):
 			star_n += int(stars.get(str(k), 0))
 		var rowc := HBoxContainer.new()
-		rowc.add_theme_constant_override("separation", 18)
+		rowc.add_theme_constant_override("separation", 12)
 		menu_grid_box.add_child(rowc)
 		var dot := Control.new()
 		dot.custom_minimum_size = Vector2(28, 0)
@@ -967,10 +979,10 @@ func show_menu() -> void:
 		rowc.add_child(dot)
 		var panel := PanelContainer.new()
 		panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		panel.add_theme_stylebox_override("panel", Mol.sb(Color(0.03, 0.09, 0.1, 0.7), Color(0.494, 0.941, 0.784, 0.14), 36, Vector2(36, 28)))
+		panel.add_theme_stylebox_override("panel", Mol.sb(Color(0.03, 0.09, 0.1, 0.7), Color(0.494, 0.941, 0.784, 0.14), 32, Vector2(30, 20)))
 		rowc.add_child(panel)
 		var pv := VBoxContainer.new()
-		pv.add_theme_constant_override("separation", 20)
+		pv.add_theme_constant_override("separation", 14)
 		panel.add_child(pv)
 		var hh := Button.new()
 		hh.flat = true
@@ -995,8 +1007,8 @@ func show_menu() -> void:
 			continue
 		var grid := GridContainer.new()
 		grid.columns = 5
-		grid.add_theme_constant_override("h_separation", 16)
-		grid.add_theme_constant_override("v_separation", 16)
+		grid.add_theme_constant_override("h_separation", 12)
+		grid.add_theme_constant_override("v_separation", 12)
 		pv.add_child(grid)
 		for k in range(a, b):
 			var done := k < prog
@@ -1007,7 +1019,7 @@ func show_menu() -> void:
 			bt.text = str(k + 1)
 			bt.add_theme_font_override("font", Mol.font("num"))
 			bt.add_theme_font_size_override("font_size", 30)
-			bt.custom_minimum_size = Vector2(0, 80)
+			bt.custom_minimum_size = Vector2(0, 72)
 			bt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			var bg := Color(1.0, 0.757, 0.443) if now else (Color(0.494, 0.941, 0.784, 0.12) if done else Color(0.02, 0.07, 0.08, 0.6))
 			var ln := Mol.VIOLET if boss else Color(0.494, 0.941, 0.784, 0.18)
