@@ -347,31 +347,45 @@ func _paint_floor_bar() -> void:
 
 
 ## 실내 블록 뽑기 (선물 상자)
-func open_floor_box() -> void:
+func open_floor_box(n := 1) -> void:
 	if int(Save.d["jelly"]) < 100:
 		main.toast("젤리가 %d개 더 필요해요" % (100 - int(Save.d["jelly"])))
 		return
 	var list: Array = M.get("BLOCKS_IN", [])
-	var b: Dictionary = list[randi() % list.size()]
-	var tex: Texture2D = await node_thumb("in:" + str(b["id"]), func():
-		return Boxes.build([{"b": [-0.5, 0, -0.5, 0.5, 0.25, 0.5], "t": b["top"], "tile": 0.5}]))
-	var pop := func() -> Dictionary:
-		Save.d["jelly"] = int(Save.d["jelly"]) - 100
-		var own: Dictionary = H().get("blocks_in", {"plank": 1})
-		H()["blocks_in"] = own
-		var fresh := not own.has(b["id"])
-		own[b["id"]] = int(own.get(b["id"], 0)) + 1
-		H()["land_free"] = int(H().get("land_free", 0)) + (6 if fresh else 2)
+	var pop := func(cnt: int) -> Dictionary:
+		var got: Array = []
+		var nf := 0
+		var land := 0
+		for k in cnt:
+			if int(Save.d["jelly"]) < 100:
+				break
+			var b: Dictionary = list[randi() % list.size()]
+			var tex: Texture2D = await node_thumb("in:" + str(b["id"]), func():
+				return Boxes.build([{"b": [-0.5, 0, -0.5, 0.5, 0.25, 0.5], "t": b["top"], "tile": 0.5}]))
+			Save.d["jelly"] = int(Save.d["jelly"]) - 100
+			var own: Dictionary = H().get("blocks_in", {"plank": 1})
+			H()["blocks_in"] = own
+			var fresh := not own.has(b["id"])
+			own[b["id"]] = int(own.get(b["id"], 0)) + 1
+			land += 6 if fresh else 2
+			if fresh:
+				nf += 1
+			got.append({"tex": tex, "title": str(b["n"]), "fresh": fresh})
+		H()["land_free"] = int(H().get("land_free", 0)) + land
 		Save.save()
-		return {"tex": tex, "title": str(b["n"]), "fresh": fresh,
-			"sub": "새 바닥 블록! 「바닥 꾸미기」에서 써 봐요 · 땅도 6칸 넓힐 수 있어요" if fresh else "이미 있는 블록이에요 · 땅을 2칸 넓힐 수 있어요",
-			"more": int(Save.d["jelly"]) >= 100}
+		var r := {"items": got, "more": int(Save.d["jelly"]) >= 100, "more10": int(Save.d["jelly"]) >= 1000}
+		if got.size() == 1:
+			r["sub"] = "새 바닥 블록! 「바닥 꾸미기」에서 써 봐요 · 땅도 6칸 넓힐 수 있어요" if got[0]["fresh"] else "이미 있는 블록이에요 · 땅을 2칸 넓힐 수 있어요"
+		else:
+			r["title"] = "블록 %d개! 새 블록 %d개" % [got.size(), nf]
+			r["sub"] = "땅을 %d칸 넓힐 수 있어요" % land
+		return r
 	if floor_bar:
 		floor_bar.visible = false
-	_show_gift("실내 블록 상자 · 잡고 옆으로 돌려 보세요", pop, func():
-		_fb_show(true), func():
+	_show_gift("실내 블록 상자 · 잡고 옆으로 스와이프해 보세요", pop, func():
+		_fb_show(true), func(k := 1):
 		_fb_show(false)
-		open_floor_box(), func(): _fb_show(false))
+		open_floor_box(k), func(): _fb_show(false))
 
 
 func _fb_show(repaint: bool) -> void:
@@ -641,7 +655,13 @@ func _pet_fx(dt: float) -> void:
 			bubble.visible = false
 		else:
 			var s := cam.unproject_position(bubble_at.global_position + Vector3(0, 0.8, 0))
-			bubble.position = s - Vector2(bubble.size.x / 2, bubble.size.y + 20)
+			# 위 정보 알약·아래 버튼 묶음과 겹치지 않게 그 사이로 (창이 열려 있으면 숨김)
+			var vr := ui.get_viewport_rect().size
+			var p2 := s - Vector2(bubble.size.x / 2, bubble.size.y + 20)
+			p2.x = clampf(p2.x, 16, vr.x - bubble.size.x - 16)
+			p2.y = clampf(p2.y, 330, maxf(330, vr.y - 600 - bubble.size.y))
+			bubble.position = p2
+			bubble.visible = sheet == null
 
 func check_pets() -> void:
 	var h := H()
@@ -954,7 +974,7 @@ const GiftBox := preload("res://scripts/gift_box.gd")
 
 
 ## 선물 상자: 3D 상자를 손가락으로 휙 돌리면 팡! (웹 버전과 같게)
-func open_box() -> void:
+func open_box(n := 1) -> void:
 	if vol_done():
 		main.toast("도감을 다 채웠어요! 이제 트리를 꾸며 봐요")
 		return
@@ -963,20 +983,32 @@ func open_box() -> void:
 		return
 	await render_thumbs()
 	_close_sheet()
-	var pop := func() -> Dictionary:
-		Save.d["jelly"] = int(Save.d["jelly"]) - BOX_PRICE
-		var it: Dictionary = items[randi() % items.size()]
-		var id: String = it["id"]
-		var n := int(H()["own"].get(id, 0)) + 1
-		H()["own"][id] = n
-		if n == 1:
-			H()["put"][id] = true
+	var pop := func(cnt: int) -> Dictionary:
+		var got: Array = []
+		var nf := 0
+		for k in cnt:
+			if int(Save.d["jelly"]) < BOX_PRICE:
+				break
+			Save.d["jelly"] = int(Save.d["jelly"]) - BOX_PRICE
+			var it: Dictionary = items[randi() % items.size()]
+			var id: String = it["id"]
+			var c := int(H()["own"].get(id, 0)) + 1
+			H()["own"][id] = c
+			if c == 1:
+				H()["put"][id] = true
+				nf += 1
+			got.append({"tex": thumb(id), "title": str(it["name"]), "fresh": c == 1, "zone": it["zone"], "dup": c - 1})
 		Save.save()
 		main.refresh_ui()
-		return {"tex": thumb(id), "title": str(it["name"]), "fresh": n == 1,
-			"sub": ("새로 나왔어요! %s 바로 놓았어요" % ("집 안에" if it["zone"] == "in" else "집 밖에")) if n == 1 else "중복이에요 (중복 %d개) · 중복 3개를 모으면 다른 가구로 바꿀 수 있어요" % (n - 1),
-			"more": int(Save.d["jelly"]) >= BOX_PRICE and not vol_done()}
-	_show_gift("상자를 잡고 옆으로 돌려 보세요", pop, func():
+		var r := {"items": got, "more": int(Save.d["jelly"]) >= BOX_PRICE and not vol_done(), "more10": int(Save.d["jelly"]) >= BOX_PRICE * 10 and not vol_done()}
+		if got.size() == 1:
+			var o: Dictionary = got[0]
+			r["sub"] = ("새로 나왔어요! %s 바로 놓았어요" % ("집 안에" if o["zone"] == "in" else "집 밖에")) if o["fresh"] else "중복이에요 (중복 %d개) · 중복 3개를 모으면 다른 가구로 바꿀 수 있어요" % o["dup"]
+		else:
+			r["title"] = "상자 %d개! 새 장식 %d개" % [got.size(), nf]
+			r["sub"] = ("새 장식은 바로 놓았어요 · " if nf else "") + "중복 %d개는 도감에서 3개씩 바꿀 수 있어요" % (got.size() - nf)
+		return r
+	_show_gift("상자를 잡고 옆으로 스와이프해 보세요", pop, func():
 		after_deco()
 		open_book("in" if inside else "out"), open_box)
 
@@ -985,10 +1017,10 @@ func _show_gift(line: String, pop: Callable, done: Callable, again: Callable, qu
 	var g = GiftBox.new(line, pop, func():
 		main.hud_blocks.erase(sheet)
 		sheet = null
-		done.call(), func():
+		done.call(), func(n := 1):
 		main.hud_blocks.erase(sheet)
 		sheet = null
-		again.call(), func():
+		again.call(n), func():
 		main.hud_blocks.erase(sheet)
 		sheet = null
 		if quit.is_valid():

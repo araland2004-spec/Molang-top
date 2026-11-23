@@ -1,10 +1,15 @@
 extends Control
-## 3D 선물 상자 (웹 버전 openBox 그대로): 상자를 잡고 옆으로 돌리면 돌아가고(마찰로 멈춤),
-## 초당 1,100도 넘게 휙 돌리면 "촤라라락" 점점 빨라지다 0.9초 뒤 "팡" — 뚜껑이 날아가고 아이템이 튀어나와요.
-## pop: Callable → { "tex": Texture2D, "title": String, "sub": String, "fresh": bool, "more": bool } (여기서 젤리를 빼고 결과를 정함)
+## 3D 선물 상자: 상자를 잡고 옆으로 스와이프하면 무조건 열려요.
+## 민 속도 그대로 돌아요 — 천천히 밀면 천천히 한 바퀴 반쯤 돌다가, 빠르게 밀면 촤라라락 여러 바퀴 돌다가 "팡".
+## 그냥 톡 누르면 살짝 흔들리기만 (옆으로 밀어야 열림).
+## 「×10」 칩을 켜면 상자 10개를 한 번에 열고 10개를 작은 칸으로 한 화면에 보여 줘요 (새 것만 뒤에 후광).
+## pop: Callable(n: int) → { "items": [{ "tex", "title", "fresh" }...], "title": String, "sub": String,
+##       "more": bool (1개 더 열 수 있음), "more10": bool (10개 더) }  — 여기서 젤리를 빼고 결과를 정함. await 해도 됨.
 
-const OPEN := 1100.0       # 도/초
-const TOP := 2600.0
+const TOP := 2600.0        # 도/초 (가장 빠른 회전)
+const SLOW := 300.0        # 천천히 밀어도 이만큼은 돌아요
+const SWIPE_PX := 30.0     # 이만큼 옆으로 밀어야 「스와이프」 (그보다 짧으면 톡)
+const PRICE := 100
 const DEG_PER_PX := 0.52   # 웹 0.9도/CSS px ≈ 고닷 화면(720 너비) 0.52도/px
 
 var pop_cb: Callable
@@ -33,6 +38,12 @@ var halo: Control
 var flash: ColorRect
 var fresh := true
 var halo_a := 0.0
+var count := 1             # 1 또는 10
+var x10_btn: Button
+var start_x := 0.0
+var spun := 0.0            # 열리는 회전에서 돈 각도
+var spin_goal := 360.0
+var grid_halos: Array = [] # 여러 개 열었을 때: 새 것 칸의 중심(후광)
 
 
 func _init(tag_line: String, pop: Callable, done: Callable, again: Callable, quit: Callable, synth: Callable) -> void:
@@ -116,7 +127,7 @@ func _ready() -> void:
 	tag = Mol.lbl(tag_text, 34, Mol.TEXT, "b")
 	tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(tag)
-	sub = Mol.lbl("세게 휙 돌리면 뚜껑이 열려요 · 젤리 100개", 24, Mol.TEXT_SUB, "r")
+	sub = Mol.lbl("", 24, Mol.TEXT_SUB, "r")
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(sub)
@@ -124,14 +135,43 @@ func _ready() -> void:
 	btns.alignment = BoxContainer.ALIGNMENT_CENTER
 	btns.add_theme_constant_override("separation", 16)
 	v.add_child(btns)
+	x10_btn = Mol.btn("×10 한 번에", "sec", 26)
+	x10_btn.toggle_mode = true
+	x10_btn.custom_minimum_size.x = 250
+	x10_btn.disabled = int(Save.d.get("jelly", 0)) < PRICE * 10
+	x10_btn.toggled.connect(func(on: bool):
+		count = 10 if on else 1
+		x10_btn.add_theme_stylebox_override("normal", Mol.primary() if on else Mol.secondary())
+		_paint_sub())
+	btns.add_child(x10_btn)
+	_paint_sub()
 	var q := Mol.btn("그만두기", "sec", 28)
-	q.custom_minimum_size.x = 260
+	q.custom_minimum_size.x = 220
 	q.pressed.connect(func():
 		quit_cb.call()
 		queue_free())
 	btns.add_child(q)
 	resized.connect(_place)
 	_place()
+
+
+func _paint_sub() -> void:
+	if count == 10:
+		sub.text = "옆으로 스와이프하면 10개가 한꺼번에 열려요 · 젤리 %s개" % _comma(PRICE * 10)
+	elif int(Save.d.get("jelly", 0)) >= PRICE * 10:
+		sub.text = "옆으로 스와이프하면 열려요 · 젤리 %d개 (×10 도 돼요)" % PRICE
+	else:
+		sub.text = "옆으로 스와이프하면 열려요 · 젤리 %d개" % PRICE
+
+
+static func _comma(n: int) -> String:
+	var s := str(n)
+	var out := ""
+	for i in s.length():
+		if i > 0 and (s.length() - i) % 3 == 0:
+			out += ","
+		out += s[i]
+	return out
 
 
 func _place() -> void:
@@ -203,18 +243,31 @@ func _gui_input(ev: InputEvent) -> void:
 		if ev.pressed:
 			dragging = true
 			drag_x = ev.position.x
+			start_x = ev.position.x
 			drag_t = Time.get_ticks_msec()
 			vel = 0
 		elif dragging:
 			dragging = false
+			var dx: float = ev.position.x - start_x
+			if absf(dx) < SWIPE_PX:
+				# 톡: 살짝 흔들리기만 — 옆으로 밀어야 열려요
+				vel = 260.0 * (1.0 if randf() < 0.5 else -1.0)
+				tag.text = "옆으로 쓱 밀어 보세요"
+				return
 			var held := Time.get_ticks_msec() - drag_t
-			if held > 90:
-				vel *= 0.2       # 손가락을 멈춘 뒤 뗐으면 힘이 빠짐
-			if absf(vel) > OPEN:
-				phase = "whirl"
-				t = 0
-				tag.text = "촤라라락!"
-				sub.text = ""
+			var speed := absf(vel)
+			if held > 140:
+				speed *= 0.5       # 밀다가 멈추고 뗐으면 조금 느리게
+			# 민 속도 그대로 돌고, 빠를수록 여러 바퀴 돌다가 열림
+			speed = clampf(speed, SLOW, TOP)
+			vel = speed * signf(dx)
+			spun = 0.0
+			spin_goal = 360.0 + speed * 0.3
+			phase = "whirl"
+			t = 0
+			tag.text = "촤라라락!" if speed > 1100 else "빙그르르…"
+			sub.text = ""
+			x10_btn.visible = false
 	elif ev is InputEventMouseMotion and dragging:
 		var now := Time.get_ticks_msec()
 		var dx: float = ev.position.x - drag_x
@@ -231,8 +284,8 @@ func _process(delta: float) -> void:
 	if not dragging and phase != "open":
 		if phase == "whirl":
 			t += dt
-			vel = signf(vel if vel != 0 else 1.0) * minf(TOP, absf(vel) + 2600 * dt)
-			if t > 0.9:
+			spun += absf(vel) * dt
+			if spun >= spin_goal:
 				_pop()
 		else:
 			vel *= pow(0.12, dt)   # 마찰: 살살 밀면 1~2초 뒤 멈춤
@@ -253,8 +306,13 @@ func _process(delta: float) -> void:
 
 func _pop() -> void:
 	phase = "open"
-	var r: Dictionary = pop_cb.call()
-	fresh = bool(r.get("fresh", true))
+	var r: Dictionary = await pop_cb.call(count)
+	var its: Array = r.get("items", [])
+	if its.size() > 1:
+		_pop_many(r, its)
+		return
+	var one: Dictionary = its[0] if its.size() else {}
+	fresh = bool(one.get("fresh", true))
 	# 뚜껑이 날아가고 상자는 앞으로 돌아 작아짐
 	var tw := create_tween().set_parallel(true)
 	tw.tween_property(lid, "position", Vector3(randf_range(-1.2, 1.2), 5.5, 0), 0.5).set_ease(Tween.EASE_OUT)
@@ -266,7 +324,7 @@ func _pop() -> void:
 	tw.tween_property(cube, "scale", Vector3.ONE * 0.8, 0.35)
 	flash.color.a = 0.9
 	tw.tween_property(flash, "color:a", 0.0, 0.45)
-	item.texture = r.get("tex")
+	item.texture = one.get("tex")
 	tw.tween_property(item, "scale", Vector2.ONE, 0.45).set_delay(0.08).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw.tween_property(self, "halo_a", 1.0, 0.4)
 	_sparks()
@@ -274,23 +332,102 @@ func _pop() -> void:
 		synth_cb.call(180, 120, 0.08, 0.18)
 		get_tree().create_timer(0.12).timeout.connect(func(): synth_cb.call(1046.0 if fresh else 784.0, 1046.0 if fresh else 784.0, 0.16, 0.12))
 		get_tree().create_timer(0.26).timeout.connect(func(): synth_cb.call(1568.0 if fresh else 988.0, 1568.0 if fresh else 988.0, 0.22, 0.12))
-	tag.text = str(r.get("title", ""))
+	tag.text = str(r.get("title", one.get("title", "")))
 	sub.text = str(r.get("sub", ""))
+	_end_buttons(r)
+
+
+func _end_buttons(r: Dictionary) -> void:
 	for c in btns.get_children():
 		c.queue_free()
-	if r.get("more", false):
-		var ag := Mol.btn("하나 더 · 100", "sec", 28)
-		ag.custom_minimum_size.x = 250
-		ag.pressed.connect(func():
-			queue_free()
-			again_cb.call())
-		btns.add_child(ag)
+	for nn in [1, 10]:
+		if r.get("more" if nn == 1 else "more10", false):
+			var ag := Mol.btn(("하나 더 · %d" % PRICE) if nn == 1 else ("10개 더 · %s" % _comma(PRICE * 10)), "sec", 26)
+			ag.custom_minimum_size.x = 210
+			var k: int = nn
+			ag.pressed.connect(func():
+				queue_free()
+				again_cb.call(k))
+			btns.add_child(ag)
 	var ok := Mol.btn("좋아요", "primary", 28)
-	ok.custom_minimum_size.x = 250
+	ok.custom_minimum_size.x = 200
 	ok.pressed.connect(func():
 		queue_free()
 		done_cb.call())
 	btns.add_child(ok)
+
+
+## 10개 열기: 상자가 터지고 작은 칸 10개(5×2)가 하나씩 톡톡 나타남. 새 것만 뒤에 후광, 중복은 후광 없이 「중복」
+func _pop_many(r: Dictionary, its: Array) -> void:
+	fresh = its.any(func(o): return o.get("fresh", false))
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(lid, "position", Vector3(randf_range(-1.2, 1.2), 5.5, 0), 0.5).set_ease(Tween.EASE_OUT)
+	tw.tween_property(lid, "scale", Vector3.ZERO, 0.25).set_delay(0.45)
+	tw.tween_property(cube, "scale", Vector3.ZERO, 0.35)
+	flash.color.a = 0.9
+	tw.tween_property(flash, "color:a", 0.0, 0.45)
+	if synth_cb.is_valid():
+		synth_cb.call(180, 120, 0.08, 0.18)
+	var cell := 116.0
+	var gap := 12.0
+	var cols := 5
+	var w := cols * cell + (cols - 1) * gap
+	var x0 := (size.x - w) / 2
+	var y0 := size.y * 0.5 - 330
+	grid_halos.clear()
+	var nfresh := 0
+	for i in its.size():
+		var o: Dictionary = its[i]
+		var f := bool(o.get("fresh", false))
+		if f:
+			nfresh += 1
+		var pos := Vector2(x0 + (i % cols) * (cell + gap), y0 + (i / cols) * (cell + 64))
+		var box := Control.new()
+		box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		box.position = pos
+		box.size = Vector2(cell, cell + 52)
+		box.pivot_offset = Vector2(cell / 2, cell / 2)
+		box.scale = Vector2.ZERO
+		add_child(box)
+		var bgp := Panel.new()
+		bgp.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		bgp.size = Vector2(cell, cell)
+		bgp.add_theme_stylebox_override("panel", Mol.sb(Color(1, 1, 1, 0.1 if f else 0.05), Color(1.0, 0.85, 0.35, 0.7) if f else Color(1, 1, 1, 0.12), 18, Vector2.ZERO, 2))
+		box.add_child(bgp)
+		var tr := TextureRect.new()
+		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		tr.texture = o.get("tex")
+		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tr.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		tr.position = Vector2(10, 10)
+		tr.size = Vector2(cell - 20, cell - 20)
+		tr.modulate = Color(1, 1, 1, 1) if f else Color(1, 1, 1, 0.75)
+		box.add_child(tr)
+		var nm := Mol.lbl(str(o.get("title", "")), 17, Mol.TEXT if f else Mol.TEXT_SUB, "m")
+		nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		nm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		nm.clip_text = true
+		nm.position = Vector2(-6, cell + 4)
+		nm.size = Vector2(cell + 12, 24)
+		box.add_child(nm)
+		var badge := Mol.lbl("NEW" if f else "중복", 15, Color("#3a2408") if f else Mol.TEXT_SUB, "b")
+		badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		badge.add_theme_stylebox_override("normal", Mol.sb(Mol.AMBER if f else Color(0, 0, 0, 0.45), Color(0, 0, 0, 0), 12, Vector2(10, 2), 0))
+		badge.position = Vector2(cell - 52, -10)
+		box.add_child(badge)
+		if f:
+			grid_halos.append(pos + Vector2(cell / 2, cell / 2))
+		var d := 0.15 + i * 0.07
+		tw.tween_property(box, "scale", Vector2.ONE, 0.28).set_delay(d).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		if synth_cb.is_valid():
+			var hz := 1046.0 if f else 659.0
+			get_tree().create_timer(d).timeout.connect(func(): synth_cb.call(hz, hz, 0.08, 0.07))
+	if nfresh > 0:
+		tw.tween_property(self, "halo_a", 1.0, 0.4).set_delay(0.3)
+	tag.text = str(r.get("title", "상자 %d개를 열었어요" % its.size()))
+	sub.text = str(r.get("sub", ""))
+	_end_buttons(r)
 
 
 func _sparks() -> void:
@@ -317,6 +454,18 @@ func _sparks() -> void:
 func _draw_halo() -> void:
 	if halo_a <= 0:
 		return
+	if not grid_halos.is_empty():
+		# 10개: 새 것 칸 뒤에만 작은 후광 (중복은 후광 없음)
+		var rot2 := Time.get_ticks_msec() / 1000.0 * 0.8
+		for c2 in grid_halos:
+			for k in 8:
+				var a1 := rot2 + k * TAU / 8
+				halo.draw_colored_polygon(PackedVector2Array([c2, c2 + Vector2(cos(a1 - 0.16), sin(a1 - 0.16)) * 96, c2 + Vector2(cos(a1 + 0.16), sin(a1 + 0.16)) * 96]), Color(1.0, 0.85, 0.35, 0.16 * halo_a))
+			for k in 3:
+				halo.draw_circle(c2, 78 - k * 20, Color(1.0, 0.85, 0.35, 0.08 * halo_a))
+		return
+	if not fresh:
+		return     # 중복은 후광 없음
 	var c := item.position + Vector2(120, 120)
 	var base := Color(1.0, 0.85, 0.35) if fresh else Color(1, 1, 1)
 	var rot := Time.get_ticks_msec() / 1000.0 * 0.6

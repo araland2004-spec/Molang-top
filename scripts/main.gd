@@ -987,7 +987,13 @@ func _process(delta: float) -> void:
 	hud_t -= delta
 	if hud_t <= 0 and jelly_btn:
 		hud_t = 1.0
-		jelly_btn.text = _comma(int(Save.d.get("jelly", 0)))
+		# 젤리 받기 (인터랙션 제안서 C): 게임에서 돌아와 늘었으면 칩이 톡 + 0.6초 동안 숫자가 올라감 + 「+N」
+		var jn := int(Save.d.get("jelly", 0))
+		if Save.jelly_seen >= 0 and jn >= Save.jelly_seen + 10:   # 공방 수입(+1씩)은 조용히, 보상처럼 크게 늘 때만 연출
+			_jelly_gain(Save.jelly_seen, jn)
+		else:
+			jelly_btn.text = _comma(jn)
+		Save.jelly_seen = jn
 		var ps := float(Save.d.get("play_sec", 0.0))
 		var left := 30 - int(ps / 60.0) % 30
 		var rdy: int = Save.orn_ready()
@@ -1816,25 +1822,54 @@ func _land_marks() -> void:
 		land_marks.append(mi)
 
 
+func _jelly_gain(a: int, b: int) -> void:
+	jelly_btn.pivot_offset = jelly_btn.size / 2
+	jelly_btn.scale = Vector2.ONE * 1.1
+	jelly_btn.create_tween().tween_property(jelly_btn, "scale", Vector2.ONE, 0.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	jelly_btn.create_tween().tween_method(func(v: float): jelly_btn.text = _comma(int(v)), float(a), float(b), 0.6).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	var f := Mol.lbl("+%s" % _comma(b - a), 30, Mol.JELLY, "num")
+	f.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_root.add_child(f)
+	f.position = jelly_btn.global_position + Vector2(jelly_btn.size.x * 0.4, jelly_btn.size.y + 6)
+	var tw := f.create_tween().set_parallel(true)
+	tw.tween_property(f, "position:y", f.position.y - 70, 0.9).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(f, "modulate:a", 0.0, 0.6).set_delay(0.3)
+	tw.chain().tween_callback(f.queue_free)
+
+
 ## 블록 뽑기 (선물 상자 그대로)
-func open_block_box() -> void:
+func open_block_box(n := 1) -> void:
 	if int(Save.d["jelly"]) < 100:
 		_toast("젤리가 %d개 더 필요해요" % (100 - int(Save.d["jelly"])))
 		return
-	var pick: String = block_files[randi() % block_files.size()]
-	var tex: Texture2D = await extra.node_thumb("blk:" + pick, func(): return _spawn(pick))
-	var pop := func() -> Dictionary:
-		Save.d["jelly"] = int(Save.d["jelly"]) - 100
+	var pop := func(cnt: int) -> Dictionary:
+		var got: Array = []
+		var nf := 0
+		var land := 0
 		var h := Save.home()
 		var bo: Dictionary = h["blocks_out"]
-		var fresh := not bo.has(pick)
-		bo[pick] = int(bo.get(pick, 0)) + 1
-		h["land_free"] = int(h["land_free"]) + (LAND_NEW if fresh else LAND_DUP)
+		for k in cnt:
+			if int(Save.d["jelly"]) < 100:
+				break
+			var pick: String = block_files[randi() % block_files.size()]
+			var tex: Texture2D = await extra.node_thumb("blk:" + pick, func(): return _spawn(pick))
+			Save.d["jelly"] = int(Save.d["jelly"]) - 100
+			var fresh := not bo.has(pick)
+			bo[pick] = int(bo.get(pick, 0)) + 1
+			land += LAND_NEW if fresh else LAND_DUP
+			if fresh:
+				nf += 1
+			got.append({"tex": tex, "title": _bname(pick), "fresh": fresh})
+		h["land_free"] = int(h["land_free"]) + land
 		Save.save()
-		return {"tex": tex, "title": _bname(pick), "fresh": fresh,
-			"sub": ("새 블록! 땅을 %d칸 넓힐 수 있어요" % LAND_NEW) if fresh else ("이미 있는 블록이에요 · 땅을 %d칸 넓힐 수 있어요" % LAND_DUP),
-			"more": int(Save.d["jelly"]) >= 100}
-	extra._show_gift("실외 블록 상자 · 잡고 옆으로 돌려 보세요", pop, func():
+		var r := {"items": got, "more": int(Save.d["jelly"]) >= 100, "more10": int(Save.d["jelly"]) >= 1000}
+		if got.size() == 1:
+			r["sub"] = ("새 블록! 땅을 %d칸 넓힐 수 있어요" % LAND_NEW) if got[0]["fresh"] else ("이미 있는 블록이에요 · 땅을 %d칸 넓힐 수 있어요" % LAND_DUP)
+		else:
+			r["title"] = "블록 %d개! 새 블록 %d개" % [got.size(), nf]
+			r["sub"] = "땅을 %d칸 넓힐 수 있어요" % land
+		return r
+	extra._show_gift("실외 블록 상자 · 잡고 옆으로 스와이프해 보세요", pop, func():
 		_build_palette()
 		_land_marks()
 		_refresh_ui(), open_block_box)

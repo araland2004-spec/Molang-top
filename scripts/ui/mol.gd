@@ -161,7 +161,105 @@ static func btn(text: String, kind := "sec", size := 28, day := false) -> Button
 	ds.bg_color.a *= 0.5
 	b.add_theme_stylebox_override("disabled", ds)
 	b.custom_minimum_size.y = 88
+	press(b, "primary" if kind in ["primary", "glow"] else "soft")
 	return b
+
+
+# ── 눌림·반응 효과 (인터랙션 제안서 v1 · A/B): 누르는 순간 빠르게 작아지고 어두워짐(70ms) + 진동 8ms + 「톡」,
+## 떼면 살짝 넘쳤다가(1.02~1.06배) 말랑하게 돌아옴. 주 버튼은 뗄 때 위에서 빛이 한 번 스침.
+const PRESS := {"soft": [0.96, 1.03, 0.92], "primary": [0.97, 1.02, 0.90], "icon": [0.92, 1.06, 0.90]}
+static var _tok_player: AudioStreamPlayer
+
+
+static func press(b: BaseButton, kind := "soft") -> void:
+	var v: Array = PRESS.get(kind, PRESS["soft"])
+	var center := func(): b.pivot_offset = b.size / 2
+	b.resized.connect(center)
+	center.call()
+	b.button_down.connect(func():
+		if b.has_meta("_fx"):
+			var t0: Tween = b.get_meta("_fx")
+			if t0 and t0.is_valid():
+				t0.kill()
+		var tw := b.create_tween().set_parallel(true)
+		tw.tween_property(b, "scale", Vector2.ONE * float(v[0]), 0.07).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(b, "modulate", Color(v[2], v[2], v[2]), 0.07)
+		b.set_meta("_fx", tw)
+		_tok(1.0 if kind != "primary" else 1.35)
+		var sv = b.get_tree().root.get_node_or_null("Save") if b.is_inside_tree() else null
+		if sv and sv.has_method("buzz"):
+			sv.buzz(12 if kind == "primary" else 8))
+	b.button_up.connect(func():
+		if b.has_meta("_fx"):
+			var t0: Tween = b.get_meta("_fx")
+			if t0 and t0.is_valid():
+				t0.kill()
+		var tw := b.create_tween()
+		tw.tween_property(b, "modulate", Color.WHITE, 0.07)
+		tw.tween_property(b, "scale", Vector2.ONE * float(v[1]), 0.09).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(b, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		b.set_meta("_fx", tw)
+		if kind == "primary":
+			_shine(b))
+
+
+## 주 버튼 위로 빛이 한 번 스침 (0.5초)
+static func _shine(b: Control) -> void:
+	if not b.is_inside_tree() or b.size.x < 20:
+		return
+	var clip := Control.new()
+	clip.clip_contents = true
+	clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	clip.size = b.size
+	b.add_child(clip)
+	var g := Gradient.new()
+	g.colors = PackedColorArray([Color(1, 1, 1, 0), Color(1, 1, 1, 0.45), Color(1, 1, 1, 0)])
+	g.offsets = PackedFloat32Array([0, 0.5, 1])
+	var gt := GradientTexture2D.new()
+	gt.gradient = g
+	gt.width = 64
+	gt.height = 4
+	var band := TextureRect.new()
+	band.texture = gt
+	band.stretch_mode = TextureRect.STRETCH_SCALE
+	band.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	band.size = Vector2(b.size.x * 0.35, b.size.y * 1.6)
+	band.rotation = 0.35
+	band.position = Vector2(-band.size.x * 1.5, -b.size.y * 0.3)
+	clip.add_child(band)
+	var tw := clip.create_tween()
+	tw.tween_property(band, "position:x", b.size.x + band.size.x * 0.5, 0.5).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_callback(clip.queue_free)
+
+
+## 버튼 누름 「톡」 (30ms, 나무·플라스틱 느낌). 효과음 끄기를 따름.
+static func _tok(pitch := 1.0) -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		return
+	var sv = tree.root.get_node_or_null("Save")
+	if sv and bool(sv.d.get("muted", false)):
+		return
+	if _tok_player == null or not is_instance_valid(_tok_player):
+		var rate := 22050
+		var n := int(rate * 0.035)
+		var data := PackedByteArray()
+		data.resize(n * 2)
+		for i in n:
+			var tt := float(i) / rate
+			var env := exp(-tt * 140.0)
+			var v2 := (sin(TAU * 1250.0 * tt) * 0.6 + sin(TAU * 2600.0 * tt) * 0.25) * env * 0.5
+			data.encode_s16(i * 2, int(clampf(v2, -1, 1) * 32767))
+		var wav := AudioStreamWAV.new()
+		wav.format = AudioStreamWAV.FORMAT_16_BITS
+		wav.mix_rate = rate
+		wav.data = data
+		_tok_player = AudioStreamPlayer.new()
+		_tok_player.stream = wav
+		_tok_player.volume_db = -10.0
+		tree.root.add_child(_tok_player)
+	_tok_player.pitch_scale = pitch
+	_tok_player.play()
 
 
 static func icon(name: String, day := false) -> Texture2D:
@@ -205,6 +303,7 @@ static func square_icon(ic: String, filled := false) -> Button:
 	b.expand_icon = true
 	b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	b.custom_minimum_size = Vector2(84, 84)
+	press(b, "icon")
 	return b
 
 

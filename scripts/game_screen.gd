@@ -605,7 +605,9 @@ func _paint_items() -> void:
 		b.add_theme_stylebox_override("normal", Mol.primary() if on else Mol.secondary())
 		var tl: Label = b.find_child("Text", true, false)
 		if tl:
-			tl.text = ("기울이기 %d초" % ceili(core.tilt_t)) if (k == "tilt" and core.tilt_t > 0) else ITEM_NAMES[k]
+			# 기울이는 동안엔 「N초」만 (「기울이기 N초」는 칸을 넘쳐 옆 버튼 글자와 겹쳤음)
+			tl.text = ("%d초" % ceili(core.tilt_t)) if (k == "tilt" and core.tilt_t > 0) else ITEM_NAMES[k]
+			tl.clip_text = true
 	var tilting: bool = core.tilt_t > 0
 	tilt_l.visible = tilting
 	tilt_r.visible = tilting
@@ -1018,9 +1020,19 @@ func show_menu() -> void:
 			var fc := Color("#3a2408") if now else (Mol.MINT if done else Mol.TEXT_DIM)
 			for cn in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_disabled_color", "font_hover_pressed_color"]:
 				bt.add_theme_color_override(cn, fc)
-			bt.disabled = k > prog
 			var idx: int = k
-			bt.pressed.connect(func(): start_stage(idx))
+			if k > prog:
+				# 잠긴 칸 (인터랙션 제안서 E): 작아지지 않고 좌우로 흔들림 + 진동 20ms + 「N단계를 깨면 열려요」
+				bt.pressed.connect(func():
+					var x0 := bt.position.x
+					var tw := bt.create_tween()
+					for d in [5.0, -5.0, 3.0, -3.0, 0.0]:
+						tw.tween_property(bt, "position:x", x0 + d, 0.05)
+					Save.buzz(20)
+					_toast("%d단계를 깨면 열려요" % idx))
+			else:
+				Mol.press(bt, "icon")      # 단계 칸 0.92 눌림 (G)
+				bt.pressed.connect(func(): start_stage(idx))
 			grid.add_child(bt)
 		var nd := Mol.DashLine.new()
 		pv.add_child(nd)

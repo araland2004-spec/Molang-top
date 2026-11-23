@@ -1593,11 +1593,12 @@ func snapshot() -> Dictionary:
 		bl.append({"t": b.t, "x": roundi(b.cx), "y": roundi(b.cy)})
 	for q: Blob in queue:
 		qu.append(q.t)
-	return {"score": score, "max_tier": max_tier, "throws_left": throws_left, "over": over, "blobs": bl, "queue": qu}
+	return {"score": score, "max_tier": max_tier, "throws_left": throws_left, "over": over, "blobs": bl, "queue": qu, "streak": streak}
 
 
 func restore(d: Dictionary) -> void:
 	new_game()
+	streak = int(d.get("streak", 0))   # 이어 하기: 연속 합치기 배율도 그대로 (new_game 이 0으로 만든 뒤에)
 	score = int(d.get("score", 0))
 	max_tier = int(d.get("max_tier", 0))
 	throws_left = int(d.get("throws_left", endless_throws()))
@@ -1770,7 +1771,8 @@ func blob_points(b: Blob) -> PackedVector2Array:
 
 func draw_blob(b: Blob) -> void:
 	var pts := blob_points(b)
-	var alpha := 0.55 + sin(clock * 3 + b.id) * 0.08 if b.sleep else 1.0
+	# 잠든 숫자: 반투명이면 뒤 숫자가 비쳐 겹친 것처럼 보여서, 불투명하게 두고 어둡게 숨 쉬듯 깜빡임
+	var alpha := 1.0
 	var col: Color
 	if b.rock:
 		col = Color("#6a6a70")
@@ -1778,6 +1780,8 @@ func draw_blob(b: Blob) -> void:
 		col = Color.from_hsv(fmod(clock * 0.15, 1.0), 0.45, 1.0)
 	else:
 		col = MILK if (b.over and fmod(clock, 0.5) < 0.25) else tier_color(b.t)
+	if b.sleep:
+		col = col.lerp(Color(0.16, 0.2, 0.22), 0.45 + sin(clock * 3 + b.id) * 0.06)
 	col.a = alpha
 	var poly := pts
 	if Geometry2D.triangulate_polygon(poly).is_empty():

@@ -1,0 +1,122 @@
+# 몰랑탑 스테이지 자동 QA
+# - 매일 새벽 3시(한국 시간)와 Actions 탭 「Run workflow」에서: 봇이 모든 단계를 여러 판씩 플레이해요.
+# - 결과 표는 이 실행의 요약(Summary) 화면과 stage-qa-report 파일로 남아요.
+#   클리어 0판 = 너무 어려움 후보, 매번 많이 남기고 깸 = 너무 쉬움 후보, 이상 = 숫자가 판 밖으로 나가는 등 버그.
+# - 봇은 「같은 숫자를 노려 던지는」 단순한 봇이라 아이템을 안 써요. 사람보다 조금 못하는 기준으로 보면 돼요.
+name: stage-qa
+
+on:
+  schedule:
+    - cron: "0 18 * * *"     # UTC 18시 = 한국 새벽 3시
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "단계마다 몇 판씩"
+        default: "3"
+      branch:
+        description: "돌려 볼 브랜치 (비우면 main)"
+        default: ""
+
+env:
+  GODOT_VERSION: "4.7.2"
+
+permissions:
+  contents: read
+
+jobs:
+  play:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || 'main' }}
+
+      - name: Godot 캐시
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/godot-bin
+          key: godot-bin-${{ env.GODOT_VERSION }}
+
+      - name: Godot 설치
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          base=https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable
+          mkdir -p ~/godot-bin
+          curl -sSL -o g.zip $base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
+          unzip -q g.zip -d ~/godot-bin
+
+      - name: 단계 나눠서 플레이
+        run: |
+          GODOT=~/godot-bin/Godot_v${GODOT_VERSION}-stable_linux.x86_64
+          $GODOT --headless --import >/dev/null 2>&1 || true
+          N=$(python3 -c "import json;print(len(json.load(open('data/mollang_data.json'))['stages']))")
+          PER=$(( (N + 7) / 8 ))
+          FROM=$(( ${{ matrix.shard }} * PER + 1 ))
+          TO=$(( FROM + PER - 1 ))
+          RUNS=${{ github.event.inputs.runs || '3' }}
+          echo "단계 $FROM ~ $TO, $RUNS 판씩"
+          timeout 330m $GODOT --headless --path . --script res://tools/stage_bot.gd -- $FROM $TO $RUNS 2>&1 | grep '^QA|' > qa-${{ matrix.shard }}.txt || true
+          cat qa-${{ matrix.shard }}.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qa-${{ matrix.shard }}
+          path: qa-${{ matrix.shard }}.txt
+
+  report:
+    needs: play
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: qa-*
+          merge-multiple: true
+
+      - name: 결과 표 만들기
+        run: |
+          python3 - <<'PY'
+          import glob
+          rows = []
+          for f in sorted(glob.glob("qa-*.txt")):
+              for line in open(f, encoding="utf-8"):
+                  p = line.strip().split("|")
+                  if len(p) != 9:
+                      continue
+                  _, n, goal, tgt, th, wins, runs, left, bad = p
+                  rows.append((int(n), goal, tgt, int(th), int(wins), int(runs), float(left), int(bad)))
+          rows.sort()
+          name = {"tier": "만들기", "score": "점수", "up": "위로 합치기", "upTier": "대기줄에서"}
+          def tag(r):
+              n, goal, tgt, th, wins, runs, left, bad = r
+              if bad:
+                  return "🐞 이상"
+              if wins == 0:
+                  return "🔴 너무 어려움?"
+              if wins == runs and th and left > th * 0.45:
+                  return "🟡 너무 쉬움?"
+              return ""
+          boss = lambda n: n >= 25 and n % 5 == 0
+          out = ["# 스테이지 자동 QA", "", f"단계 {len(rows)}개 · 봇(아이템 안 씀) 기준", ""]
+          hard = [r for r in rows if tag(r)]
+          out.append(f"표시된 단계 {len(hard)}개 (고비 판은 「아슬아슬」이 목표라 어려움 표시가 나와도 괜찮을 수 있어요)")
+          out += ["", "| 단계 | 목표 | 던지기 | 클리어 | 평균 남김 | 표시 |", "|---|---|---|---|---|---|"]
+          for r in rows:
+              n, goal, tgt, th, wins, runs, left, bad = r
+              t = (str(2 ** int(float(tgt))) if goal in ("tier", "upTier") else tgt)
+              out.append(f"| {n}{' (고비)' if boss(n) else ''} | {name.get(goal, goal)} {t} | {th or '무제한'} | {wins}/{runs} | {left:.0f} | {tag(r)} |")
+          md = "\n".join(out) + "\n"
+          open("stage-qa-report.md", "w", encoding="utf-8").write(md)
+          import os
+          open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8").write(md)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stage-qa-report
+          path: stage-qa-report.md
