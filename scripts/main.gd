@@ -732,7 +732,7 @@ func _update_mood() -> void:
 		fireflies.emitting = night > 0.3
 	# 3점 조명 + 하늘 반사 + 블룸을 시간에 맞춰
 	sun.shadow_opacity = lerpf(0.85, 0.4, night)
-	fill.light_energy = lerpf(0.22, 0.14, night)
+	fill.light_energy = lerpf(0.55, 0.3, night)
 	fill.light_color = Color(0.62, 0.84, 0.9).lerp(Color(0.3, 0.75, 0.75), night)
 	rim.light_energy = lerpf(0.35, 0.28, night)
 	rim.light_color = Color(1.0, 0.9, 0.78).lerp(Color(0.55, 0.95, 0.85), night)
@@ -964,6 +964,14 @@ func _update_camera() -> void:
 		return
 	cam.global_transform = _follow_transform()
 	cam.fov = _vfov()
+	_aim_fill()
+
+
+## 채움광은 항상 카메라 등 뒤 위쪽에서 비춤 → 카메라 쪽을 보는 블록 옆면이 시커멓게 죽지 않게
+func _aim_fill() -> void:
+	if fill == null:
+		return
+	fill.rotation_degrees = Vector3(-18, rad_to_deg(yaw) + 20.0, 0)   # 낮게 → 윗면보다 옆면을 주로 밝힘
 
 
 ## 세로 화면에서도 가로로 보이는 범위가 같게 (가로 시야 20도 기준)
@@ -1364,6 +1372,73 @@ func _on_tap(pos: Vector2) -> void:
 	var fp = _floor_point(pos)
 	if fp != null:
 		_walk_to(fp)
+		_tap_fx(fp)
+
+
+## 이동 지점 표시: 바닥에 민트 링이 퍼지고 반짝이가 톡 튀어 오름
+var _ring_tex: Texture2D
+
+
+func _tap_fx(p: Vector3) -> void:
+	if _ring_tex == null:
+		var img := Image.create(96, 96, false, Image.FORMAT_RGBA8)
+		for y in 96:
+			for x in 96:
+				var d := Vector2(x - 47.5, y - 47.5).length() / 47.5
+				var ring := clampf(1.0 - absf(d - 0.76) / 0.11, 0.0, 1.0)      # 밝은 고리
+				var edge := clampf(1.0 - absf(d - 0.9) / 0.07, 0.0, 1.0)        # 바깥 진한 테 (밝은 바닥에서도 보이게)
+				var dot := clampf((0.2 - d) / 0.05, 0.0, 1.0)                   # 가운데 점
+				var c := Color(0.1, 0.45, 0.42, edge * 0.55).blend(Color(1, 1, 1, maxf(ring, dot)))
+				img.set_pixel(x, y, c)
+		_ring_tex = ImageTexture.create_from_image(img)
+	var root := Node3D.new()
+	add_child(root)
+	root.global_position = p + Vector3(0, 0.04, 0)
+	var col := Color(0.55, 1.0, 0.85)
+	for i in 2:
+		var tint := Color.WHITE if i == 0 else col
+		var q := QuadMesh.new()
+		q.size = Vector2.ONE
+		q.orientation = PlaneMesh.FACE_Y
+		var m := StandardMaterial3D.new()
+		m.albedo_texture = _ring_tex
+		m.albedo_color = tint
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.no_depth_test = true
+		m.render_priority = 2
+		var mi := MeshInstance3D.new()
+		mi.mesh = q
+		mi.material_override = m
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.scale = Vector3.ONE * 0.2
+		root.add_child(mi)
+		var tw := mi.create_tween().set_parallel()
+		tw.tween_property(mi, "scale", Vector3.ONE * (1.35 - i * 0.4), 0.5).set_delay(i * 0.12).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(m, "albedo_color:a", 0.0, 0.5).set_delay(i * 0.12 + 0.1)
+	# 반짝이 6개
+	var sm := SphereMesh.new()
+	sm.radius = 0.035
+	sm.height = 0.07
+	sm.radial_segments = 6
+	sm.rings = 3
+	for i in 6:
+		var m2 := StandardMaterial3D.new()
+		m2.albedo_color = col.lerp(Color(1, 0.95, 0.7), float(i % 2))
+		m2.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m2.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		var sp := MeshInstance3D.new()
+		sp.mesh = sm
+		sp.material_override = m2
+		sp.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(sp)
+		var ang := TAU * i / 6.0 + randf() * 0.4
+		var to := Vector3(cos(ang), 0, sin(ang)) * randf_range(0.3, 0.45)
+		var tw2 := sp.create_tween().set_parallel()
+		tw2.tween_property(sp, "position", to + Vector3(0, 0.25, 0), 0.25).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+		tw2.tween_property(sp, "position:y", 0.0, 0.3).set_delay(0.25).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+		tw2.tween_property(m2, "albedo_color:a", 0.0, 0.25).set_delay(0.35)
+	get_tree().create_timer(0.9).timeout.connect(root.queue_free)
 
 
 # ───────────────────────── HUD (웹 버전 도트 UI) ─────────────────────────
