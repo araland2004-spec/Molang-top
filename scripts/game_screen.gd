@@ -93,6 +93,7 @@ func _ready() -> void:
 	_build_ui()
 	core.score_changed.connect(func(s):
 		score_lbl.text = GameCore.score_text(s)
+		_check_endless_goal()
 		_paint_info())
 	core.buzz.connect(func(ms: int): Save.buzz(ms))
 	core.info_changed.connect(_paint_info)
@@ -453,7 +454,15 @@ func _paint_info() -> void:
 	if core.mode != "stage":
 		stage_lbl.text = "무한 모드"
 		throws_lbl.text = "던지기 %d 남음 · 최고 %s" % [core.throws_left, GameCore.score_text(core.best)] + _bonus_str()
-		goal_row.visible = false
+		# 목표 게이지: 점수가 목표에 닿을 때마다 아이템 하나 (가방에 남아 다음 판에도 씀)
+		goal_row.visible = true
+		var a := endless_goal(core.got_items - 1) if core.got_items > 0 else 0
+		var b := endless_goal(core.got_items)
+		goal_name.text = "목표 · 다음 아이템까지"
+		goal_val.text = "%s / %s" % [GameCore.score_text(core.score), GameCore.score_text(b)]
+		goal_frac = clampf(float(core.score - a) / maxf(1.0, float(b - a)), 0.0, 1.0)
+		goal_bar.frac = goal_frac
+		goal_bar.queue_redraw()
 	else:
 		var i: int = core.stage_idx
 		var st: Dictionary = core.stages[i]
@@ -488,7 +497,7 @@ func _paint_info() -> void:
 func _apply_daily() -> void:
 	var dl := {}
 	for k in ITEM_NAMES:
-		dl[k] = Save.daily_left(k) + Save.bag_count(k)
+		dl[k] = (Save.daily_left(k) if Save.endless_open(k) else 0) + Save.bag_count(k)
 	core.daily_left = dl
 
 
@@ -566,7 +575,7 @@ func _restart_same() -> void:
 func persist() -> void:
 	# core.over 는 게임 오버뿐 아니라 「목록」을 열었을 때도 켜짐 → 그때 저장하면 이어 하기가 사라져서 건너뜀
 	# (「목록」 버튼은 목록을 열기 전에 먼저 저장하고, 진짜 게임 오버는 _on_finished 에서 run 을 비움)
-	if core and core.mode != "stage" and not core.over:
+	if core and core.mode != "stage" and not core.over and int(Save.d.get("erew_rid", -1)) != core.run_id:
 		Save.d["run"] = core.snapshot()
 		Save.save()
 
@@ -755,6 +764,39 @@ func _process(delta: float) -> void:
 			restart_btn.text = "다시" if core.mode == "stage" else "새 판"
 
 
+# ───────────────────────── 무한 모드 목표 게이지 ─────────────────────────
+## 점수 목표: 2000 · 6500 · 13500 · 22500 … (k+1)^1.75 배. 스테이지를 깰수록 목표가 낮아져요(150단계에서 절반).
+const GOAL_ITEMS := ["shake", "undo", "hammer", "tilt"]
+
+
+func endless_goal(k: int) -> int:
+	var easy := 1.0 - minf(int(Save.d["prog"]), 150) / 300.0
+	return maxi(500, snappedi(int(2000.0 * pow(k + 1, 1.75) * easy), 500))
+
+
+func _check_endless_goal() -> void:
+	if core.mode == "stage" or core.over:
+		return
+	var got := false
+	while core.score >= endless_goal(core.got_items) and core.got_items < 60:
+		var it: String = GOAL_ITEMS[randi() % GOAL_ITEMS.size()]
+		Save.d["bag"][it] = Save.bag_count(it) + 1
+		core.daily_left[it] = int(core.daily_left.get(it, 0)) + 1
+		match it:
+			"shake": core.shake_left += 1
+			"undo": core.undo_left += 1
+			"hammer": core.hammer_left += 1
+			"tilt": core.tilt_left += 1
+		core.got_items += 1
+		_toast("목표 달성! %s +1" % ITEM_NAMES[it])
+		got = true
+	if got:
+		Save.buzz(30)
+		synth.tone(660, 1320, 0.12, 0.12)
+		Save.save()
+		_paint_items()
+
+
 # ───────────────────────── 결과 ─────────────────────────
 
 func _on_finished(kind: String, reason: String) -> void:
@@ -778,7 +820,10 @@ func _game_over(reason: String) -> void:
 		Save.d["best"] = maxi(int(Save.d["best"]), core.best)
 		var reward := ""
 		var j := 0
-		if Save.endless_paid_left() > 0:
+		if int(Save.d.get("erew_rid", -1)) == core.run_id:
+			reward = "이 판 보상은 이미 받았어요"
+		elif Save.endless_paid_left() > 0:
+			Save.d["erew_rid"] = core.run_id      # 같은 판 보상은 한 번만 (홈·목록·이어 하기 어디로 나가도)
 			j = Save.endless_jelly(core.score)
 			var e: Dictionary = Save.d["erew"]
 			if e.get("day", "") != Save.kst_day():
@@ -788,6 +833,7 @@ func _game_over(reason: String) -> void:
 			if str(Save.d.get("onb", "")) == "endless":
 				j = maxi(j, 160)          # 안내 판: 상자 하나는 꼭 열 수 있게
 			Save.add_jelly(j)
+			Save.d["last_reward"] = j
 			reward = "무한 모드 보상 젤리 +%d" % j if j > 0 else ""
 		else:
 			reward = "오늘 보상 판(%d번)을 다 썼어요" % Save.ENDLESS_PAID
@@ -798,7 +844,7 @@ func _game_over(reason: String) -> void:
 			card_act = "home"
 			_show_card(reason, GameCore.score_text(core.score), "받은 젤리로 집에서 장식 상자를 열 수 있어요", reward, "집에 가서 상자 열기", false)
 			return
-		_show_card(reason, GameCore.score_text(core.score), "최고 기록 %s · 가장 큰 숫자 %s" % [GameCore.score_text(core.best), GameCore.num_text(core.max_tier)], reward, "다시 하기", false)
+		_show_card(reason, GameCore.score_text(core.score), "최고 기록 %s · 가장 큰 숫자 %s%s" % [GameCore.score_text(core.best), GameCore.num_text(core.max_tier), (" · 목표 아이템 %d개" % core.got_items) if core.got_items else ""], reward, "다시 하기", false)
 		card_act = "retry"
 
 

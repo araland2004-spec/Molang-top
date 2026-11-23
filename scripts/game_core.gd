@@ -91,6 +91,8 @@ var shake_ang := 0.0
 var shake_safe := 0.0
 
 var chamfer := CHAMFER
+var run_id := 0          # 판마다 새 번호: 같은 판 보상을 두 번 받지 않게
+var got_items := 0       # 무한 모드: 이번 판에 목표 게이지로 받은 아이템 수
 var sensor_y := SENSOR_Y
 var sensor_clock := 0.0
 var pegs: Array = []
@@ -261,7 +263,7 @@ func endless_throws() -> int:
 
 
 func item_open(k: String) -> bool:
-	return stage_idx + 1 >= item_at[k] if mode == "stage" else prog >= endless_at[k]
+	return stage_idx + 1 >= item_at[k] if mode == "stage" else (prog >= endless_at[k] or int(daily_left.get(k, 0)) > 0)
 
 
 func item_start(k: String) -> int:
@@ -1493,6 +1495,8 @@ func new_game() -> void:
 	shake_t = 0; shake_safe = 0
 	blobs = []; pending = []; particles = []; floaters = []; queue = []; touches.clear(); warp_fx = []
 	score = 0; max_tier = 0; aim = 0; over = false; out_t = 0; since_merge = 0; clear_t = 0
+	run_id = int(Time.get_unix_time_from_system() * 1000.0) % 2000000000 + randi() % 1000
+	got_items = 0
 	board_tier = 0; up_count = 0; up_tier = 0
 	miss_count = 0; miss_watch = null; held_combo = 0; held_shot = 0; streak = 0; shot_wait = {}
 	var ch = stage_opt("chamfer")
@@ -1593,12 +1597,14 @@ func snapshot() -> Dictionary:
 		bl.append({"t": b.t, "x": roundi(b.cx), "y": roundi(b.cy)})
 	for q: Blob in queue:
 		qu.append(q.t)
-	return {"score": score, "max_tier": max_tier, "throws_left": throws_left, "over": over, "blobs": bl, "queue": qu, "streak": streak}
+	return {"score": score, "max_tier": max_tier, "throws_left": throws_left, "over": over, "blobs": bl, "queue": qu, "streak": streak, "rid": run_id, "got": got_items}
 
 
 func restore(d: Dictionary) -> void:
 	new_game()
 	streak = int(d.get("streak", 0))   # 이어 하기: 연속 합치기 배율도 그대로 (new_game 이 0으로 만든 뒤에)
+	run_id = int(d.get("rid", run_id))
+	got_items = int(d.get("got", 0))
 	score = int(d.get("score", 0))
 	max_tier = int(d.get("max_tier", 0))
 	throws_left = int(d.get("throws_left", endless_throws()))

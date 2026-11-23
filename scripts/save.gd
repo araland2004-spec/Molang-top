@@ -143,7 +143,13 @@ func bag_count(k: String) -> int:
 	return int(d["bag"].get(k, 0))
 
 
-## 무한 모드 아이템: 하루 3번 먼저, 그다음 가방
+## 무한 모드에서 하루 3번 쓰는 아이템이 열렸는지 (단계를 깨면 열림). 안 열렸어도 가방에 있으면 쓸 수 있어요.
+func endless_open(k: String) -> bool:
+	var e: Dictionary = data.get("itemUnlock", {}).get("endless", {})
+	return int(d["prog"]) >= int(e.get(k, 9999))
+
+
+## 무한 모드 아이템: 하루 3번 먼저(열린 것만), 그다음 가방
 func spend_item(k: String, endless: bool) -> void:
 	if not endless:
 		return
@@ -152,7 +158,7 @@ func spend_item(k: String, endless: bool) -> void:
 		dd = {"day": kst_day(), "used": {}}
 		d["daily"] = dd
 	var used := int(dd["used"].get(k, 0))
-	if used < DAILY_MAX:
+	if endless_open(k) and used < DAILY_MAX:
 		dd["used"][k] = used + 1
 	elif bag_count(k) > 0:
 		d["bag"][k] = bag_count(k) - 1

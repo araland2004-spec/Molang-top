@@ -111,8 +111,7 @@ func rebuild_yard() -> void:
 	# 상자 모델 장식 (우체통·벤치·가로등)
 	for id in ["mailbox", "bench", "streetlamp"]:
 		if is_put(id) and M["items"]["out"].has(id):
-			var mi := Boxes.build(M["items"]["out"][id], Vector3(0, main.FLOOR_TOP, 0))
-			yard_root.add_child(mi)
+			yard_root.add_child(_placed(id, M["items"]["out"][id], Vector3(0, main.FLOOR_TOP, 0)))
 
 
 # ───────────────────────── 집 안 ─────────────────────────
@@ -203,7 +202,7 @@ func _build_interior() -> void:
 	var L: Dictionary = M["items"][_lvl_key()]
 	for it in zone_items("in"):
 		if is_put(it["id"]) and L.has(it["id"]):
-			interior.add_child(Boxes.build(L[it["id"]]))
+			interior.add_child(_placed(it["id"], L[it["id"]], Vector3.ZERO))
 	interior.add_child(Boxes.build(L["__tree"]))
 	interior.add_child(Boxes.build(L["__desk"]))
 	var sx := rx / 2
@@ -281,7 +280,13 @@ func _blockers() -> Array:
 	for it in zone_items("in"):
 		if is_put(it["id"]) and it.get("foot") != null:
 			var f: Array = it["foot"]
-			out.append(Rect2(f[0] * sx - f[2], f[1] * sz - f[3], f[2] * 2, f[3] * 2))
+			var pz = pos_of(it["id"])
+			if pz is Array:
+				var hx: float = f[3] if int(pz[2]) % 2 else f[2]
+				var hz: float = f[2] if int(pz[2]) % 2 else f[3]
+				out.append(Rect2(float(pz[0]) - hx, float(pz[1]) - hz, hx * 2, hz * 2))
+			else:
+				out.append(Rect2(f[0] * sx - f[2], f[1] * sz - f[3], f[2] * 2, f[3] * 2))
 	out.append(Rect2(tree_pos.x - 0.5, tree_pos.z - 0.5, 1.0, 1.0))
 	var dx: float = M["DESK_AT"][0] * sx
 	var dz: float = M["DESK_AT"][1] * sz
@@ -475,6 +480,9 @@ func tap(pos: Vector2) -> bool:
 	if plant_asset != "" and not inside:
 		_plant_at(pos)
 		return true
+	if move_id != "":
+		_move_at(pos)
+		return true
 	if inside and floor_edit != "":
 		var p = main._floor_point(pos)
 		if p != null:
@@ -510,9 +518,23 @@ func tap(pos: Vector2) -> bool:
 	var hb: Rect2 = main.HOUSE_BOX
 	var box := AABB(Vector3(hb.position.x - 0.2, main.FLOOR_TOP, hb.position.y - 0.2), Vector3(hb.size.x + 0.4, 3.6, hb.size.y + 0.4))
 	if box.intersects_ray(from, dir) != null:
-		enter()
+		# 집 앞(문 앞 칸)에 와 있을 때만 들어가요. 멀리서 누르면 문 앞까지 걸어가기만 (잘못 눌러 들어가지 않게)
+		if near_door():
+			enter()
+		else:
+			main.going_seat = null
+			main._walk_to(DOOR)
+			main.toast("문 앞에서 집을 한 번 더 누르면 들어가요")
 		return true
 	return false
+
+
+const DOOR := Vector3(0.45, 0.0, 1.95)     # 문 앞 칸 (y 는 몰랑이 높이를 그대로 씀)
+
+
+func near_door() -> bool:
+	var pp: Vector3 = main.player.position
+	return Vector2(pp.x - DOOR.x, pp.z - DOOR.z).length() < 1.25
 
 
 # ───────────────────────── 펫·요정 ─────────────────────────
@@ -1489,7 +1511,7 @@ func open_deco() -> void:
 			sub = "색 %d/%d" % [maxi(1, nature_colors(id)), (NATURE[id]["colors"] as Array).size()]
 			col = Mol.AMBER
 		elif own:
-			sub = "놓았어요" if is_put(id) else "놓기"
+			sub = ("옮기기" if MOVABLE.has(id) else "놓았어요") if is_put(id) else "놓기"
 			col = Mol.MINT if is_put(id) else Mol.TEXT_SUB
 		_card_fill(b, thumb(id), str(it["name"]), sub, col, 112)
 		if not own:
@@ -1597,6 +1619,9 @@ func _deco_tap(id: String) -> void:
 	if NATURE.has(id):
 		deco_sel = "" if deco_sel == id else id
 		open_deco()
+		return
+	if MOVABLE.has(id):
+		start_moving(id)
 		return
 	H()["put"][id] = not is_put(id)
 	Save.save()
@@ -2250,7 +2275,7 @@ func _onb_box() -> void:
 		set_onb("place")
 		_onb_placed()
 		return
-	say(["수고했어요! 젤리 %s개가 들어왔어요." % str(Save.d["jelly"]),
+	say(["수고했어요! 무한 모드 보상으로 젤리 %d개를 받았어요. (지금 %s개)" % [int(Save.d.get("last_reward", 0)), str(Save.d["jelly"])],
 		"젤리 100개로 장식 상자를 하나 열 수 있어요.",
 		"상자를 잡고 옆으로 쓱 밀어 보세요!"], func():
 		force_next = "bench"
@@ -2260,7 +2285,7 @@ func _onb_box() -> void:
 
 
 func _onb_place() -> void:
-	say(["벤치가 나왔어요!", "꾸미기에서 벤치 카드를 눌러 집 앞에 놓아 봐요."], func():
+	say(["벤치가 나왔어요!", "꾸미기에서 벤치 카드를 누르고, 놓고 싶은 땅을 눌러 봐요.", "다 놓았으면 「다 했어요」를 눌러요."], func():
 		deco_sel = ""
 		open_deco())
 
@@ -2524,3 +2549,160 @@ func play_story(done: Callable) -> void:
 		if st["skip"] or not is_instance_valid(ov):
 			return
 	finish.call()
+
+
+# ───────────────────────── 사물 자유 배치 ─────────────────────────
+## 가구·마당 장식을 원하는 곳에: 카드를 누르면 「옮기기」 → 바닥을 누르면 거기로, ↻ 로 90도씩 돌리기, 치우기.
+## 위치는 H()["pos"]["in1:bed"] = [x, z, 돌린 횟수] (집 안은 집 크기마다 따로, 밖은 "out:id"). 없으면 원래 자리.
+const MOVABLE := ["bed", "rug", "plant", "shelf", "sofa", "lamp", "table", "mailbox", "bench", "streetlamp"]
+var move_id := ""
+
+
+func _pos_key(id: String) -> String:
+	for it in items:
+		if it["id"] == id:
+			return (_lvl_key() + ":" + id) if it["zone"] == "in" else "out:" + id
+	return "out:" + id
+
+
+func pos_of(id: String):
+	var P = H().get("pos")
+	if not (P is Dictionary):
+		return null
+	return P.get(_pos_key(id))
+
+
+func _boxes_of(id: String) -> Array:
+	for it in items:
+		if it["id"] == id:
+			return M["items"][_lvl_key()].get(id, []) if it["zone"] == "in" else M["items"]["out"].get(id, [])
+	return []
+
+
+## 모델 상자들의 바닥 가운데 (x, z)
+func _box_center(boxes: Array) -> Vector2:
+	if boxes.is_empty():
+		return Vector2.ZERO
+	var x0 := 1e9; var x1 := -1e9; var z0 := 1e9; var z1 := -1e9
+	for b in boxes:
+		var a: Array = b["b"]
+		x0 = minf(x0, minf(a[0], a[3])); x1 = maxf(x1, maxf(a[0], a[3]))
+		z0 = minf(z0, minf(a[2], a[5])); z1 = maxf(z1, maxf(a[2], a[5]))
+	return Vector2((x0 + x1) / 2, (z0 + z1) / 2)
+
+
+func _placed(id: String, boxes: Array, off: Vector3) -> Node3D:
+	var mi := Boxes.build(boxes, off)
+	var pz = pos_of(id)
+	if not (pz is Array) or not MOVABLE.has(id):
+		return mi
+	var c := _box_center(boxes)
+	var piv := Node3D.new()
+	piv.position = Vector3(float(pz[0]), 0, float(pz[1]))
+	piv.rotation.y = int(pz[2]) * PI / 2
+	mi.position = Vector3(-c.x, 0, -c.y)
+	piv.add_child(mi)
+	if id == move_id:
+		piv.scale = Vector3.ONE * 1.12
+		piv.create_tween().tween_property(piv, "scale", Vector3.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	return piv
+
+
+func _set_pos(id: String, x: float, z: float, rot: int) -> void:
+	if not (H().get("pos") is Dictionary):
+		H()["pos"] = {}
+	H()["pos"][_pos_key(id)] = [snappedf(x, 0.01), snappedf(z, 0.01), rot % 4]
+	Save.save()
+
+
+func start_moving(id: String) -> void:
+	_close_sheet()
+	move_id = id
+	if not is_put(id):
+		H()["put"][id] = true
+		Save.save()
+		main.synth_tone(660, 990, 0.08, 0.1)
+		after_deco()
+	var v := _bottom_sheet()
+	plant_bar = sheet          # 심기 막대와 같은 자리 (땅 탭이 시트에 막히지 않게)
+	plant_bar.remove_meta("deco")
+	sheet = null
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 10)
+	v.add_child(head)
+	var t := Mol.lbl("%s 옮기기" % item_name(id), 26, Mol.TEXT, "b")
+	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(t)
+	var done := Mol.btn("다 했어요", "primary", 22)
+	done.custom_minimum_size.y = 64
+	done.pressed.connect(func():
+		stop_moving()
+		if onb() == "place":
+			open_deco()
+			_onb_placed()
+		else:
+			open_deco())
+	head.add_child(done)
+	v.add_child(Mol.lbl(("방바닥" if inside else "내 땅") + "을 누르면 그 자리로 옮겨요", 18, Mol.TEXT_SUB, "r"))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	v.add_child(row)
+	var rb := Mol.btn("↻ 돌리기", "sec", 22)
+	rb.custom_minimum_size.y = 72
+	rb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rb.pressed.connect(func():
+		var pz = pos_of(id)
+		var c := _box_center(_boxes_of(id))
+		if pz is Array:
+			_set_pos(id, float(pz[0]), float(pz[1]), int(pz[2]) + 1)
+		else:
+			_set_pos(id, c.x, c.y, 1)
+		main.synth_tone(560, 700, 0.05, 0.08)
+		after_deco())
+	row.add_child(rb)
+	var xb := Mol.btn("치우기", "sec", 22)
+	xb.custom_minimum_size.y = 72
+	xb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	xb.pressed.connect(func():
+		H()["put"][id] = false
+		Save.save()
+		main.synth_tone(520, 260, 0.08, 0.1)
+		stop_moving()
+		after_deco()
+		open_deco())
+	row.add_child(xb)
+
+
+func stop_moving() -> void:
+	move_id = ""
+	if plant_bar:
+		main.hud_blocks.erase(plant_bar)
+		plant_bar.queue_free()
+		plant_bar = null
+	main.refresh_ui()
+	after_deco()
+
+
+func _move_at(pos: Vector2) -> void:
+	var p = main._floor_point(pos)
+	if p == null:
+		return
+	var pz = pos_of(move_id)
+	var rot := int(pz[2]) if pz is Array else 0
+	if inside:
+		# 방 안 0.2 칸 단위, 벽에서 조금 떨어지게
+		var x := clampf(snappedf(p.x, 0.2), -room.x + 0.35, room.x - 0.35)
+		var z := clampf(snappedf(p.z, 0.2), -room.y + 0.35, room.y - 0.35)
+		_set_pos(move_id, x, z, rot)
+	else:
+		var cell := Vector2i(roundi(p.x), roundi(p.z))
+		if not main.land_set.has(cell):
+			main.toast("내 땅에만 놓을 수 있어요 · 「땅 편집」에서 넓혀요")
+			return
+		if main._in_house(Vector3(cell.x, main.FLOOR_TOP, cell.y), 0.3):
+			main.toast("집 자리에는 못 놓아요")
+			return
+		_set_pos(move_id, cell.x, cell.y, rot)
+	main.synth_tone(660, 990, 0.08, 0.1)
+	Save.buzz(8)
+	after_deco()

@@ -1619,6 +1619,30 @@ func _build_hud() -> void:
 	work_label = work
 	work.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	tr.add_child(work)
+	# 반대편 보기: 카메라를 집 반대쪽으로 반 바퀴 (오른쪽 가운데 둥근 버튼)
+	var flip := Button.new()
+	flip.focus_mode = Control.FOCUS_NONE
+	flip.text = "↻\n반대편"
+	flip.add_theme_font_override("font", Mol.font("m"))
+	flip.add_theme_font_size_override("font_size", 20)
+	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
+		flip.add_theme_stylebox_override(k, Mol.sb(Color(1, 1, 1, 0.82) if day else Color(0.031, 0.094, 0.106, 0.7), Mol.DAY_LINE if day else Color(0.494, 0.941, 0.784, 0.28), 999, Vector2(6, 6)))
+	for k in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+		flip.add_theme_color_override(k, txt)
+	flip.anchor_left = 1.0
+	flip.anchor_right = 1.0
+	flip.anchor_top = 0.5
+	flip.anchor_bottom = 0.5
+	flip.offset_left = -48 - 96
+	flip.offset_right = -48
+	flip.offset_top = -60
+	flip.offset_bottom = 36
+	flip.pivot_offset = Vector2(48, 48)
+	Mol.press(flip, "icon")
+	flip.pressed.connect(func(): _turn(180))
+	ui_root.add_child(flip)
+	hud_groups.append(flip)
+	hud_blocks.append(flip)
 
 	# 상태 알약 (하늘 위 글씨는 반투명 바탕) + 점 달린 구분선
 	var mid := VBoxContainer.new()
@@ -2267,7 +2291,7 @@ func _refresh_ui() -> void:
 		deco_btn.text = "집 안 꾸미기" if ins else "집 밖 꾸미기"
 		edit_btn.text = "바닥 꾸미기" if ins else "땅 편집"
 	if hint:
-		hint.text = ("트리를 누르면 닦아요 · 의자를 누르면 앉아요" if ins else "바닥을 누르면 걸어가요 · 집을 누르면 들어가요")
+		hint.text = ("트리를 누르면 닦아요 · 의자를 누르면 앉아요" if ins else "바닥을 누르면 걸어가요 · 문 앞에서 집을 누르면 들어가요")
 	if pet_label and extra:
 		pet_label.text = extra.pet_line()
 		pet_label.visible = pet_label.text != "" and not (sitting != null or edit_mode)
