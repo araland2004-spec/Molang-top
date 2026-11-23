@@ -221,6 +221,12 @@ func _greet() -> void:
 			return
 	if extra.resume_move_flow():
 		return      # 새 집 안내(땅 넓히기 → 집 놓기)를 하다 나갔으면 이어서
+	if not h["events"].has("howto"):
+		# 조작 안내는 한 번만 (예전 화면 위 안내 글씨 대신)
+		h["events"].append("howto")
+		Save.save()
+		extra.say(["바닥을 누르면 몰랑이가 걸어가요.", "문 앞에서 집을 누르면 집에 들어가요."], func(): extra.quest_greet())
+		return
 	if extra.quest_greet():
 		return      # 깬 퀘스트가 있으면 보석 받으러
 	if not h["events"].has("tut1"):
@@ -1237,7 +1243,7 @@ func _process(delta: float) -> void:
 	if hud_t <= 0 and jelly_btn:
 		hud_t = 1.0
 		if gem_btn:
-			gem_btn.text = str(Save.gem())
+			gem_btn.text = _comma(Save.gem())
 		if quest_dot:
 			quest_dot.visible = Save.quest_ready()
 		# 젤리 받기 (인터랙션 제안서 C): 게임에서 돌아와 늘었으면 칩이 톡 + 0.6초 동안 숫자가 올라감 + 「+N」
@@ -1251,7 +1257,7 @@ func _process(delta: float) -> void:
 		var left := 30 - int(ps / 60.0) % 30
 		var rdy: int = Save.orn_ready()
 		var hm := "%d시간 %d분" % [int(ps / 3600.0), int(ps / 60.0) % 60] if ps >= 3600 else "%d분" % int(ps / 60.0)
-		play_label.text = "플레이  %s   |   " % hm + ("오너먼트 %d개 받을 수 있어요" % rdy if rdy > 0 else "오너먼트까지  %d분" % left)
+		play_label.text = "플레이 %s · " % hm + ("오너먼트 %d개 받을 수 있어요" % rdy if rdy > 0 else "오너먼트까지 %d분" % left)
 		if lofi_root and lofi_root.visible:
 			_lofi_paint()
 	if toast_t > 0:
@@ -1389,7 +1395,11 @@ func _over_ui(pos: Vector2) -> bool:
 		if not is_instance_valid(hud_blocks[i]):
 			hud_blocks.remove_at(i)
 	# 창(시트·상점·상자)이 떠 있으면 뒤의 세상은 누를 수 없음
-	if (extra and extra.sheet != null and is_instance_valid(extra.sheet)) or shop_panel != null:
+	if extra and extra.sheet != null and is_instance_valid(extra.sheet):
+		# 꾸미기 시트(아래에 붙음)는 시트 밖 세상을 눌러 장식을 고르고 옮길 수 있어요
+		if not (extra.deco_active() and not extra.sheet.get_global_rect().has_point(pos)):
+			return true
+	if shop_panel != null:
 		return true
 	for c in hud_blocks:
 		if c.is_visible_in_tree() and c.get_global_rect().has_point(pos):
@@ -1460,7 +1470,8 @@ func _on_tap(pos: Vector2) -> void:
 			_toast("내 땅 바로 옆 칸만 넓힐 수 있어요")
 		return
 	var seat := _seat_at(pos)
-	if seat == null and extra and extra.tap(pos):
+	# 꾸미기 중엔 의자보다 장식 고르기·놓기가 먼저
+	if extra and (seat == null or extra.deco_active()) and extra.tap(pos):
 		return
 	if seat:
 		var sp: Node3D = seat.get_node("SitPoint")
@@ -1698,8 +1709,8 @@ func _build_hud() -> void:
 	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
 		tl.add_theme_stylebox_override(k, tls)
 	tl.flat = false
-	tl.position = Vector2(64, 80)
-	tl.size = Vector2(340, 108)
+	tl.position = Vector2(48, 80)
+	tl.size = Vector2(300, 108)
 	ui_root.add_child(tl)
 	hud_groups.append(tl)
 	hud_blocks.append(tl)
@@ -1743,136 +1754,82 @@ func _build_hud() -> void:
 	town_label = Mol.lbl("크리스마스 마을", 26, sub, "r")
 	pv.add_child(town_label)
 
-	# 위 오른쪽: 젤리 알약 (누르면 상점) + 공방
+	# ── 위 오른쪽: 재화 두 개 나란히 (젤리 → 상점 · 보석 → 퀘스트) + 그 아래 반대편 보기
+	var chip_sb := Mol.sb(Color(1, 1, 1, 0.82) if day else Color(0.031, 0.094, 0.106, 0.7), Mol.DAY_LINE if day else Color(0.494, 0.941, 0.784, 0.28), 999, Vector2(16, 10))
 	var tr := VBoxContainer.new()
-	tr.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	tr.position = Vector2(-80 - 260, 98)
-	tr.size = Vector2(260, 0)
-	tr.add_theme_constant_override("separation", 6)
+	tr.anchor_left = 1.0
+	tr.anchor_right = 1.0
+	tr.offset_left = -48 - 300
+	tr.offset_right = -48
+	tr.offset_top = 92
+	tr.alignment = BoxContainer.ALIGNMENT_BEGIN
+	tr.add_theme_constant_override("separation", 12)
 	ui_root.add_child(tr)
 	hud_groups.append(tr)
-	var jchip := Button.new()
-	jchip.focus_mode = Control.FOCUS_NONE
-	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
-		jchip.add_theme_stylebox_override(k, Mol.sb(Color(1, 1, 1, 0.82) if day else Color(0.031, 0.094, 0.106, 0.7), Mol.DAY_LINE if day else Color(0.494, 0.941, 0.784, 0.28), 999, Vector2(28, 12)))
-	jchip.custom_minimum_size = Vector2(260, 88)
-	jchip.add_theme_font_override("font", Mol.font("num"))
-	jchip.add_theme_font_size_override("font_size", 36)
-	for k in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
-		jchip.add_theme_color_override(k, txt)
-	jchip.icon = _jelly_icon()
-	jchip.add_theme_constant_override("h_separation", 14)
-	jchip.text = _comma(int(Save.d.get("jelly", 0)))
-	jchip.pressed.connect(_open_shop)
-	jelly_btn = jchip
-	tr.add_child(jchip)
-	hud_blocks.append(jchip)
-	var work := Mol.lbl("공방 +%s/분" % str(snappedf(Save.work_rate(), 0.1)), 22, Mol.DAY_PRIMARY_TEXT if day else Mol.AMBER, "m")
-	work_label = work
-	work.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	tr.add_child(work)
-	# 반대편 보기: 카메라를 집 반대쪽으로 반 바퀴 (오른쪽 가운데 둥근 버튼)
+	var cur_row := HBoxContainer.new()
+	cur_row.alignment = BoxContainer.ALIGNMENT_END
+	cur_row.add_theme_constant_override("separation", 10)
+	tr.add_child(cur_row)
+	var mk_chip := func(icon: Texture2D, val: String, cb: Callable) -> Button:
+		var c := Button.new()
+		c.focus_mode = Control.FOCUS_NONE
+		for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
+			c.add_theme_stylebox_override(k, chip_sb)
+		c.custom_minimum_size = Vector2(140, 72)
+		c.add_theme_font_override("font", Mol.font("num"))
+		c.add_theme_font_size_override("font_size", 28)
+		for k in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+			c.add_theme_color_override(k, txt)
+		c.icon = icon
+		c.add_theme_constant_override("h_separation", 8)
+		c.text = val
+		c.pressed.connect(cb)
+		cur_row.add_child(c)
+		hud_blocks.append(c)
+		return c
+	var jl := _jelly_icon()
+	jelly_btn = mk_chip.call(jl, _comma(int(Save.d.get("jelly", 0))), _open_shop)
+	gem_btn = mk_chip.call(gem_icon(), _comma(Save.gem()), func(): extra.open_quests())
 	var flip := Button.new()
 	flip.focus_mode = Control.FOCUS_NONE
-	flip.text = "↻\n반대편"
+	flip.text = "↻ 반대편"
 	flip.add_theme_font_override("font", Mol.font("m"))
-	flip.add_theme_font_size_override("font_size", 20)
+	flip.add_theme_font_size_override("font_size", 22)
 	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
-		flip.add_theme_stylebox_override(k, Mol.sb(Color(1, 1, 1, 0.82) if day else Color(0.031, 0.094, 0.106, 0.7), Mol.DAY_LINE if day else Color(0.494, 0.941, 0.784, 0.28), 999, Vector2(6, 6)))
+		flip.add_theme_stylebox_override(k, chip_sb)
 	for k in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
 		flip.add_theme_color_override(k, txt)
-	flip.anchor_left = 1.0
-	flip.anchor_right = 1.0
-	flip.anchor_top = 0.5
-	flip.anchor_bottom = 0.5
-	flip.offset_left = -48 - 96
-	flip.offset_right = -48
-	flip.offset_top = -60
-	flip.offset_bottom = 36
-	flip.pivot_offset = Vector2(48, 48)
+	flip.custom_minimum_size = Vector2(0, 60)
+	flip.size_flags_horizontal = Control.SIZE_SHRINK_END
 	Mol.press(flip, "icon")
 	flip.pressed.connect(func(): _turn(180))
-	ui_root.add_child(flip)
-	hud_groups.append(flip)
+	tr.add_child(flip)
 	hud_blocks.append(flip)
-	# 퀘스트 (왼쪽 가운데): 보석 수 + 받을 게 있으면 빨간 점
-	var qcol := VBoxContainer.new()
-	qcol.anchor_top = 0.5
-	qcol.anchor_bottom = 0.5
-	qcol.offset_left = 44
-	qcol.offset_top = -100
-	qcol.add_theme_constant_override("separation", 6)
-	ui_root.add_child(qcol)
-	hud_groups.append(qcol)
-	var gpill := Button.new()
-	gpill.focus_mode = Control.FOCUS_NONE
-	gpill.icon = gem_icon()
-	gpill.add_theme_constant_override("h_separation", 6)
-	gpill.add_theme_font_override("font", Mol.font("num"))
-	gpill.add_theme_font_size_override("font_size", 22)
-	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
-		gpill.add_theme_stylebox_override(k, Mol.sb(Color(1, 1, 1, 0.82) if day else Color(0.031, 0.094, 0.106, 0.7), Mol.DAY_LINE if day else Color(0.494, 0.941, 0.784, 0.28), 999, Vector2(14, 6)))
-	for k in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
-		gpill.add_theme_color_override(k, txt)
-	gpill.text = str(Save.gem())
-	gpill.pressed.connect(func(): extra.open_quests())
-	qcol.add_child(gpill)
-	hud_blocks.append(gpill)
-	gem_btn = gpill
-	var qb := Button.new()
-	qb.focus_mode = Control.FOCUS_NONE
-	qb.text = "★\n퀘스트"
-	qb.add_theme_font_override("font", Mol.font("m"))
-	qb.add_theme_font_size_override("font_size", 20)
-	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
-		qb.add_theme_stylebox_override(k, Mol.sb(Color(1, 1, 1, 0.82) if day else Color(0.031, 0.094, 0.106, 0.7), Mol.DAY_LINE if day else Color(0.494, 0.941, 0.784, 0.28), 999, Vector2(6, 6)))
-	for k in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
-		qb.add_theme_color_override(k, txt)
-	qb.custom_minimum_size = Vector2(96, 96)
-	qb.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	qb.pivot_offset = Vector2(48, 48)
-	Mol.press(qb, "icon")
-	qb.pressed.connect(func(): extra.open_quests())
-	qcol.add_child(qb)
-	hud_blocks.append(qb)
-	var dot := Panel.new()
-	dot.add_theme_stylebox_override("panel", Mol.sb(Mol.ALERT, Color(0, 0, 0, 0), 999, Vector2.ZERO))
-	dot.position = Vector2(72, 4)
-	dot.size = Vector2(20, 20)
-	dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	qb.add_child(dot)
-	quest_dot = dot
-	dot.visible = Save.quest_ready()
 
-	# 상태 알약 (하늘 위 글씨는 반투명 바탕) + 점 달린 구분선
+	# ── 프로필 아래 왼쪽: 공방 · 플레이 시간 · 오너먼트 · 펫 (작은 알약, 왼쪽 정렬) + 집 안이면 「밖으로」
+	var pill_sb := Mol.sb(Color(1, 1, 1, 0.78) if day else Color(0, 0, 0, 0.45), Mol.DAY_PANEL_LINE if day else Color(0.494, 0.941, 0.784, 0.16), 999, Vector2(18, 6))
 	var mid := VBoxContainer.new()
-	mid.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	mid.position = Vector2(0, 226)
-	mid.add_theme_constant_override("separation", 8)
+	mid.position = Vector2(64, 202)
+	mid.add_theme_constant_override("separation", 6)
 	mid.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui_root.add_child(mid)
 	hud_groups.append(mid)
-	var gl := Mol.GradLine.new(Mol.DAY_LINE if day else Color(0.494, 0.941, 0.784, 0.4), true)
-	gl.custom_minimum_size = Vector2(560, 14)
-	gl.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	mid.add_child(gl)
-	var pill_sb := Mol.sb(Color(1, 1, 1, 0.82) if day else Color(0, 0, 0, 0.55), Mol.DAY_PANEL_LINE if day else Color(0.494, 0.941, 0.784, 0.18), 999, Vector2(32, 12))
-	play_label = Mol.lbl("", 28, txt, "m")
+	var work := Mol.lbl("공방 +%s/분" % str(snappedf(Save.work_rate(), 0.1)), 20, Mol.DAY_PRIMARY_TEXT if day else Mol.AMBER, "m")
+	work.add_theme_stylebox_override("normal", pill_sb)
+	work.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	work_label = work
+	mid.add_child(work)
+	play_label = Mol.lbl("", 20, txt, "m")
 	play_label.add_theme_stylebox_override("normal", pill_sb)
-	play_label.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	play_label.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	mid.add_child(play_label)
-	pet_label = Mol.lbl("", 24, sub, "m")
+	pet_label = Mol.lbl("", 20, sub, "m")
 	pet_label.add_theme_stylebox_override("normal", pill_sb)
-	pet_label.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	pet_label.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	mid.add_child(pet_label)
-	hint = Mol.lbl("", 24, sub, "r")
-	hint.add_theme_stylebox_override("normal", pill_sb)
-	hint.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	mid.add_child(hint)
-	# 집 안: 밖으로
-	out_btn = Mol.btn("← 밖으로", "sec", 26, day)
-	out_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	out_btn.custom_minimum_size = Vector2(220, 80)
+	out_btn = Mol.btn("← 밖으로", "sec", 24, day)
+	out_btn.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	out_btn.custom_minimum_size = Vector2(200, 72)
 	out_btn.pressed.connect(func(): extra.leave())
 	mid.add_child(out_btn)
 	hud_blocks.append(out_btn)
@@ -1940,7 +1897,7 @@ func _build_hud() -> void:
 	var dock := HBoxContainer.new()
 	dock.add_theme_constant_override("separation", 12)
 	bot.add_child(dock)
-	for d in [["book", "도감"], ["shop", "상점"], ["decorate", "꾸미기"], ["music", "음악"], ["lofi_mode", "틀어 두기"]]:
+	for d in [["book", "도감"], ["shop", "상점"], ["decorate", "꾸미기"], ["music", "음악"], ["list", "퀘스트"]]:
 		var b := Mol.icon_btn(d[0], d[1], day, 116)
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		match d[0]:
@@ -1948,7 +1905,16 @@ func _build_hud() -> void:
 			"shop": b.pressed.connect(_open_shop)
 			"decorate": b.pressed.connect(func(): extra.open_deco())
 			"music": b.pressed.connect(func(): extra.open_music())
-			"lofi_mode": b.pressed.connect(_lofi_on)
+			"list":
+				b.pressed.connect(func(): extra.open_quests())
+				var dot := Panel.new()
+				dot.add_theme_stylebox_override("panel", Mol.sb(Mol.ALERT, Color(0, 0, 0, 0), 999, Vector2.ZERO))
+				dot.size = Vector2(20, 20)
+				dot.position = Vector2(16, 12)
+				dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				b.add_child(dot)
+				quest_dot = dot
+				dot.visible = Save.quest_ready()
 		dock.add_child(b)
 		hud_blocks.append(b)
 

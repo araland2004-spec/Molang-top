@@ -143,6 +143,10 @@ func enter() -> void:
 	main.going_seat = null
 	_move_pets_inside(true)
 	main.refresh_ui()
+	if not H()["events"].has("howto_in"):
+		H()["events"].append("howto_in")
+		Save.save()
+		say(["집 안이에요!", "트리를 누르면 오너먼트를 달고, 의자를 누르면 앉아요.", "「← 밖으로」를 누르면 다시 나가요."], func(): pass)
 
 
 func leave() -> void:
@@ -493,12 +497,24 @@ func tap(pos: Vector2) -> bool:
 	if house_placing and not inside:
 		_house_tap(pos)
 		return true
-	if plant_asset != "" and not inside:
-		_plant_at(pos)
-		return true
-	if move_id != "":
-		_move_at(pos)
-		return true
+	# 꾸미기 중(꾸미기 창·옮기기·심기): 놓인 물건을 누르면 그걸 골라요 → 바닥을 누르면 옮김, 돌리기·치우기
+	if deco_active():
+		var hit := _pick(pos)
+		if hit != "":
+			if hit.begins_with("prop:"):
+				start_prop_edit(hit.substr(5))
+			else:
+				start_moving(hit)
+			return true
+		if move_id != "":
+			_move_at(pos)
+			return true
+		if sel_prop != "":
+			_move_prop(pos)
+			return true
+		if plant_asset != "" and not inside:
+			_plant_at(pos)
+			return true
 	if inside and floor_edit != "":
 		var p = main._floor_point(pos)
 		if p != null:
@@ -929,6 +945,9 @@ func _auto_plant(id: String) -> void:
 
 func start_planting(asset: String, id: String) -> void:
 	_close_sheet()
+	move_id = ""
+	sel_prop = ""
+	_sel_ring_update()
 	plant_asset = asset
 	if plant_bar:
 		main.hud_blocks.erase(plant_bar)
@@ -1001,8 +1020,8 @@ func _plant_at(pos: Vector2) -> void:
 	var z := snappedf(p.z, 0.1)
 	var cell := Vector2i(roundi(x), roundi(z))
 	if near_key != "":
-		props.erase(near_key)
-		main.synth_tone(520, 260, 0.08, 0.1)
+		start_prop_edit(near_key)      # 이미 심은 걸 누르면 지우지 않고 골라요 (옮기기·돌리기·치우기)
+		return
 	elif not main.land_set.has(cell):
 		main.toast("내 땅에만 심을 수 있어요 · 「땅 편집」에서 넓혀요")
 		return
@@ -1471,23 +1490,20 @@ func open_box(n := 1, tut_done := Callable()) -> void:
 			if NATURE.has(id):
 				var before := nature_colors(id)
 				_unlock_colors(id, c)
-				if c == 1:
-					_auto_plant(id)
-				elif nature_colors(id) > before:
+				if c > 1 and nature_colors(id) > before:
 					main.toast("%s 새 색이 열렸어요: %s" % [item_name(id), NATURE[id]["colors"][nature_colors(id) - 1][1]])
 			if c == 1:
-				H()["put"][id] = not forced     # 안내 상자: 직접 놓아 보게 비워 둠
-				nf += 1
+				nf += 1      # 새 장식은 자동으로 놓지 않고 꾸미기에 보관 (원하는 곳에 직접 놓기)
 			got.append({"tex": thumb(id), "title": str(it["name"]), "fresh": c == 1, "zone": it["zone"], "dup": c - 1})
 		Save.save()
 		main.refresh_ui()
 		var r := {"items": got, "more": (int(Save.d["jelly"]) >= BOX_PRICE or int(H()["keys"]) > 0) and not vol_done(), "more10": int(Save.d["jelly"]) >= BOX_PRICE * 10 and not vol_done()}
 		if got.size() == 1:
 			var o: Dictionary = got[0]
-			r["sub"] = ("새로 나왔어요! 꾸미기에서 놓아 봐요" if tut_done.is_valid() else ("새로 나왔어요! %s 바로 놓았어요" % ("집 안에" if o["zone"] == "in" else "집 밖에"))) if o["fresh"] else "중복이에요 (중복 %d개) · 중복 3개를 모으면 다른 가구로 바꿀 수 있어요" % o["dup"]
+			r["sub"] = ("새로 나왔어요! 꾸미기에서 %s 원하는 곳에 놓아 봐요" % ("집 안" if o["zone"] == "in" else "섬")) if o["fresh"] else "중복이에요 (중복 %d개) · 중복 3개를 모으면 다른 가구로 바꿀 수 있어요" % o["dup"]
 		else:
 			r["title"] = "상자 %d개! 새 장식 %d개" % [got.size(), nf]
-			r["sub"] = ("새 장식은 바로 놓았어요 · " if nf else "") + "중복 %d개는 도감에서 3개씩 바꿀 수 있어요" % (got.size() - nf)
+			r["sub"] = ("새 장식은 꾸미기에서 놓아요 · " if nf else "") + "중복 %d개는 도감에서 3개씩 바꿀 수 있어요" % (got.size() - nf)
 		return r
 	_show_gift("상자를 잡고 옆으로 스와이프해 보세요", pop, func():
 		after_deco()
@@ -2315,7 +2331,11 @@ func _onb_name() -> void:
 				set_onb("done")
 				Save.d["quest"] = 0
 				Save.save()
-				say(["「%s」, 마음에 쏙 들어요!" % H()["name"]], func(): quest_intro(0)))))
+				if not H()["events"].has("howto"):
+					H()["events"].append("howto")
+				Save.save()
+				say(["「%s」, 마음에 쏙 들어요!" % H()["name"],
+					"바닥을 누르면 내가 걸어가요. 문 앞에서 집을 누르면 집에 들어가요."], func(): quest_intro(0)))))
 
 
 ## 안내 중 무한 모드에서 (판이 끝나기 전에) 돌아왔을 때: 다시 보내지 않고 맛보기 선물을 주고 다음으로
@@ -2676,11 +2696,20 @@ func _set_pos(id: String, x: float, z: float, rot: int) -> void:
 func start_moving(id: String) -> void:
 	_close_sheet()
 	move_id = id
+	sel_prop = ""
 	if not is_put(id):
 		H()["put"][id] = true
+		# 처음 놓는 건 원래 정해진 자리가 아니라 몰랑이 앞(집 안이면 방 가운데 쪽)에 → 바닥을 눌러 옮겨요
+		var pp: Vector3 = main.player.position
+		if inside:
+			_set_pos(id, clampf(snappedf(pp.x, 0.2), -room.x + 0.5, room.x - 0.5), clampf(snappedf(pp.z - 0.8, 0.2), -room.y + 0.5, room.y - 0.5), 0)
+		else:
+			_set_pos(id, snappedf(pp.x + 0.75, 0.25), snappedf(pp.z + 0.5, 0.25), 0)
+		Save.bump("place")
 		Save.save()
 		main.synth_tone(660, 990, 0.08, 0.1)
 		after_deco()
+	_sel_ring_update()
 	var v := _bottom_sheet()
 	plant_bar = sheet          # 심기 막대와 같은 자리 (땅 탭이 시트에 막히지 않게)
 	plant_bar.remove_meta("deco")
@@ -2733,6 +2762,8 @@ func start_moving(id: String) -> void:
 
 func stop_moving() -> void:
 	move_id = ""
+	sel_prop = ""
+	_sel_ring_update()
 	if plant_bar:
 		main.hud_blocks.erase(plant_bar)
 		plant_bar.queue_free()
@@ -2777,6 +2808,7 @@ func _move_at(pos: Vector2) -> void:
 	main.synth_tone(660, 990, 0.08, 0.1)
 	Save.buzz(8)
 	after_deco()
+	_sel_ring_update()
 
 
 # ───────────────────────── 새 집: 땅 넓히기 → 집 놓기 (안내) ─────────────────────────
@@ -3115,3 +3147,200 @@ func open_quests() -> void:
 	var cb: Button = main._px_btn("닫기", main.C_CREAM, 22)
 	cb.pressed.connect(_close_sheet)
 	v.add_child(cb)
+
+
+# ───────────────────────── 꾸미기: 눌러서 고르기 ─────────────────────────
+var sel_prop := ""           # 고른 자연 장식 칸 키 ("x,z")
+var sel_ring: MeshInstance3D
+
+
+func deco_active() -> bool:
+	return move_id != "" or sel_prop != "" or plant_asset != "" or (sheet != null and sheet.has_meta("deco") and sheet.find_children("*", "ScrollContainer", true, false).size() > 0)
+
+
+## 화면에서 누른 곳 가까이의 놓인 물건: 가구 id 또는 "prop:x,z" (없으면 "")
+func _pick(pos: Vector2) -> String:
+	var cam: Camera3D = main.cam
+	var best := ""
+	var bd := 64.0
+	for id in MOVABLE:
+		if not is_put(id) or not owned(id):
+			continue
+		var zin := false
+		for it in items:
+			if it["id"] == id:
+				zin = it["zone"] == "in"
+		if zin != inside:
+			continue
+		var w := _item_world(id)
+		for h in [0.15, 0.45]:
+			var wp := w + Vector3(0, h, 0)
+			if cam.is_position_behind(wp):
+				continue
+			var d := cam.unproject_position(wp).distance_to(pos)
+			if d < bd:
+				bd = d
+				best = id
+	if not inside:
+		for k in H()["props"]:
+			var xz: PackedStringArray = str(k).split(",")
+			for h in [0.1, 0.5]:
+				var wp := Vector3(float(xz[0]), main.FLOOR_TOP + h, float(xz[1]))
+				if cam.is_position_behind(wp):
+					continue
+				var d := cam.unproject_position(wp).distance_to(pos)
+				if d < bd:
+					bd = d
+					best = "prop:" + str(k)
+	return best
+
+
+## 가구의 지금 자리 (월드 좌표, 바닥 높이)
+func _item_world(id: String) -> Vector3:
+	var pz = pos_of(id)
+	var c := _box_center(_boxes_of(id))
+	var x: float = float(pz[0]) if pz is Array else c.x
+	var z: float = float(pz[1]) if pz is Array else c.y
+	return Vector3(x, main.FLOOR_TOP, z)
+
+
+## 고른 물건 발밑에 민트 고리
+func _sel_ring_update() -> void:
+	var at = null
+	if move_id != "":
+		at = _item_world(move_id)
+	elif sel_prop != "" and H()["props"].has(sel_prop):
+		var xz: PackedStringArray = sel_prop.split(",")
+		at = Vector3(float(xz[0]), main.FLOOR_TOP, float(xz[1]))
+	if at == null:
+		if sel_ring:
+			sel_ring.visible = false
+		return
+	if sel_ring == null or not is_instance_valid(sel_ring):
+		sel_ring = MeshInstance3D.new()
+		var tm := TorusMesh.new()
+		tm.inner_radius = 0.42
+		tm.outer_radius = 0.5
+		sel_ring.mesh = tm
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.albedo_color = Color(0.49, 0.94, 0.78, 0.9)
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.no_depth_test = true
+		sel_ring.material_override = m
+		main.add_child(sel_ring)
+	sel_ring.visible = true
+	sel_ring.global_position = (at as Vector3) + Vector3(0, 0.05, 0)
+	sel_ring.scale = Vector3.ONE * 1.3
+	sel_ring.create_tween().tween_property(sel_ring, "scale", Vector3.ONE, 0.2).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+## 자연 장식 하나를 골라서: 바닥을 누르면 옮김 · 돌리기 · 치우기
+func start_prop_edit(key: String) -> void:
+	if not H()["props"].has(key):
+		return
+	_close_sheet()
+	if plant_bar:
+		main.hud_blocks.erase(plant_bar)
+		plant_bar.queue_free()
+		plant_bar = null
+	move_id = ""
+	plant_asset = ""
+	sel_prop = key
+	_sel_ring_update()
+	var asset := _prop_asset(H()["props"][key])
+	var nm := asset
+	for id in NATURE:
+		for c in NATURE[id]["colors"]:
+			if c[0] == asset:
+				nm = "%s · %s" % [item_name(id), c[1]]
+	var v := _bottom_sheet()
+	plant_bar = sheet
+	plant_bar.remove_meta("deco")
+	sheet = null
+	var head := HBoxContainer.new()
+	v.add_child(head)
+	var t := Mol.lbl(nm, 26, Mol.TEXT, "b")
+	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(t)
+	var done := Mol.btn("다 했어요", "primary", 22)
+	done.custom_minimum_size.y = 64
+	done.pressed.connect(func():
+		stop_moving()
+		if plant_bar:
+			main.hud_blocks.erase(plant_bar)
+			plant_bar.queue_free()
+			plant_bar = null
+		main.refresh_ui()
+		open_deco())
+	head.add_child(done)
+	v.add_child(Mol.lbl("땅을 누르면 옮겨요 · 다른 장식을 누르면 그걸 골라요", 18, Mol.TEXT_SUB, "r"))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	v.add_child(row)
+	var rb := Mol.btn("↻ 돌리기", "sec", 22)
+	rb.custom_minimum_size.y = 72
+	rb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rb.pressed.connect(func():
+		var pr = H()["props"].get(sel_prop)
+		if pr == null:
+			return
+		var a := _prop_asset(pr)
+		var r0: float = float(pr[1]) if pr is Array else 0.0
+		H()["props"][sel_prop] = [a, fmod(r0 + PI / 2, TAU)]
+		Save.save()
+		main.synth_tone(560, 700, 0.05, 0.08)
+		rebuild_yard())
+	row.add_child(rb)
+	var xb := Mol.btn("치우기", "sec", 22)
+	xb.custom_minimum_size.y = 72
+	xb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	xb.pressed.connect(func():
+		H()["props"].erase(sel_prop)
+		_refresh_nature_put()
+		Save.save()
+		main.synth_tone(520, 260, 0.08, 0.1)
+		rebuild_yard()
+		stop_moving()
+		if plant_bar:
+			main.hud_blocks.erase(plant_bar)
+			plant_bar.queue_free()
+			plant_bar = null
+		main.refresh_ui()
+		open_deco())
+	row.add_child(xb)
+
+
+func _move_prop(pos: Vector2) -> void:
+	var p = main._floor_point(pos)
+	if p == null or not H()["props"].has(sel_prop):
+		return
+	var x := snappedf(p.x, 0.1)
+	var z := snappedf(p.z, 0.1)
+	if not main.land_set.has(Vector2i(roundi(x), roundi(z))):
+		main.toast("내 땅에만 놓을 수 있어요")
+		return
+	if main._in_house(Vector3(x, main.FLOOR_TOP, z), 0.2):
+		main.toast("집 자리에는 못 놓아요")
+		return
+	var v = H()["props"][sel_prop]
+	H()["props"].erase(sel_prop)
+	sel_prop = "%.2f,%.2f" % [x, z]
+	H()["props"][sel_prop] = v
+	Save.bump("place")
+	Save.save()
+	main.synth_tone(660, 990, 0.08, 0.1)
+	Save.buzz(8)
+	rebuild_yard()
+	_sel_ring_update()
+
+
+func _refresh_nature_put() -> void:
+	var props: Dictionary = H()["props"]
+	for id in NATURE:
+		var any := false
+		for k in props:
+			for c in NATURE[id]["colors"]:
+				if c[0] == _prop_asset(props[k]):
+					any = true
+		H()["put"][id] = any
