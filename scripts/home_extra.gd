@@ -2063,6 +2063,16 @@ func open_settings() -> void:
 		Bgm.toggle()
 		open_settings())
 	v.add_child(bb)
+	var tb: Button = main._px_btn("튜토리얼 다시 보기 (기록은 그대로)", main.C_CREAM, 22)
+	tb.pressed.connect(func():
+		_close_sheet()
+		set_onb("story")
+		run_onboarding())
+	v.add_child(tb)
+	var rb: Button = main._px_btn("처음부터 새로 하기", main.C_CREAM, 22)
+	rb.add_theme_color_override("font_color", Mol.ALERT)
+	rb.pressed.connect(_ask_reset)
+	v.add_child(rb)
 	var ver: Button = main._px_btn("몰랑탑 베타 1.0 · 고닷 버전", main.C_CREAM, 18)
 	ver.flat = true
 	ver.pressed.connect(func():
@@ -2074,6 +2084,26 @@ func open_settings() -> void:
 	var cb: Button = main._px_btn("닫기", main.C_CREAM, 22)
 	cb.pressed.connect(_close_sheet)
 	v.add_child(cb)
+
+
+## 처음부터 새로 하기: 한 번 더 묻고, 지운 뒤 집 화면을 새로 열어요 (시작 이야기부터)
+func _ask_reset() -> void:
+	var v := _sheet("처음부터 새로 할까요?", 600)
+	v.add_child(_wrap("깬 단계·별·젤리·장식·펫·집 꾸미기가 모두 지워지고, 시작 이야기와 안내부터 다시 시작해요. 되돌릴 수 없어요.", 21, Mol.ALERT))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	v.add_child(row)
+	var no: Button = main._px_btn("그만둘래요", main.C_CREAM, 22)
+	no.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	no.pressed.connect(open_settings)
+	row.add_child(no)
+	var yes: Button = main._px_btn("모두 지우고 새로", main.C_YELLOW, 22)
+	yes.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	yes.pressed.connect(func():
+		_close_sheet()
+		Save.reset_all()
+		main.get_tree().change_scene_to_file("res://scenes/main.tscn"))
+	row.add_child(yes)
 
 
 ## 숨은 개발자 메뉴 (버전 글씨 7번): 이 기기 저장에만
@@ -2216,6 +2246,10 @@ func _onb_name() -> void:
 
 
 func _onb_box() -> void:
+	if vol_done():
+		set_onb("place")
+		_onb_placed()
+		return
 	say(["수고했어요! 젤리 %s개가 들어왔어요." % str(Save.d["jelly"]),
 		"젤리 100개로 장식 상자를 하나 열 수 있어요.",
 		"상자를 잡고 옆으로 쓱 밀어 보세요!"], func():

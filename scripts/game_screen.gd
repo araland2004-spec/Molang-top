@@ -496,6 +496,8 @@ func start_endless(resume := true) -> void:
 	core.mode = "endless"
 	_apply_daily()
 	var run: Dictionary = Save.d.get("run", {})
+	if str(Save.d.get("onb", "")) == "endless":
+		resume = false        # 안내 판은 늘 새 판(짧게)
 	if resume and run.get("blobs", []).size() > 0 and not run.get("over", false) and int(run.get("throws_left", 0)) > 0:
 		core.restore(run)
 		_toast("하던 무한 모드를 이어서 해요")

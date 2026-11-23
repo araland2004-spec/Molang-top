@@ -20,7 +20,11 @@ var save_t := 0.0      # 집 → 게임으로 넘어갈 때: "endless" | "menu" 
 var data := {}           # mollang_data.json
 
 
+var DEFAULTS := {}
+
+
 func _ready() -> void:
+	DEFAULTS = d.duplicate(true)
 	var parsed = JSON.parse_string(FileAccess.get_file_as_string("res://data/mollang_data.json"))
 	if parsed is Dictionary:
 		data = parsed
@@ -99,6 +103,16 @@ func _process(delta: float) -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
 		save()
+
+
+## 처음부터 새로: 기록·젤리·집을 모두 지우고 맨 처음 상태로 (안내도 처음부터)
+func reset_all() -> void:
+	d = DEFAULTS.duplicate(true)
+	d["stage_rev"] = int(data.get("stageRev", {}).get("rev", 1))
+	jelly_seen = -1
+	next_mode = ""
+	save()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://home3.json"))
 
 
 func save() -> void:
