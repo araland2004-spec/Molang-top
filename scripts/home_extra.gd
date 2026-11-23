@@ -2241,7 +2241,7 @@ func run_onboarding() -> bool:
 		"name":
 			_onb_name()
 		"endless":
-			say(["무한 모드를 한 판 끝까지 해 보면 젤리를 받아요.", "다시 가 볼까요?"], func(): main._go_game("endless"))
+			_onb_endless_back()
 		"box":
 			_onb_box()
 		"place":
@@ -2267,7 +2267,17 @@ func _onb_name() -> void:
 				say(["「%s」, 마음에 쏙 들어요!" % H()["name"],
 					"집을 꾸미려면 젤리가 필요해요.",
 					"무한 모드에서 숫자 몰랑이를 던져 같은 숫자끼리 합치면 점수가 쌓여요.",
-					"한 판이 끝나면 점수만큼 젤리를 받아요. 짧게 한 판 해 볼까요?"], func(): main._go_game("endless")))))
+					"판이 끝나면 점수만큼 젤리를 받아요. 마음껏 해 보고, 언제든 홈 버튼으로 돌아와요!"], func(): main._go_game("endless")))))
+
+
+## 안내 중 무한 모드에서 (판이 끝나기 전에) 돌아왔을 때: 다시 보내지 않고 맛보기 선물을 주고 다음으로
+func _onb_endless_back() -> void:
+	if not bool(Save.d.get("tut_gift", false)):
+		Save.d["tut_gift"] = true
+		Save.add_jelly(160)
+		Save.d["last_reward"] = 160
+	set_onb("box")
+	_onb_box()
 
 
 func _onb_box() -> void:
@@ -2275,7 +2285,7 @@ func _onb_box() -> void:
 		set_onb("place")
 		_onb_placed()
 		return
-	say(["수고했어요! 무한 모드 보상으로 젤리 %d개를 받았어요. (지금 %s개)" % [int(Save.d.get("last_reward", 0)), str(Save.d["jelly"])],
+	say(["수고했어요! 젤리 %d개를 받았어요. (지금 %s개)" % [int(Save.d.get("last_reward", 0)), str(Save.d["jelly"])],
 		"젤리 100개로 장식 상자를 하나 열 수 있어요.",
 		"상자를 잡고 옆으로 쓱 밀어 보세요!"], func():
 		force_next = "bench"
@@ -2296,8 +2306,8 @@ func _onb_placed() -> void:
 	_close_sheet()
 	say(["와, 집이 한결 포근해졌어요!",
 		"장식을 놓을수록 편안함이 올라가고, 공방에서 젤리가 더 빨리 모여요.",
-		"이번엔 스테이지예요. 판마다 목표가 있고, 깨면 젤리와 새 아이템이 열려요.",
-		"1단계부터 가 볼까요?"], func(): main._go_game("stage:0"))
+		"이번엔 스테이지예요. 판마다 목표가 있고, 깨면 젤리와 무한 모드에서 쓸 아이템을 받아요.",
+		"스테이지는 하루 %d번 들어갈 수 있어요. 1단계부터 가 볼까요?" % Save.STAGE_DAILY], func(): main._go_game("stage:0"))
 
 
 ## 몰랑이 말풍선: 아래 상자에 한 글자씩. 누르면 다음 줄 (글자가 다 안 나왔으면 먼저 다 보여 줌)

@@ -1751,6 +1751,7 @@ func _build_hud() -> void:
 			_: gtxt = "대기줄에서 %s" % _num_text(int(st["t"]))
 		if cur >= 24 and (cur + 1) % 5 == 0:
 			gtxt += " · 고비 판"
+	gtxt += " · 오늘 %d/%d번" % [Save.stage_left(), Save.STAGE_DAILY]
 	ccol.add_child(Mol.lbl(gtxt, 26, Color(amber, 0.8), "r"))
 	var dv := Mol.DashLine.new(Color(amber, 0.45), true)
 	dv.custom_minimum_size = Vector2(4, 100)

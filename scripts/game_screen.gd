@@ -512,8 +512,6 @@ func start_endless(resume := true) -> void:
 		_toast("하던 무한 모드를 이어서 해요")
 	else:
 		core.new_game()
-		if str(Save.d.get("onb", "")) == "endless":
-			core.throws_left = 40      # 처음 안내 판은 짧게
 	restart_btn.text = "새 판"
 	_close_overlays()
 	_paint_info()
@@ -524,6 +522,12 @@ func start_endless(resume := true) -> void:
 
 func start_stage(i: int) -> void:
 	i = clampi(i, 0, core.stages.size() - 1)
+	# 하루 입장 횟수 (처음 안내 중인 1단계는 빼고)
+	if str(Save.d.get("onb", "")) != "stage" and not Save.use_stage_entry():
+		if not menu.visible:
+			show_menu()
+		_toast("오늘 스테이지 입장 %d번을 다 썼어요 · 내일 다시 열려요" % Save.STAGE_DAILY)
+		return
 	core.mode = "stage"
 	core.stage_idx = i
 	core.new_game()
@@ -797,6 +801,21 @@ func _check_endless_goal() -> void:
 		_paint_items()
 
 
+## 스테이지 클리어 보상: 무한 모드에서 쓸 아이템을 가방에. 첫 클리어 2개 · 다시 깨기 1개 · 별 3개면 +1. 70단계부터 ×2 별도 나와요.
+func _stage_items(i: int, first: bool, stars: int) -> Array:
+	var n := (2 if first else 1) + (1 if stars >= 3 else 0)
+	var pool: Array = GOAL_ITEMS.duplicate()
+	if i >= 69:
+		pool.append("x2")
+	var out: Array = []
+	for k in n:
+		var it: String = pool[randi() % pool.size()]
+		Save.d["bag"][it] = Save.bag_count(it) + 1
+		out.append(it)
+	Save.save()
+	return out
+
+
 # ───────────────────────── 결과 ─────────────────────────
 
 func _on_finished(kind: String, reason: String) -> void:
@@ -830,8 +849,9 @@ func _game_over(reason: String) -> void:
 				e = {"day": Save.kst_day(), "n": 0}
 			e["n"] = int(e["n"]) + 1
 			Save.d["erew"] = e
-			if str(Save.d.get("onb", "")) == "endless":
-				j = maxi(j, 160)          # 안내 판: 상자 하나는 꼭 열 수 있게
+			if str(Save.d.get("onb", "")) == "endless" and not bool(Save.d.get("tut_gift", false)):
+				j = maxi(j, 160)          # 안내 판: 상자 하나는 꼭 열 수 있게 (처음 한 번만)
+				Save.d["tut_gift"] = true
 			Save.add_jelly(j)
 			Save.d["last_reward"] = j
 			reward = "무한 모드 보상 젤리 +%d" % j if j > 0 else ""
@@ -859,6 +879,11 @@ func _stage_clear() -> void:
 	core.prog = int(Save.d["prog"])
 	var j := Save.stage_jelly(i, first)
 	Save.add_jelly(j)
+	var throws0 := int(st["throws"])
+	var stars0 := 3
+	if throws0:
+		stars0 = 3 if core.throws_left >= throws0 * 0.3 else (2 if core.throws_left >= throws0 * 0.12 else 1)
+	var gift := _stage_items(i, first, stars0)
 	var extra := ""
 	if first:
 		var n := i + 1
@@ -879,9 +904,13 @@ func _stage_clear() -> void:
 	card_stars.text = "★".repeat(stars) + "☆".repeat(3 - stars)
 	card_stars.visible = true
 	var big := GameCore.num_text(int(st["t"])) if st["goal"] == "tier" else GameCore.score_text(core.score)
+	var names: Array = []
+	for k in gift:
+		names.append(ITEM_NAMES[k])
 	var note := ("던지기 %d번 남기고 성공" % core.throws_left if throws else "점수 " + GameCore.score_text(core.score)) + extra
+	note += "\n무한 모드 가방에 %s · 오늘 입장 %d번 남음" % [" · ".join(names), Save.stage_left()]
 	_show_card("모든 단계를 깼어요!" if last else "클리어!", big, note,
-		("첫 클리어 " if first else "다시 깨기 ") + "젤리 +%d" % j, "목록으로" if last else "다음 단계 · %d" % (i + 2), not last)
+		("첫 클리어 " if first else "다시 깨기 ") + "젤리 +%d · 아이템 %d개" % [j, gift.size()], "목록으로" if last else "다음 단계 · %d" % (i + 2), not last)
 	card_act = "menu" if last else "next"
 	card_retry.visible = true
 
@@ -957,6 +986,9 @@ func show_menu() -> void:
 	head.add_child(Mol.lbl("%d" % prog, 40, Mol.TEXT, "num"))
 	head.add_child(Mol.lbl(" / %d" % total, 40, Mol.TEXT_SUB, "num_m"))
 	menu_grid_box.add_child(Mol.GradLine.new(Color(0.494, 0.941, 0.784, 0.35), true))
+	var ent := Mol.lbl("오늘 입장 %d/%d · 깨면 무한 모드에서 쓸 아이템을 받아요" % [Save.stage_left(), Save.STAGE_DAILY], 22, Mol.AMBER if Save.stage_left() > 0 else Mol.ALERT, "m")
+	ent.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	menu_grid_box.add_child(ent)
 	# 이어하기 카드 (주 버튼)
 	var st: Dictionary = core.stages[cur]
 	var cont := Button.new()

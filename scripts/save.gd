@@ -4,6 +4,7 @@ extends Node
 const PATH := "user://molang_save.json"
 const DAILY_MAX := 3
 const ENDLESS_PAID := 5
+const STAGE_DAILY := 5     # 스테이지는 하루 5번 입장 (무한 모드에서 쓸 아이템을 모으는 곳)
 
 var d := {
 	"best": 0, "prog": 0, "seen_hint": false, "guides": [], "jelly": 100, "muted": false,
@@ -139,6 +140,26 @@ func daily_left(k: String) -> int:
 	if dd.get("day", "") != kst_day():
 		return DAILY_MAX
 	return maxi(0, DAILY_MAX - int(dd["used"].get(k, 0)))
+
+
+## 오늘 남은 스테이지 입장 횟수 (한국 날짜로 매일 다시 5번)
+func stage_left() -> int:
+	var sd: Dictionary = d.get("sday", {})
+	if sd.get("day", "") != kst_day():
+		return STAGE_DAILY
+	return maxi(0, STAGE_DAILY - int(sd.get("n", 0)))
+
+
+func use_stage_entry() -> bool:
+	if stage_left() <= 0:
+		return false
+	var sd: Dictionary = d.get("sday", {})
+	if sd.get("day", "") != kst_day():
+		sd = {"day": kst_day(), "n": 0}
+	sd["n"] = int(sd.get("n", 0)) + 1
+	d["sday"] = sd
+	save()
+	return true
 
 
 func bag_count(k: String) -> int:
