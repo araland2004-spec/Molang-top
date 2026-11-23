@@ -126,6 +126,7 @@ var outside_nodes: Array = []
 var sky_layers: Array = []
 var town_label: Label
 var hud_day := false
+var debug_hour := -1.0     # 테스트용: 0~24 넣으면 그 시각 하늘·조명
 var lofi_root: Control
 var hud_bot: Control      # 아래 묶음(이어하기·무한 모드·메뉴)
 var lofi_card: Control
@@ -337,9 +338,12 @@ func _build_world() -> void:
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color(0.9, 0.9, 1.0)
 	env.ambient_light_energy = 0.5
-	env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
+	# ACES: 밝은 곳이 하얗게 날아가지 않고 대비가 살아남 (희뿌연 화면 개선)
+	env.tonemap_mode = Environment.TONE_MAPPER_ACES
+	env.tonemap_exposure = 1.0
+	env.tonemap_white = 6.0
 	env.fog_enabled = true
-	env.fog_density = 0.02
+	env.fog_density = 0.01
 	env.fog_sky_affect = 0.0
 	var we := WorldEnvironment.new()
 	we.environment = env
@@ -617,26 +621,26 @@ func _update_mood() -> void:
 		sun.light_energy = 0.2
 		sun.light_color = Color(1.0, 0.94, 0.84)
 		env.ambient_light_color = Color(1.0, 0.96, 0.92)
-		env.ambient_light_energy = 0.45
+		env.ambient_light_energy = 0.34
 		env.adjustment_brightness = 1.0
-		env.adjustment_saturation = 1.0
-		env.adjustment_contrast = 1.0
+		env.adjustment_saturation = 1.08
+		env.adjustment_contrast = 1.05
 		env.fog_density = 0.0
 		return
 	var s := _sky_now()
 	var night: float = s["night"]
 	# 낮: 따뜻한 햇빛 + 청록 그늘(밤과 같은 색 계열), 채도는 낮추고 그림자를 진하게 → 민트색이 형광처럼 뜨지 않게
-	sun.light_energy = lerpf(0.95, 0.12, night)
+	sun.light_energy = lerpf(0.85, 0.12, night)
 	sun.light_color = Color(1.0, 0.9, 0.76).lerp(Color(0.45, 0.7, 0.85), night)
 	sun.shadow_opacity = lerpf(0.7, 0.45, night)
 	env.ambient_light_color = Color(0.45, 0.62, 0.72).lerp(Color(0.22, 0.42, 0.45), night)   # 밤: 짙은 청록
-	env.ambient_light_energy = lerpf(0.26, 0.42, night)
+	env.ambient_light_energy = lerpf(0.2, 0.32, night)
 	env.adjustment_enabled = true
-	env.adjustment_brightness = lerpf(0.9, 0.85, night)
-	env.adjustment_saturation = lerpf(0.86, 0.72, night)
+	env.adjustment_brightness = lerpf(1.0, 0.92, night)
+	env.adjustment_saturation = lerpf(1.05, 0.85, night)
 	env.adjustment_contrast = lerpf(1.14, 1.08, night)
 	env.fog_light_color = (s["bot"] as Color).lerp(Color(0.06, 0.14, 0.16), 0.55 + 0.35 * night)
-	env.fog_density = lerpf(0.016, 0.035, night)
+	env.fog_density = lerpf(0.0015, 0.018, night)
 	for l in lamps:
 		(l[0] as OmniLight3D).light_energy = lerpf(0.1, 1.1, night)
 		(l[1] as StandardMaterial3D).emission_energy_multiplier = lerpf(0.3, 2.2, night)
@@ -768,6 +772,8 @@ func _build_sky() -> void:
 func _sky_now() -> Dictionary:
 	var t := Time.get_unix_time_from_system() + 9 * 3600.0
 	var hh := fmod(t / 3600.0, 24.0)
+	if debug_hour >= 0:
+		hh = debug_hour
 	var i := 0
 	while i < SKY.size() - 2 and SKY[i + 1][0] <= hh:
 		i += 1
