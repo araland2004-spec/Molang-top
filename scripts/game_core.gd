@@ -14,13 +14,9 @@ const MILK := Color("#f4f4f2")
 const FRAME := Color("#434348")
 const FRAME_HI := Color("#56565c")
 const WELL := Color("#151517")
-const EDGE := Color("#0B1416")
-const MINT := Color("#7EF0C8")
-const LINE_C := Color("#4CC6B1")
-const AMBER := Color("#FFC171")
-const NUM_INK := Color("#101214")
-var draw_off := Vector2.ZERO
-const COLORS := ["#FF5A4C", "#FFE14A", "#6EF25A", "#36F0B4", "#5AA0FF", "#B277FF", "#FF4FAE", "#FF8A3D", "#d6ff33", "#f2f2f2", "#2ff3ff", "#6f7dff", "#dc4dff"]   # UI v4 젤리 색
+const EDGE := Color("#151517")
+var _cur_off := Vector2.ZERO
+const COLORS := ["#ff4034", "#ffe135", "#5cff3a", "#2bf5b0", "#4a94ff", "#ad66ff", "#ff3aa6", "#ff7f33", "#d6ff33", "#f2f2f2", "#2ff3ff", "#6f7dff", "#dc4dff"]
 
 const W := 360.0
 const ASPECT := 1.3
@@ -1788,27 +1784,10 @@ func draw_blob(b: Blob) -> void:
 		draw_circle(Vector2(b.cx, b.cy), b.r * b.s, col)
 	else:
 		draw_colored_polygon(poly, col)
-	var R := b.r * b.s
-	# 아래쪽 안쪽 그림자 · 위쪽 안쪽 하이라이트 (UI v4)
-	if not b.rock and pts.size() > 6:
-		var ctr := Vector2(b.cx, b.cy)
-		var hi := PackedVector2Array()
-		var lo := PackedVector2Array()
-		for q in pts:
-			var d: Vector2 = q - ctr
-			if d.y < -R * 0.25:
-				hi.append(ctr + d * 0.78 + Vector2(0, R * 0.04))
-			elif d.y > R * 0.3:
-				lo.append(ctr + d * 0.86)
-		if hi.size() > 2:
-			draw_polyline(hi, Color(1, 1, 1, 0.28 * alpha), maxf(2.0, R * 0.09), true)
-		if lo.size() > 2:
-			draw_polyline(lo, Color(0, 0, 0, 0.12 * alpha), maxf(2.0, R * 0.12), true)
 	var loop := pts.duplicate()
 	loop.append(pts[0])
-	draw_polyline(loop, EDGE, 2.4, true)
-	if b == sel:
-		draw_arc(Vector2(b.cx, b.cy), R + 5, 0, TAU, 32, Color(AMBER, 0.85), 2.4, true)
+	draw_polyline(loop, EDGE, 2.6, true)
+	var R := b.r * b.s
 	if b.rock:
 		for d in [[-0.3, 0.0, 0.16], [0.22, 0.32, 0.13], [0.24, -0.36, 0.11]]:
 			draw_circle(Vector2(b.cx + R * d[0], b.cy + R * d[1]), R * d[2], Color("#58585e"))
@@ -1822,22 +1801,22 @@ func draw_blob(b: Blob) -> void:
 		draw_colored_polygon(star, Color.WHITE)
 		_text_center("×2", Vector2(b.cx, b.cy), maxf(10, R * 0.42), INK, num_font)
 		return
-	var size := clampf(R * 0.62, 11, 26)
-	_text_center(num_text(b.t), Vector2(b.cx, b.cy + size * 0.04), size, NUM_INK, num_font)
+	var size := minf(R * 0.85, 13 + R * 0.1)
+	_text_center(num_text(b.t), Vector2(b.cx, b.cy + size * 0.05), size, INK, num_font)
 
 
 func _text_center(s: String, at: Vector2, size: float, col: Color, font: Font) -> void:
 	if font == null:
 		return
-	# 판은 통째로 확대돼서 글자가 흐려지니, 실제 화면 크기로 그리고 줄여서 찍음
+	# 판은 통째로 확대돼서 글자가 흐려지니, 실제 화면 크기로 그리고 줄여서 찍음 (모양은 예전 그대로)
 	var S := maxf(1.0, scale.x)
 	var fs := int(round(size * S))
 	var sz := font.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
 	var asc := font.get_ascent(fs)
 	var desc := font.get_descent(fs)
-	draw_set_transform(draw_off + at, 0, Vector2.ONE / S)
+	draw_set_transform(_cur_off + at, 0, Vector2.ONE / S)
 	draw_string(font, Vector2(-sz.x / 2, (asc - desc) / 2), s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
-	draw_set_transform(draw_off)
+	draw_set_transform(_cur_off)
 
 
 func draw_arrow() -> void:
@@ -1858,33 +1837,14 @@ func draw_arrow() -> void:
 	if tip > room:
 		tip = room
 		from = minf(from, maxf(0, tip - 26))
-	# 조준: 등불색 둥근 점선 + 끝에 점선 원 (UI v4)
+	var neck := tip - 13
+	var col := INK if from < edge else MILK
 	var o := Vector2(hx, hy)
-	var dvec := Vector2(ux, uy)
-	var dd := from
-	while dd < tip:
-		draw_circle(o + dvec * dd, 2.2, Color(AMBER, 0.9))
-		dd += 9
-	var end := o + dvec * tip
-	for k in 12:
-		var a0 := TAU * k / 12.0
-		draw_arc(end, 9, a0, a0 + TAU / 24.0, 3, Color(AMBER, 0.8), 2, true)
-
-
-func _board_shape() -> PackedVector2Array:
-	var pts := PackedVector2Array()
-	var rr := 18.0
-	for k in range(0, 7):
-		var a := PI + PI / 2 * k / 6.0
-		pts.append(Vector2(rr + cos(a) * rr, rr + sin(a) * rr))
-	for k in range(0, 7):
-		var a := -PI / 2 + PI / 2 * k / 6.0
-		pts.append(Vector2(W - rr + cos(a) * rr, rr + sin(a) * rr))
-	pts.append(Vector2(W, H - chamfer))
-	pts.append(Vector2(W - chamfer, H))
-	pts.append(Vector2(chamfer, H))
-	pts.append(Vector2(0, H - chamfer))
-	return pts
+	draw_line(o + Vector2(ux, uy) * from, o + Vector2(ux, uy) * neck, col, 4, true)
+	draw_colored_polygon(PackedVector2Array([
+		o + Vector2(ux * tip, uy * tip),
+		o + Vector2(ux * neck - uy * 9, uy * neck + ux * 9),
+		o + Vector2(ux * neck + uy * 9, uy * neck - ux * 9)]), col)
 
 
 func _draw() -> void:
@@ -1893,27 +1853,18 @@ func _draw() -> void:
 		off = Vector2((randf() - 0.5) * 6 * shake, (randf() - 0.5) * 6 * shake)
 		shake *= 0.86
 	draw_set_transform(off)
-	draw_off = off
-	# 판 바탕: 위 모서리 둥글게, 옆벽 곧게, 아래는 V자로 꺾여 평평한 바닥 (UI v4)
-	var shape := _board_shape()
-	draw_colored_polygon(shape, Color(0.03, 0.08, 0.09, 0.92))
-	# 점 격자 (민트 9%)
-	var gy := 16.0
-	while gy < H:
-		var gx := 16.0
-		while gx < W:
-			if gy < H - chamfer or (gx > chamfer - (gy - (H - chamfer)) and gx < W - chamfer + (gy - (H - chamfer))):
-				draw_rect(Rect2(gx - 0.8, gy - 0.8, 1.6, 1.6), Color(MINT, 0.09))
-			gx += 16
-		gy += 16
+	_cur_off = off
+	draw_rect(Rect2(0, 0, W, H), WELL)
+	draw_colored_polygon(PackedVector2Array([Vector2(0, H - chamfer), Vector2(chamfer, H), Vector2(0, H)]), FRAME)
+	draw_colored_polygon(PackedVector2Array([Vector2(W, H - chamfer), Vector2(W - chamfer, H), Vector2(W, H)]), FRAME)
 	for w in bars:
 		var a := Vector2(w[0], w[1])
 		var b := Vector2(w[2], w[3])
 		var th: float = w[4]
-		draw_line(a, b, Color("#1d4a4a"), th)
-		draw_circle(a, th / 2, Color("#1d4a4a"))
-		draw_circle(b, th / 2, Color("#1d4a4a"))
-		draw_line(a - Vector2(0, th * 0.18), b - Vector2(0, th * 0.18), Color(MINT, 0.45), maxf(1.5, th * 0.16), true)
+		draw_line(a, b, FRAME, th)
+		draw_circle(a, th / 2, FRAME)
+		draw_circle(b, th / 2, FRAME)
+		draw_line(a - Vector2(0, th * 0.18), b - Vector2(0, th * 0.18), FRAME_HI, maxf(2, th * 0.2), true)
 	for w in warps:
 		for hole in [[Vector2(w[0], w[1]), Color("#a58cff"), 1.0], [Vector2(w[2], w[3]), Color("#5fd6c4"), -1.0]]:
 			draw_circle(hole[0], w[4], Color("#0d0d0f"))
@@ -1930,32 +1881,20 @@ func _draw() -> void:
 			draw_arc(Vector2(f[0], f[1]), 30 * (1 - f[2]), 0, TAU, 24, Color(1, 1, 1, f[2] * 2), 2.4, true)
 	warp_fx = warp_fx.filter(func(f): return f[2] > 0)
 	for p in pegs:
-		draw_circle(Vector2(p[0], p[1]), p[2], Color("#1d4a4a"))
-		draw_arc(Vector2(p[0], p[1]), p[2], 0, TAU, 24, Color(MINT, 0.45), 1.4, true)
-		draw_circle(Vector2(p[0] - p[2] * 0.3, p[1] - p[2] * 0.3), p[2] * 0.22, Color(MINT, 0.35))
-	draw_rect(Rect2(0, SHELF_TOP - 4, W, SHELF_BOT - SHELF_TOP + 8), Color(MINT, 0.05))
-	draw_dashed_line(Vector2(6, SHELF_BOT + 4), Vector2(W - 6, SHELF_BOT + 4), Color(MINT, 0.28), 1.2, 6)
+		draw_circle(Vector2(p[0], p[1]), p[2], FRAME)
+		draw_circle(Vector2(p[0] - p[2] * 0.3, p[1] - p[2] * 0.3), p[2] * 0.25, FRAME_HI)
+	draw_rect(Rect2(0, SHELF_TOP - 4, W, SHELF_BOT - SHELF_TOP + 8), Color(1, 1, 1, 0.03))
 	if rocks_on():
 		for k in MISS_LIMIT:
 			draw_circle(Vector2(W / 2 - 16 + k * 16, SHELF_BOT + 15), 4.5, Color("#e2574c") if k < miss_count else Color(1, 1, 1, 0.12))
-	var mem := Color("#4fc36b") if shake_safe > 0 else LINE_C
+	var mem := Color("#4fc36b") if shake_safe > 0 else FRAME
 	for i in 2:
 		var cxm: float = W + MEM_TRAVEL * gauge[i] if i == 1 else -MEM_TRAVEL * gauge[i]
 		var el := PackedVector2Array()
-		for k in 25:
-			var a := -PI / 2 + PI * k / 24.0
-			if i == 1:
-				a += PI
+		for k in 24:
+			var a := TAU * k / 24
 			el.append(Vector2(cxm + cos(a) * MEM_A, sensor_y + sin(a) * MEM_B))
-		draw_colored_polygon(el, Color(mem, 0.16 + 0.3 * gauge[i]))
-		draw_polyline(el, Color(mem, 0.8), 1.6, true)
-		var ex := cxm + (8.0 if i == 0 else -8.0)
-		var squint: bool = gauge[i] > 0.6
-		for ey in [-5.0, 5.0]:
-			if squint:
-				draw_line(Vector2(ex - 2, sensor_y + ey), Vector2(ex + 2, sensor_y + ey), Color(MINT, 0.9), 1.6)
-			else:
-				draw_circle(Vector2(ex, sensor_y + ey), 1.8, Color(MINT, 0.9))
+		draw_colored_polygon(el, mem)
 	for b: Blob in blobs:
 		if not b.row:
 			draw_blob(b)
@@ -1980,27 +1919,19 @@ func _draw() -> void:
 		if f[4] <= 0:
 			continue
 		f[1] -= 38 * dt
-		var c := AMBER if f[3] else Color("#E9F2EE")
+		var c := MILK
 		c.a = minf(1, f[4] * 2.5)
-		_text_center(f[2], Vector2(clampf(f[0], 60, W - 60), f[1]), 24 if f[3] else 17, c, num_font)
+		_text_center(f[2], Vector2(clampf(f[0], 60, W - 60), f[1]), 24 if f[3] else 18, c, txt_font)
 		fk.append(f)
 	floaters = fk
 	draw_set_transform(Vector2.ZERO)
-	draw_off = Vector2.ZERO
-	# 테두리: 위는 밝은 민트 → 가운데 흐리게 → 아래 다시 조금 밝게 (UI v4)
-	var sh := _board_shape()
-	for k in sh.size():
-		var a2: Vector2 = sh[k]
-		var b2: Vector2 = sh[(k + 1) % sh.size()]
-		var ym := (a2.y + b2.y) * 0.5 / H
-		var al := 0.85 - 0.6 * sin(clampf(ym, 0, 1) * PI) if ym < 0.9 else 0.5
-		draw_line(a2, b2, Color(MINT, al), 1.8, true)
-	draw_line(Vector2(W * 0.3, 0), Vector2(W * 0.7, 0), Color(1, 1, 1, 0.35), 1.6, true)
-	# 판 바깥 양옆 눌림 게이지 4×120 (반원 높이에 맞춤)
+	# 테두리 (웹 버전 6px 프레임)
+	draw_rect(Rect2(-3, -3, W + 6, H + 6), FRAME, false, 6)
+	# 게이지: 반원 옆 프레임 안 세로 막대
 	for i in 2:
-		var gx := -14.0 if i == 0 else W + 10
-		var r := Rect2(gx, sensor_y - 60, 4, 120)
-		draw_rect(r, Color(MINT, 0.1))
+		var gx := -10.0 if i == 0 else W + 6
+		var r := Rect2(gx, sensor_y - 28, 4, 56)
+		draw_rect(r, Color("#1f4a2b") if shake_safe > 0 else Color("#1e1e20"))
 		var g: float = gauge[i]
-		var gc := Color("#4fc36b") if shake_safe > 0 else (Color("#FF7A6B") if g > 0.7 else MINT)
-		draw_rect(Rect2(gx, sensor_y + 60 - 120 * g, 4, 120 * g), gc)
+		var gc := Color("#4fc36b") if shake_safe > 0 else (Color("#ff4034") if g > 0.7 else MILK)
+		draw_rect(Rect2(gx, sensor_y + 28 - 56 * g, 4, 56 * g), gc)

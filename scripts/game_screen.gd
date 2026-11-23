@@ -79,8 +79,9 @@ func _ready() -> void:
 	add_child(synth)
 	synth.muted = bool(Save.d.get("muted", false))
 	core = GameCore.new()
-	core.num_font = font_num
-	core.txt_font = font_txt
+	# 판 위 숫자 몰랑이는 예전 글꼴(얇은 Poppins Light·Noto Light) 그대로
+	core.num_font = load("res://assets/fonts/Poppins-Light.ttf")
+	core.txt_font = load("res://assets/fonts/NotoSansKR-Light-sub.otf")
 	core.synth = synth
 	core.stages = Save.data.get("stages", [])
 	var iu: Dictionary = Save.data.get("itemUnlock", {})
