@@ -756,6 +756,82 @@ func _wrap(text: String, size := 20, col: Color = Mol.TEXT_SUB, width := 580) ->
 	return l
 
 
+## 몰랑이 안내 (튜토리얼): 무엇을 하면 무엇이 좋아지는지 5장. 처음 오면 자동으로, 설정 「도움말」에서 다시 보기.
+## 숫자는 실제 규칙(Save.stage_jelly · endless_jelly · work_rate · itemUnlock)에서 가져와요.
+func tutorial_pages() -> Array:
+	var iu: Dictionary = Save.data.get("itemUnlock", {}).get("endless", {})
+	var n_st: int = Save.data.get("stages", []).size()
+	var nm := {"shake": "흔들기", "hammer": "뿅망치", "tilt": "기울이기", "undo": "되돌리기", "x2": "×2 별"}
+	var unl: Array = []
+	for k in ["shake", "hammer", "tilt", "undo", "x2"]:
+		if iu.has(k):
+			unl.append("%d단계 %s" % [int(iu[k]), nm[k]])
+	return [
+		{"ic": "list", "t": "몰랑탑에 어서 와요!", "b": "놀이는 두 가지예요.\n\n• 스테이지 — 목표가 있는 퍼즐 %d단계. 깰수록 게임이 커져요.\n• 무한 모드 — 판이 다 찰 때까지 점수 내기. 젤리를 가장 많이 버는 곳이에요.\n\n모은 젤리로 집을 꾸미고 넓혀요." % n_st},
+		{"ic": "list", "t": "스테이지를 깨면", "b": "• 젤리: 처음 깰 때 40~150개 (5단계마다 더 많이), 다시 깨면 10개\n• 무한 모드 던지기 수가 늘어요: 처음 300번 → 20단계부터 550번 → 그 뒤로 계속\n• 무한 모드 아이템이 열려요: " + ", ".join(unl) + "\n• 공방 수입 +0.1/분, 집 지붕·벽 색, 20단계엔 햄스터 친구"},
+		{"ic": "item_shake", "t": "무한 모드를 하면", "b": "• 판이 끝날 때 점수만큼 젤리 (하루 %d판까지): 1만 점 %d개 · 3만 점 %d개 · 10만 점 %d개 · 30만 점 %d개\n• 아이템은 종류마다 하루 3번 무료, 더 쓰려면 상점에서\n• 던진 숫자가 계속 합쳐지면 「연속」 배율(최대 ×5), 512·1024… 처음 만들 때마다 「기세」 +10%%\n  → 막 던지기보다 노려서 이어 가는 게 점수가 훨씬 커요" % [Save.ENDLESS_PAID, Save.endless_jelly(10000), Save.endless_jelly(30000), Save.endless_jelly(100000), Save.endless_jelly(300000)]},
+		{"ic": "shop", "t": "젤리는 여기에 써요", "b": "• 선물 상자 (100개): 가구가 나와요. 도감 16칸을 다 채우면 새 집을 지을 수 있어요\n• 블록 상자 (100개): 바닥 블록 + 땅을 넓힐 칸\n• 상점: 무한 모드 아이템\n• 상자는 옆으로 스와이프해서 열고, 「×10」으로 한 번에 10개도 돼요"},
+		{"ic": "decorate", "t": "집에 오래 있으면", "b": "• 공방: 앱이 켜져 있는 동안 1분마다 젤리가 들어와요 (지금 %s개/분, 단계를 깰수록 늘어요)\n• 오너먼트: 플레이 30분마다 하나. 집 안 트리를 눌러 닦아서 달면 요정이 태어나 집을 날아다녀요\n• 펫은 누르면 뭘 하는지 알려 줘요\n\n이 안내는 설정 → 도움말에서 다시 볼 수 있어요." % str(snappedf(Save.work_rate(), 0.1))},
+	]
+
+
+func open_tutorial(page := 0, done := Callable()) -> void:
+	var pages := tutorial_pages()
+	page = clampi(page, 0, pages.size() - 1)
+	var pg: Dictionary = pages[page]
+	var v := _sheet("", 640)
+	v.get_child(0).queue_free()   # 빈 제목 줄
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 18)
+	v.add_child(head)
+	var ic := TextureRect.new()
+	ic.texture = Mol.icon(str(pg["ic"]))
+	ic.custom_minimum_size = Vector2(64, 64)
+	ic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	ic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	head.add_child(ic)
+	var hv := VBoxContainer.new()
+	head.add_child(hv)
+	hv.add_child(main._label("몰랑이 안내 · %d/%d" % [page + 1, pages.size()], 19, Mol.MINT, false))
+	hv.add_child(main._label(str(pg["t"]), 32, main.C_INK, false))
+	v.add_child(_wrap(str(pg["b"]), 22, Mol.TEXT, 580))
+	# 쪽 점
+	var dots := HBoxContainer.new()
+	dots.alignment = BoxContainer.ALIGNMENT_CENTER
+	dots.add_theme_constant_override("separation", 10)
+	v.add_child(dots)
+	for i in pages.size():
+		var d := Panel.new()
+		d.custom_minimum_size = Vector2(26 if i == page else 12, 12)
+		d.add_theme_stylebox_override("panel", Mol.sb(Mol.AMBER if i == page else Color(1, 1, 1, 0.22), Color(0, 0, 0, 0), 6, Vector2.ZERO, 0))
+		dots.add_child(d)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	v.add_child(row)
+	if page > 0:
+		var pb: Button = main._px_btn("이전", main.C_CREAM, 22)
+		pb.pressed.connect(func(): open_tutorial(page - 1, done))
+		row.add_child(pb)
+	else:
+		var sk: Button = main._px_btn("건너뛰기", main.C_CREAM, 22)
+		sk.pressed.connect(func():
+			_close_sheet()
+			if done.is_valid():
+				done.call())
+		row.add_child(sk)
+	var last := page == pages.size() - 1
+	var nb: Button = main._px_btn("알겠어요!" if last else "다음", main.C_YELLOW, 24)
+	nb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	nb.pressed.connect(func():
+		if last:
+			_close_sheet()
+			if done.is_valid():
+				done.call()
+		else:
+			open_tutorial(page + 1, done))
+	row.add_child(nb)
+
+
 func notice(title: String, text: String, ok: String, cb: Callable) -> void:
 	var v := _sheet(title, 600)
 	v.add_child(_wrap(text, 22))
@@ -1328,6 +1404,9 @@ func open_settings() -> void:
 	var v := _sheet("설정", 600)
 	var h := H()
 	v.add_child(_wrap("깬 단계 %d/%d · 플레이 %d분 · 요정 %d명 · 펫 %d마리" % [int(Save.d["prog"]), Save.data.get("stages", []).size(), int(float(Save.d["play_sec"]) / 60), h["fairies"].size(), h["pets"].size()], 21))
+	var hb: Button = main._px_btn("도움말 · 무엇을 하면 뭐가 좋아요?", main.C_YELLOW, 22)
+	hb.pressed.connect(func(): open_tutorial(0))
+	v.add_child(hb)
 	var nb: Button = main._px_btn("이름 바꾸기 (%s)" % h["name"], main.C_CREAM, 22)
 	nb.pressed.connect(func():
 		ask_name("집 이름을 지어 주세요", h["name"], func(nm: String):

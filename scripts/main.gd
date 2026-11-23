@@ -196,8 +196,17 @@ func _greet() -> void:
 	var h := Save.home()
 	if not h["events"].has("intro") and int(Save.d["prog"]) == 0 and int(Save.d["best"]) == 0:
 		h["events"].append("intro")
+		h["events"].append("tut1")
 		Save.save()
-		extra.notice("몰랑탑에 어서 와요!", "먼저 무한 모드에서 숫자 던지는 법을 배워 봐요. 처음엔 던지기 300번, 스테이지를 깰수록 던지기와 아이템이 늘어나요.", "무한 모드 해 보기", func(): _go_game("endless"))
+		# 처음 온 사람: 몰랑이 안내 5장 → 무한 모드로
+		extra.open_tutorial(0, func():
+			extra.notice("먼저 한 판 해 볼까요?", "무한 모드에서 숫자 던지는 법부터 익혀 봐요. 처음엔 던지기 300번이에요.", "무한 모드 해 보기", func(): _go_game("endless")))
+		return
+	if not h["events"].has("tut1"):
+		# 이미 하던 사람도 안내가 새로 생겼으니 한 번만 보여 줌
+		h["events"].append("tut1")
+		Save.save()
+		extra.open_tutorial(0, func(): extra.check_pets())
 		return
 	extra.check_pets()
 
