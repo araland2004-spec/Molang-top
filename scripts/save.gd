@@ -62,7 +62,22 @@ func _migrate_stages() -> void:
 
 ## 공방(웹 버전과 같게): 화면이 켜져 있는 동안 1분에 0.5 + 0.1 × 깬 단계 젤리. 플레이 시간도 여기서 셈.
 func work_rate() -> float:
-	return 0.5 + 0.1 * int(d["prog"])
+	# 기본(단계) × 편안함(꾸미기, 최대 ×2) × 완성한 트리마다 +10%
+	return (0.5 + 0.1 * int(d["prog"])) * (1.0 + comfort() / 100.0) * (1.0 + 0.1 * int(home().get("trees", 0)))
+
+
+## 집 편안함 0~100: 놓아 둔 가구 ×3 · 넓힌 땅 칸 ×1 · 함께 사는 펫 ×10 · 완성한 트리 ×10
+func comfort() -> int:
+	var h := home()
+	var c := 0
+	for id in h["put"]:
+		if h["put"][id] and int(h["own"].get(id, 0)) > 0:
+			c += 3
+	if h.get("land_own") is Array:
+		c += maxi(0, (h["land_own"] as Array).size() - 30)
+	c += 10 * (h["pets"] as Array).size()
+	c += 10 * int(h.get("trees", 0))
+	return mini(100, c)
 
 
 func _process(delta: float) -> void:
@@ -207,12 +222,34 @@ func home() -> Dictionary:
 			h[k] = []
 	if not h.has("lvl"): h["lvl"] = 1
 	if not h.has("orn"): h["orn"] = 0
+	if not h.has("trees"): h["trees"] = 0                # 완성한 트리 수
+	if not h.has("orn_total"): h["orn_total"] = int(h["orn"]) + 10 * int(h["trees"])   # 지금까지 단 오너먼트 (트리가 바뀌어도 이어짐)
+	if not h.has("keys"): h["keys"] = 0                  # 선물 상자 열쇠 (오너먼트 보상)
+	if not (h.get("orn_day") is Dictionary): h["orn_day"] = {"day": "", "n": 0}
+	if not (h.get("gift") is Dictionary): h["gift"] = {"day": "", "n": 0, "t": 0.0}
 	if not h.has("name"): h["name"] = "몰랑이네"
 	if not h.has("no"): h["no"] = 1
 	if not (h.get("past") is Dictionary): h["past"] = {}
 	return h
 
 
-## 오너먼트: 플레이 30분마다 1개 (웹과 같게). 받을 수 있는 수 = 누적 − 단 수
+## 오너먼트: 플레이 30분마다 1개 (웹과 같게). 받을 수 있는 수 = 누적 − 지금까지 단 수.
+## 켜 두기만으로 끝없이 벌지 않게 하루 6개(3시간)까지만 달 수 있어요.
+const ORN_DAY_MAX := 6
+
+
 func orn_ready() -> int:
-	return maxi(0, int(float(d.get("play_sec", 0.0)) / 1800.0) - int(home()["orn"]))
+	var h := home()
+	var od: Dictionary = h["orn_day"]
+	var used_today := int(od.get("n", 0)) if od.get("day", "") == kst_day() else 0
+	var by_time := maxi(0, int(float(d.get("play_sec", 0.0)) / 1800.0) - int(h["orn_total"]))
+	return mini(by_time, maxi(0, ORN_DAY_MAX - used_today))
+
+
+func orn_hung() -> void:
+	var h := home()
+	h["orn_total"] = int(h["orn_total"]) + 1
+	var od: Dictionary = h["orn_day"]
+	if od.get("day", "") != kst_day():
+		od["day"] = kst_day(); od["n"] = 0
+	od["n"] = int(od["n"]) + 1

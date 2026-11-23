@@ -283,6 +283,7 @@ func _process(_dt: float) -> void:
 			(w[0] as MeshInstance3D).visible = f.dot(w[1]) > -0.15
 	_step_pets(_dt)
 	_pet_fx(_dt)
+	_gift_tick(_dt)
 
 
 ## 화면 탭 (main 이 먼저 물어봄): 처리했으면 true
@@ -419,6 +420,8 @@ func tap(pos: Vector2) -> bool:
 					Save.save()
 					after_deco()
 					main.synth_tone(660, 880, 0.06, 0.15)
+		return true
+	if _tap_gift(pos):
 		return true
 	if _tap_pet(pos):
 		return true
@@ -756,6 +759,113 @@ func _wrap(text: String, size := 20, col: Color = Mol.TEXT_SUB, width := 580) ->
 	return l
 
 
+# ───────────────────────── 펫 선물 ─────────────────────────
+## 집 화면에 머무는 동안 20분마다 펫이 선물을 물고 와서 옆에 놓아요 (하루 3번). 눌러서 받기.
+## 햄스터 = 젤리, 강아지 = 땅 칸, 고양이 = 무한 아이템. 함께한 날이 길수록 조금 더 좋아요.
+const GIFT_SEC := 1200.0
+const GIFT_DAY_MAX := 3
+var gift_node: Node3D
+var gift_pet: Dictionary = {}
+
+
+func _gift_today() -> int:
+	var g: Dictionary = H()["gift"]
+	return int(g.get("n", 0)) if g.get("day", "") == Save.kst_day() else 0
+
+
+func _gift_tick(dt: float) -> void:
+	if pet_nodes.is_empty() or gift_node != null or sheet != null:
+		return
+	if _gift_today() >= GIFT_DAY_MAX:
+		return
+	var g: Dictionary = H()["gift"]
+	g["t"] = float(g.get("t", 0.0)) + dt
+	if float(g["t"]) < GIFT_SEC:
+		return
+	g["t"] = 0.0
+	var p: Array = pet_nodes[randi() % pet_nodes.size()]
+	var pn: Node3D = p[0]
+	gift_pet = p[1]
+	gift_node = Node3D.new()
+	var body := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(0.28, 0.24, 0.28)
+	var red := StandardMaterial3D.new()
+	red.albedo_color = Color("#e2574c")
+	bm.material = red
+	body.mesh = bm
+	body.position.y = 0.12
+	gift_node.add_child(body)
+	for rot in [0.0, PI / 2]:
+		var rib := MeshInstance3D.new()
+		var rm := BoxMesh.new()
+		rm.size = Vector3(0.3, 0.26, 0.06)
+		var y := StandardMaterial3D.new()
+		y.albedo_color = Color("#ffd45c")
+		rm.material = y
+		rib.mesh = rm
+		rib.position.y = 0.12
+		rib.rotation.y = rot
+		gift_node.add_child(rib)
+	gift_node.position = pn.position + Vector3(0.35, 0, 0.2)
+	gift_node.position.y = main.FLOOR_TOP
+	main.add_child(gift_node)
+	var tw := gift_node.create_tween().set_loops()
+	tw.tween_property(gift_node, "rotation:y", TAU, 3.0).from(0.0)
+	main.toast("%s 선물을 물어 왔어요! 눌러서 받아요" % _josa(str(gift_pet.get("name", "펫")), "이", "가"))
+	Save.buzz(20)
+
+
+func _tap_gift(pos: Vector2) -> bool:
+	if gift_node == null:
+		return false
+	var w := gift_node.global_position + Vector3(0, 0.15, 0)
+	if main.cam.is_position_behind(w) or main.cam.unproject_position(w).distance_to(pos) > 90:
+		return false
+	var k := str(gift_pet.get("k", "ham"))
+	var since := str(gift_pet.get("since", Save.kst_day()))
+	var days := 1
+	var a := Time.get_unix_time_from_datetime_string(since + "T00:00:00")
+	var b := Time.get_unix_time_from_datetime_string(Save.kst_day() + "T00:00:00")
+	if a > 0 and b >= a:
+		days = int((b - a) / 86400) + 1
+	var bonus := 1.0 + minf(1.0, days / 30.0)     # 함께한 날 30일이면 2배
+	var msg := ""
+	match k:
+		"dog":
+			var n := 2 + (1 if days >= 14 else 0)
+			H()["land_free"] = int(H().get("land_free", 0)) + n
+			msg = "땅을 %d칸 넓힐 수 있어요" % n
+		"cat":
+			var it := _endless_item_pick()
+			if it != "":
+				Save.d["bag"][it] = Save.bag_count(it) + 1
+				msg = "%s 1개를 가방에 넣었어요" % _ITEM_KO[it]
+			else:
+				Save.add_jelly(int(30 * bonus))
+				msg = "젤리 %d개" % int(30 * bonus)
+		_:
+			var j := int(randi_range(20, 50) * bonus)
+			Save.add_jelly(j)
+			msg = "젤리 %d개" % j
+	var g: Dictionary = H()["gift"]
+	if g.get("day", "") != Save.kst_day():
+		g["day"] = Save.kst_day(); g["n"] = 0
+	g["n"] = int(g["n"]) + 1
+	Save.save()
+	var node := gift_node
+	gift_node = null
+	var tw := node.create_tween()
+	tw.tween_property(node, "scale", Vector3.ONE * 1.4, 0.12)
+	tw.tween_property(node, "scale", Vector3.ZERO, 0.18)
+	tw.tween_callback(node.queue_free)
+	main.synth_tone(880, 1320, 0.1, 0.12)
+	Save.buzz(12)
+	main.toast("%s의 선물 · %s (오늘 %d/%d)" % [str(gift_pet.get("name", "펫")), msg, int(g["n"]), GIFT_DAY_MAX])
+	main.refresh_ui()
+	return true
+
+
 ## 몰랑이 안내 (튜토리얼): 무엇을 하면 무엇이 좋아지는지 5장. 처음 오면 자동으로, 설정 「도움말」에서 다시 보기.
 ## 숫자는 실제 규칙(Save.stage_jelly · endless_jelly · work_rate · itemUnlock)에서 가져와요.
 func tutorial_pages() -> Array:
@@ -771,7 +881,7 @@ func tutorial_pages() -> Array:
 		{"ic": "list", "t": "스테이지를 깨면", "b": "• 젤리: 처음 깰 때 40~150개 (5단계마다 더 많이), 다시 깨면 10개\n• 무한 모드 던지기 수가 늘어요: 처음 300번 → 20단계부터 550번 → 그 뒤로 계속\n• 무한 모드 아이템이 열려요: " + ", ".join(unl) + "\n• 공방 수입 +0.1/분, 집 지붕·벽 색, 20단계엔 햄스터 친구"},
 		{"ic": "item_shake", "t": "무한 모드를 하면", "b": "• 판이 끝날 때 점수만큼 젤리 (하루 %d판까지): 1만 점 %d개 · 3만 점 %d개 · 10만 점 %d개 · 30만 점 %d개\n• 아이템은 종류마다 하루 3번 무료, 더 쓰려면 상점에서\n• 던진 숫자가 계속 합쳐지면 「연속」 배율(최대 ×5), 512·1024… 처음 만들 때마다 「기세」 +10%%\n  → 막 던지기보다 노려서 이어 가는 게 점수가 훨씬 커요" % [Save.ENDLESS_PAID, Save.endless_jelly(10000), Save.endless_jelly(30000), Save.endless_jelly(100000), Save.endless_jelly(300000)]},
 		{"ic": "shop", "t": "젤리는 여기에 써요", "b": "• 선물 상자 (100개): 가구가 나와요. 도감 16칸을 다 채우면 새 집을 지을 수 있어요\n• 블록 상자 (100개): 바닥 블록 + 땅을 넓힐 칸\n• 상점: 무한 모드 아이템\n• 상자는 옆으로 스와이프해서 열고, 「×10」으로 한 번에 10개도 돼요"},
-		{"ic": "decorate", "t": "집에 오래 있으면", "b": "• 공방: 앱이 켜져 있는 동안 1분마다 젤리가 들어와요 (지금 %s개/분, 단계를 깰수록 늘어요)\n• 오너먼트: 플레이 30분마다 하나. 집 안 트리를 눌러 닦아서 달면 요정이 태어나 집을 날아다녀요\n• 펫은 누르면 뭘 하는지 알려 줘요\n\n이 안내는 설정 → 도움말에서 다시 볼 수 있어요." % str(snappedf(Save.work_rate(), 0.1))},
+		{"ic": "decorate", "t": "꾸미고 오래 있으면", "b": "• 공방: 앱이 켜져 있으면 1분마다 젤리 (지금 %s개/분)\n• 편안함: 가구를 놓고 땅을 넓히고 펫과 살수록 올라가서 공방 수입이 최대 2배 (지금 %d/100)\n• 오너먼트: 30분마다 하나(하루 6개). 닦아 달면 젤리·무한 아이템·상자 열쇠 중 하나! 10개면 트리 완성 → 공방 +10%%\n• 펫 선물: 집에 있으면 20분마다 펫이 선물을 물어 와요 (하루 3번)\n\n이 안내는 설정 → 도움말에서 다시 볼 수 있어요." % [str(snappedf(Save.work_rate(), 0.1)), Save.comfort()]},
 	]
 
 
@@ -965,9 +1075,9 @@ func open_book(tab := "in") -> void:
 		tb.pressed.connect(func(): open_book(tk))
 		tabs.add_child(tb)
 	if tab == "tree":
-		v.add_child(_wrap("플레이 30분마다 오너먼트가 하나씩 생겨요. 닦아서 트리에 달면 요정이 하나씩 태어나요.\n지금 달 수 있는 오너먼트 %d개 · 단 오너먼트 %d/10 · 요정 %d명" % [Save.orn_ready(), mini(int(H()["orn"]), ORN_N), H()["fairies"].size()], 21))
-		var hb: Button = main._px_btn("오너먼트 달기", main.C_YELLOW, 24)
-		hb.disabled = Save.orn_ready() <= 0 or int(H()["orn"]) >= ORN_N
+		v.add_child(_wrap("플레이 30분마다 오너먼트가 하나씩 생겨요 (하루 %d개까지). 닦아서 달면 보상을 하나 골라요: 젤리 50 · 무한 아이템 1개 · 선물 상자 열쇠.\n트리에 10개를 다 달면 트리 완성! 공방 수입이 영원히 +10%%, 그리고 다음 트리가 시작돼요.\n\n%d번째 트리 · 단 오너먼트 %d/10 · 지금 달 수 있는 것 %d개 · 완성한 트리 %d개 · 요정 %d명 · 상자 열쇠 %d개" % [Save.ORN_DAY_MAX, int(H()["trees"]) + (0 if int(H()["orn"]) >= ORN_N else 1), mini(int(H()["orn"]), ORN_N), Save.orn_ready(), int(H()["trees"]), H()["fairies"].size(), int(H()["keys"])], 21))
+		var hb: Button = main._px_btn("오너먼트 달기" if int(H()["orn"]) < ORN_N else "새 트리 시작 · 오너먼트 달기", main.C_YELLOW, 24)
+		hb.disabled = Save.orn_ready() <= 0
 		hb.pressed.connect(open_tree)
 		v.add_child(hb)
 	else:
@@ -1054,7 +1164,7 @@ func open_box(n := 1) -> void:
 	if vol_done():
 		main.toast("도감을 다 채웠어요! 이제 트리를 꾸며 봐요")
 		return
-	if int(Save.d["jelly"]) < BOX_PRICE:
+	if int(Save.d["jelly"]) < BOX_PRICE and int(H()["keys"]) <= 0:
 		main.toast("젤리가 %d개 더 필요해요. 스테이지나 무한 모드에서 모아요" % (BOX_PRICE - int(Save.d["jelly"])))
 		return
 	await render_thumbs()
@@ -1063,9 +1173,12 @@ func open_box(n := 1) -> void:
 		var got: Array = []
 		var nf := 0
 		for k in cnt:
-			if int(Save.d["jelly"]) < BOX_PRICE:
+			if int(H()["keys"]) > 0:
+				H()["keys"] = int(H()["keys"]) - 1      # 오너먼트 보상 열쇠: 젤리 대신
+			elif int(Save.d["jelly"]) >= BOX_PRICE:
+				Save.d["jelly"] = int(Save.d["jelly"]) - BOX_PRICE
+			else:
 				break
-			Save.d["jelly"] = int(Save.d["jelly"]) - BOX_PRICE
 			var it: Dictionary = items[randi() % items.size()]
 			var id: String = it["id"]
 			var c := int(H()["own"].get(id, 0)) + 1
@@ -1076,7 +1189,7 @@ func open_box(n := 1) -> void:
 			got.append({"tex": thumb(id), "title": str(it["name"]), "fresh": c == 1, "zone": it["zone"], "dup": c - 1})
 		Save.save()
 		main.refresh_ui()
-		var r := {"items": got, "more": int(Save.d["jelly"]) >= BOX_PRICE and not vol_done(), "more10": int(Save.d["jelly"]) >= BOX_PRICE * 10 and not vol_done()}
+		var r := {"items": got, "more": (int(Save.d["jelly"]) >= BOX_PRICE or int(H()["keys"]) > 0) and not vol_done(), "more10": int(Save.d["jelly"]) >= BOX_PRICE * 10 and not vol_done()}
 		if got.size() == 1:
 			var o: Dictionary = got[0]
 			r["sub"] = ("새로 나왔어요! %s 바로 놓았어요" % ("집 안에" if o["zone"] == "in" else "집 밖에")) if o["fresh"] else "중복이에요 (중복 %d개) · 중복 3개를 모으면 다른 가구로 바꿀 수 있어요" % o["dup"]
@@ -1109,6 +1222,7 @@ func _show_gift(line: String, pop: Callable, done: Callable, again: Callable, qu
 func open_deco() -> void:
 	var zone := "in" if inside else "out"
 	var v := _sheet("집 안 꾸미기" if inside else "집 밖 꾸미기", 620)
+	v.add_child(_wrap("편안함 %d/100 → 공방 수입 ×%s · 가구를 놓으면 +3, 땅 1칸 +1, 펫 +10, 완성한 트리 +10" % [Save.comfort(), str(snappedf(1.0 + Save.comfort() / 100.0, 0.01))], 20, Mol.MINT))
 	var er := HBoxContainer.new()
 	er.add_theme_constant_override("separation", 12)
 	v.add_child(er)
@@ -1251,9 +1365,18 @@ func move_house() -> void:
 # ───────────────────────── 트리·오너먼트 닦기 ─────────────────────────
 
 func open_tree() -> void:
-	if Save.orn_ready() <= 0 or int(H()["orn"]) >= ORN_N:
+	if Save.orn_ready() > 0 and int(H()["orn"]) >= ORN_N:
+		# 다 찬 트리 → 새 트리 시작 (완성 효과는 이미 받음)
+		H()["orn"] = 0
+		Save.save()
+		after_deco()
+		main.toast("%d번째 트리를 시작해요!" % (int(H()["trees"]) + 1))
+	if Save.orn_ready() <= 0:
 		var v := _sheet("트리 %d/10" % mini(int(H()["orn"]), ORN_N), 600)
-		v.add_child(_wrap("플레이 30분마다 오너먼트가 하나씩 생겨요. 다음 오너먼트까지 %d분." % (30 - int(float(Save.d["play_sec"]) / 60.0) % 30), 22))
+		var od: Dictionary = H()["orn_day"]
+		var today := int(od.get("n", 0)) if od.get("day", "") == Save.kst_day() else 0
+		var why := ("오늘은 오너먼트를 %d개 다 달았어요. 내일 또 만나요!" % Save.ORN_DAY_MAX) if today >= Save.ORN_DAY_MAX else ("플레이 30분마다 오너먼트가 하나씩 생겨요. 다음 오너먼트까지 %d분." % (30 - int(float(Save.d["play_sec"]) / 60.0) % 30))
+		v.add_child(_wrap(why + "\n달 때마다 보상을 하나 골라요. 10개를 다 달면 공방 수입 +10%.", 22))
 		var cb: Button = main._px_btn("닫기", main.C_CREAM, 22)
 		cb.pressed.connect(_close_sheet)
 		v.add_child(cb)
@@ -1301,14 +1424,74 @@ func _polish(idx: int) -> void:
 		title.text = "반짝! 트리에 달아요"
 		await get_tree().create_timer(0.8).timeout
 		H()["orn"] = int(H()["orn"]) + 1
+		Save.orn_hung()
 		var fairies: Array = H()["fairies"]
-		fairies.append({"name": o.get("f", "요정")})
+		var fname: String = str(o.get("f", "요정")) + ("" if int(H()["trees"]) == 0 else " %d세" % (int(H()["trees"]) + 1))
+		fairies.append({"name": fname})
+		var done_tree := int(H()["orn"]) >= ORN_N
+		if done_tree:
+			H()["trees"] = int(H()["trees"]) + 1
 		Save.save()
 		_close_sheet()
 		spawn_pets()
 		if inside:
 			after_deco()
-		main.toast("요정 「%s」이(가) 태어났어요!" % o.get("f", "요정")))
+		main.toast("요정 「%s」%s 태어났어요!" % [fname, _josa(fname, "이", "가").substr(fname.length())])
+		_orn_reward(done_tree))
+
+
+## 오너먼트를 달면 보상 하나 고르기 (젤리 50 · 무한 아이템 1개 · 선물 상자 열쇠)
+func _orn_reward(done_tree: bool) -> void:
+	var v := _sheet("트리 완성!" if done_tree else "오너먼트를 달았어요!", 600)
+	if done_tree:
+		v.add_child(_wrap("트리에 10개를 다 달았어요. 공방 수입이 영원히 +10%% 늘었어요 (완성한 트리 %d개).\n다음 오너먼트부터 새 트리가 시작돼요." % int(H()["trees"]), 22, Mol.AMBER))
+	v.add_child(_wrap("보상을 하나 골라요.", 22, Mol.TEXT))
+	var item := _endless_item_pick()
+	var opts := [
+		["젤리 50개", func():
+			Save.add_jelly(50)
+			main.toast("젤리 50개를 받았어요")],
+		[("무한 모드 아이템 · %s 1개" % _ITEM_KO.get(item, "")) if item != "" else "무한 모드 아이템 (30단계부터)", func():
+			Save.d["bag"][item] = Save.bag_count(item) + 1
+			Save.save()
+			main.toast("%s 1개를 가방에 넣었어요" % _ITEM_KO.get(item, ""))],
+		["선물 상자 열쇠 (다음 상자 1번 공짜)", func():
+			H()["keys"] = int(H()["keys"]) + 1
+			Save.save()
+			main.toast("상자 열쇠를 받았어요 · 지금 %d개" % int(H()["keys"]))],
+	]
+	for i in opts.size():
+		var op: Array = opts[i]
+		var b: Button = main._px_btn(str(op[0]), main.C_YELLOW if i == 0 else main.C_CREAM, 22)
+		b.disabled = i == 1 and item == ""
+		var cb: Callable = op[1]
+		b.pressed.connect(func():
+			cb.call()
+			_close_sheet()
+			main.refresh_ui())
+		v.add_child(b)
+
+
+## 받침에 맞춰 이/가·을/를 붙이기 (웹 버전 josa 와 같게)
+static func _josa(w: String, a: String, b: String) -> String:
+	if w.is_empty():
+		return w + b
+	var c := w.unicode_at(w.length() - 1) - 0xAC00
+	return w + (a if c >= 0 and c < 11172 and c % 28 != 0 else b)
+
+
+const _ITEM_KO := {"shake": "흔들기", "hammer": "뿅망치", "tilt": "기울이기", "undo": "되돌리기", "x2": "×2 별"}
+
+
+## 무한 모드에서 열린 아이템 중 가방에 가장 적은 것 ("" = 아직 없음)
+func _endless_item_pick() -> String:
+	var eu: Dictionary = Save.data.get("itemUnlock", {}).get("endless", {})
+	var best := ""
+	var bn := 1 << 30
+	for k in ["shake", "hammer", "tilt", "undo", "x2"]:
+		if eu.has(k) and int(Save.d["prog"]) >= int(eu[k]) and Save.bag_count(k) < bn:
+			bn = Save.bag_count(k); best = k
+	return best
 
 
 class PolishCanvas extends Control:
