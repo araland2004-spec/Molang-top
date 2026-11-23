@@ -481,6 +481,7 @@ func spawn_pets() -> void:
 		var n := Boxes.build(M["pets"][k])
 		n.position = Vector3(2.5 + i * 0.6, main.FLOOR_TOP, 3.5)
 		main.add_child(n)
+		main.add_blob_shadow(n, 0.18)
 		pet_nodes.append([n, pd, [], randf_range(0.5, 2.0)])
 		i += 1
 	var cols: int = M["fairies"].size()

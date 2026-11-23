@@ -70,6 +70,9 @@ var land_root: Node3D
 var cottage: Node3D
 var lights: Array[MeshInstance3D] = []
 var sun: DirectionalLight3D
+var fill: DirectionalLight3D     # 그림자 쪽을 차가운 빛으로 살짝 채움 (스케치팹식 3점 조명)
+var rim: DirectionalLight3D      # 뒤에서 모서리에 얇은 빛 테두리
+var sky_mat: ProceduralSkyMaterial
 var env: Environment
 var lamps: Array = []          # [OmniLight3D, 등불 재질]
 var fireflies: CPUParticles3D
@@ -189,6 +192,9 @@ func _ready() -> void:
 	outside_nodes.append(extra.yard_root)
 	_update_camera()
 	_refresh_ui()
+	for st in get_tree().get_nodes_in_group("seat"):
+		if st is Node3D:
+			add_blob_shadow(st, 0.32)
 	_update_mood()
 	_greet.call_deferred()
 
@@ -335,7 +341,9 @@ func _pixel(n: Node) -> void:
 func _build_world() -> void:
 	env = Environment.new()
 	env.background_mode = Environment.BG_CANVAS      # 뒤에 2D 하늘 그라데이션
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	# 환경광도 하늘에서: 윗면은 하늘색, 옆·아랫면은 땅색을 받아 은은한 색 차이 (HDRI 처럼)
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	env.ambient_light_sky_contribution = 1.0
 	env.ambient_light_color = Color(0.9, 0.9, 1.0)
 	env.ambient_light_energy = 0.5
 	# ACES: 밝은 곳이 하얗게 날아가지 않고 대비가 살아남 (희뿌연 화면 개선)
@@ -345,18 +353,54 @@ func _build_world() -> void:
 	env.fog_enabled = true
 	env.fog_density = 0.01
 	env.fog_sky_affect = 0.0
+	# 반사는 하늘에서: 바닥 텍스처의 금속·스펙큘러가 하늘빛을 받아 반짝이게 (배경은 그대로 2D 그라데이션)
+	sky_mat = ProceduralSkyMaterial.new()
+	sky_mat.energy_multiplier = 0.35   # 하늘 반사가 세면 바닥이 하늘색으로 뿌옇게 덮임
+	sky_mat.sun_angle_max = 0.0
+	var sk := Sky.new()
+	sk.sky_material = sky_mat
+	sk.radiance_size = Sky.RADIANCE_SIZE_64
+	env.sky = sk
+	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
+	# 블룸: 아주 밝은 것(창문·가로등·전구·반딧불·빛나는 풀)만 은은하게 번짐
+	env.glow_enabled = true
+	env.glow_intensity = 0.55
+	env.glow_strength = 1.0
+	env.glow_bloom = 0.0
+	env.glow_hdr_threshold = 1.5
+	env.glow_hdr_scale = 2.0
+	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SCREEN
+	env.set_glow_level(0, false)
+	env.set_glow_level(1, true)
+	env.set_glow_level(2, true)
+	env.set_glow_level(3, true)
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
 
 	sun = DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-55, -30, 0)
+	sun.rotation_degrees = Vector3(-50, 100, 0)       # 오른쪽 위에서 비춰서 그림자가 화면 왼쪽 앞으로 보이게
 	sun.light_energy = 0.9
 	sun.light_color = Color(1.0, 0.97, 0.92)
 	sun.shadow_enabled = true
-	sun.shadow_opacity = 0.45
+	sun.shadow_opacity = 0.7
+	sun.shadow_blur = 1.6
+	sun.shadow_bias = 0.04
+	sun.shadow_normal_bias = 1.2
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
 	sun.directional_shadow_max_distance = 30.0
 	add_child(sun)
+	fill = DirectionalLight3D.new()
+	fill.rotation_degrees = Vector3(-30, -80, 0)     # 해 반대편
+	fill.light_color = Color(0.62, 0.84, 0.9)
+	fill.light_energy = 0.22
+	fill.light_specular = 0.0
+	add_child(fill)
+	rim = DirectionalLight3D.new()
+	rim.rotation_degrees = Vector3(-20, -135, 0)     # 집 뒤쪽에서 카메라 쪽으로 → 모서리 빛
+	rim.light_color = Color(1.0, 0.9, 0.78)
+	rim.light_energy = 0.35
+	add_child(rim)
 
 	cam = Camera3D.new()
 	cam.fov = fov
@@ -475,6 +519,8 @@ func _place_nature_deco() -> void:
 		if name.begins_with("Tree"):
 			n.scale *= rng.randf_range(0.85, 1.15)
 		land_root.add_child(n)
+		if name.begins_with("Tree"):
+			add_blob_shadow(n, 0.5)
 	for c in floor_map:
 		var cell: Vector2i = c
 		if floor_map[cell] == FLOOR_OF["bank"] and rng.randf() < 0.35:
@@ -568,6 +614,7 @@ func _add_lamps() -> void:
 			m.position = at + Vector3(0, 0.275, 0)
 			add_child(m)
 			outside_nodes.append(m)
+			add_blob_shadow(m, 0.14, -0.24)
 		var lm := StandardMaterial3D.new()
 		lm.albedo_color = Color("#ffd9a0")
 		lm.emission_enabled = true
@@ -624,20 +671,30 @@ func _update_mood() -> void:
 		sun.light_energy = 0.2
 		sun.light_color = Color(1.0, 0.94, 0.84)
 		env.ambient_light_color = Color(1.0, 0.96, 0.92)
-		env.ambient_light_energy = 0.34
+		env.ambient_light_energy = 0.9
 		env.adjustment_brightness = 1.0
 		env.adjustment_saturation = 1.08
 		env.adjustment_contrast = 1.05
 		env.fog_density = 0.0
+		sun.shadow_opacity = 0.55
+		fill.light_energy = 0.18
+		fill.light_color = Color(0.7, 0.82, 0.95)
+		rim.light_energy = 0.25
+		rim.light_color = Color(1.0, 0.85, 0.65)
+		sky_mat.sky_top_color = Color(0.95, 0.85, 0.7)
+		sky_mat.sky_horizon_color = Color(0.9, 0.78, 0.6)
+		sky_mat.ground_bottom_color = Color(0.35, 0.25, 0.18)
+		sky_mat.ground_horizon_color = Color(0.6, 0.45, 0.3)
+		env.glow_intensity = 0.4
 		return
 	var s := _sky_now()
 	var night: float = s["night"]
 	# 낮: 따뜻한 햇빛 + 청록 그늘(밤과 같은 색 계열), 채도는 낮추고 그림자를 진하게 → 민트색이 형광처럼 뜨지 않게
-	sun.light_energy = lerpf(0.85, 0.12, night)
+	sun.light_energy = lerpf(1.15, 0.15, night)
 	sun.light_color = Color(1.0, 0.9, 0.76).lerp(Color(0.45, 0.7, 0.85), night)
 	sun.shadow_opacity = lerpf(0.7, 0.45, night)
 	env.ambient_light_color = Color(0.45, 0.62, 0.72).lerp(Color(0.22, 0.42, 0.45), night)   # 밤: 짙은 청록
-	env.ambient_light_energy = lerpf(0.2, 0.32, night)
+	env.ambient_light_energy = lerpf(0.45, 0.8, night)   # 하늘(0.35배)에서 받는 환경광
 	env.adjustment_enabled = true
 	env.adjustment_brightness = lerpf(1.0, 0.92, night)
 	env.adjustment_saturation = lerpf(1.05, 0.85, night)
@@ -646,9 +703,20 @@ func _update_mood() -> void:
 	env.fog_density = lerpf(0.0015, 0.018, night)
 	for l in lamps:
 		(l[0] as OmniLight3D).light_energy = lerpf(0.1, 1.1, night)
-		(l[1] as StandardMaterial3D).emission_energy_multiplier = lerpf(0.3, 2.2, night)
+		(l[1] as StandardMaterial3D).emission_energy_multiplier = lerpf(0.3, 3.2, night)
 	if fireflies:
 		fireflies.emitting = night > 0.3
+	# 3점 조명 + 하늘 반사 + 블룸을 시간에 맞춰
+	sun.shadow_opacity = lerpf(0.85, 0.4, night)
+	fill.light_energy = lerpf(0.22, 0.14, night)
+	fill.light_color = Color(0.62, 0.84, 0.9).lerp(Color(0.3, 0.75, 0.75), night)
+	rim.light_energy = lerpf(0.35, 0.28, night)
+	rim.light_color = Color(1.0, 0.9, 0.78).lerp(Color(0.55, 0.95, 0.85), night)
+	sky_mat.sky_top_color = s["top"]
+	sky_mat.sky_horizon_color = s["bot"]
+	sky_mat.ground_horizon_color = (s["bot"] as Color).darkened(0.3)
+	sky_mat.ground_bottom_color = Color(0.12, 0.2, 0.14).lerp(Color(0.03, 0.07, 0.08), night)
+	env.glow_intensity = lerpf(0.0, 0.8, night)   # 낮엔 블룸 끔 (밝은 바닥이 번져서 뿌옇게 됨)
 
 
 ## 처마 끝 깜빡이는 크리스마스 전구
@@ -670,7 +738,7 @@ func _add_lights() -> void:
 		m.albedo_color = c
 		m.emission_enabled = true
 		m.emission = c
-		m.emission_energy_multiplier = 1.4
+		m.emission_energy_multiplier = 2.6
 		light_mats.append(m)
 	var bm := BoxMesh.new()
 	bm.size = Vector3.ONE * 0.06
@@ -686,12 +754,46 @@ func _add_lights() -> void:
 			outside_nodes.append(m)
 
 
+## 접지 그림자: 물체 밑에 동그란 반투명 그림자 (웹에서도 되는 AO 대신)
+static var _blob_mat: StandardMaterial3D
+static var _blob_mesh: QuadMesh
+
+
+func add_blob_shadow(n: Node3D, radius: float, y_off := 0.035) -> MeshInstance3D:
+	if _blob_mat == null:
+		var img := Image.create(64, 64, false, Image.FORMAT_RGBA8)
+		for y in 64:
+			for x in 64:
+				var d := Vector2(x - 31.5, y - 31.5).length() / 31.5
+				var a := clampf(1.0 - d, 0.0, 1.0)
+				img.set_pixel(x, y, Color(0, 0, 0, pow(a, 1.6) * 0.55))
+		_blob_mat = StandardMaterial3D.new()
+		_blob_mat.albedo_texture = ImageTexture.create_from_image(img)
+		_blob_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_blob_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_blob_mat.render_priority = -1
+		_blob_mesh = QuadMesh.new()
+		_blob_mesh.size = Vector2.ONE
+		_blob_mesh.orientation = PlaneMesh.FACE_Y
+	var mi := MeshInstance3D.new()
+	mi.mesh = _blob_mesh
+	mi.material_override = _blob_mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var sc := n.global_transform.basis.get_scale() if n.is_inside_tree() else n.scale
+	var k := maxf(0.0001, sc.x)
+	mi.scale = Vector3(radius * 2 / k, 1.0, radius * 2 / k)
+	mi.position = Vector3(0, y_off / maxf(0.0001, sc.y), 0)
+	n.add_child(mi)
+	return mi
+
+
 func _make_player() -> void:
 	player = (load(PLAYER_SCENE) as PackedScene).instantiate() as Node3D
 	player.position = Vector3(0.6, FLOOR_TOP, 2.6)
 	add_child(player)
 	player_body = player.get_node_or_null("Body")
 	pivot = player.position
+	add_blob_shadow(player, 0.28)
 
 
 ## 햄스터: 작은 주황·크림 상자, 마당을 총총 돌아다님
