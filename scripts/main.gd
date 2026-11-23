@@ -191,6 +191,7 @@ func _ready() -> void:
 	extra.setup(self, ui_root)
 	outside_nodes.append(extra.yard_root)
 	_update_camera()
+	_restore_view()
 	_refresh_ui()
 	for st in get_tree().get_nodes_in_group("seat"):
 		if st is Node3D:
@@ -1512,7 +1513,27 @@ func _comma(n: int) -> String:
 
 func _go_game(m: String) -> void:
 	Save.next_mode = m
+	# 게임에서 돌아왔을 때 몰랑이가 있던 자리 그대로 (집 안/밖·카메라 방향·확대까지)
+	Save.home_view = {"pos": player.position, "inside": extra != null and extra.inside, "yaw": yaw, "pitch": pitch, "zoom": zoom}
 	get_tree().change_scene_to_file("res://scenes/game.tscn")
+
+
+func _restore_view() -> void:
+	var v: Dictionary = Save.home_view
+	Save.home_view = {}
+	if v.is_empty():
+		return
+	if bool(v["inside"]) and extra:
+		extra.enter()
+	var p: Vector3 = v["pos"]
+	player.position = Vector3(p.x, FLOOR_TOP, p.z)
+	path.clear()
+	pivot = player.position
+	yaw = float(v["yaw"])
+	pitch = float(v["pitch"])
+	zoom = float(v["zoom"])
+	follow = true
+	_update_camera()
 
 
 func _build_hud() -> void:

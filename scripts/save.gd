@@ -14,6 +14,7 @@ var d := {
 signal jelly_changed
 
 var next_mode := ""
+var home_view := {}      # 집 → 게임으로 갈 때 몰랑이 자리·카메라 (돌아오면 그대로, 앱을 껐다 켜면 처음 자리)
 var jelly_seen := -1     # 집 화면이 마지막으로 보여 준 젤리 수 (돌아왔을 때 「+N」 연출용)
 var work_carry := 0.0
 var save_t := 0.0      # 집 → 게임으로 넘어갈 때: "endless" | "menu" | "stage:N"
@@ -111,6 +112,7 @@ func reset_all() -> void:
 	d["stage_rev"] = int(data.get("stageRev", {}).get("rev", 1))
 	jelly_seen = -1
 	next_mode = ""
+	home_view = {}
 	save()
 	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://home3.json"))
 
