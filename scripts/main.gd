@@ -203,14 +203,15 @@ func _ready() -> void:
 func _greet() -> void:
 	await get_tree().create_timer(0.4).timeout
 	var h := Save.home()
-	if not h["events"].has("intro") and int(Save.d["prog"]) == 0 and int(Save.d["best"]) == 0:
-		h["events"].append("intro")
-		h["events"].append("tut1")
-		Save.save()
-		# 처음 온 사람: 몰랑이 안내 5장 → 무한 모드로
-		extra.open_tutorial(0, func():
-			extra.notice("먼저 한 판 해 볼까요?", "무한 모드에서 숫자 던지는 법부터 익혀 봐요. 처음엔 던지기 300번이에요.", "무한 모드 해 보기", func(): _go_game("endless")))
-		return
+	var ob: String = extra.onb()
+	if ob != "done" and (ob != "" or (not h["events"].has("intro") and int(Save.d["prog"]) == 0 and int(Save.d["best"]) == 0)):
+		# 처음 온 사람: 시작 이야기 → 이름 → 무한 모드 → 상자 → 놓기 → 스테이지 (체험형 안내, 중간에 나가도 이어서)
+		if not h["events"].has("intro"):
+			h["events"].append("intro")
+			h["events"].append("tut1")
+			Save.save()
+		if extra.run_onboarding():
+			return
 	if not h["events"].has("tut1"):
 		# 이미 하던 사람도 안내가 새로 생겼으니 한 번만 보여 줌
 		h["events"].append("tut1")
@@ -1703,12 +1704,13 @@ func _build_hud() -> void:
 
 	# 땅 편집 바 (웹 버전 #heditbar)
 	edit_bar = PanelContainer.new()
-	edit_bar.add_theme_stylebox_override("panel", _px_style(C_CREAM))
+	var est := Mol.sb(Mol.PANEL_SOLID, Color(0.494, 0.941, 0.784, 0.16), 36, Vector2(24, 20))
+	edit_bar.add_theme_stylebox_override("panel", est)
 	edit_bar.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	edit_bar.offset_left = 20
-	edit_bar.offset_right = -20
-	edit_bar.offset_top = -250
-	edit_bar.offset_bottom = -24
+	edit_bar.offset_left = 16
+	edit_bar.offset_right = -16
+	edit_bar.offset_bottom = -16
+	edit_bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	ui_root.add_child(edit_bar)
 	hud_blocks.append(edit_bar)
 	var ev := VBoxContainer.new()
@@ -1717,22 +1719,28 @@ func _build_hud() -> void:
 	var etop := HBoxContainer.new()
 	etop.add_theme_constant_override("separation", 12)
 	ev.add_child(etop)
-	etop.add_child(_label("땅 편집", 28, C_INK, false))
-	edit_info = _label("", 22, C_SUB, false)
-	edit_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	etop.add_child(edit_info)
+	var ett := Mol.lbl("땅 편집", 26, Mol.TEXT, "b")
+	ett.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	etop.add_child(ett)
+	edit_info = Mol.lbl("", 18, Mol.TEXT_SUB, "r")
+	edit_info.clip_text = true
+	edit_info.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	rot_l = _px_btn("↺", C_CREAM)
 	rot_l.pressed.connect(func(): _turn(-90))
 	etop.add_child(rot_l)
 	rot_r = _px_btn("↻", C_CREAM)
 	rot_r.pressed.connect(func(): _turn(90))
 	etop.add_child(rot_r)
-	var done := _px_btn("완료", C_YELLOW)
+	var done := Mol.btn("완료", "primary", 22)
+	done.custom_minimum_size = Vector2(120, 64)
 	done.pressed.connect(func(): _set_edit(false))
 	etop.add_child(done)
+	ev.add_child(edit_info)
 	var scroll := ScrollContainer.new()
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.custom_minimum_size.y = 100
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+	scroll.scroll_deadzone = 12
+	scroll.custom_minimum_size.y = 140
 	ev.add_child(scroll)
 	var pal := HBoxContainer.new()
 	pal.add_theme_constant_override("separation", 12)
@@ -1919,8 +1927,13 @@ func _build_palette() -> void:
 	for c in pal_box.get_children():
 		c.queue_free()
 	palette_buttons.clear()
-	var gb := _px_btn("블록 뽑기\n젤리 100", C_VIOLET, 18)
-	gb.custom_minimum_size = Vector2(140, 80)
+	if extra == null:
+		return      # 꾸미기 도우미가 준비된 뒤(편집을 켤 때) 다시 그려요
+	var gb: Button = extra._card_btn(112, 136, false)
+	gb.text = "블록\n뽑기\n100"
+	gb.add_theme_font_override("font", Mol.font("m"))
+	gb.add_theme_font_size_override("font_size", 20)
+	gb.add_theme_color_override("font_color", Mol.VIOLET)
 	gb.pressed.connect(open_block_box)
 	pal_box.add_child(gb)
 	var own: Dictionary = Save.home().get("blocks_out", {})
@@ -1929,10 +1942,16 @@ func _build_palette() -> void:
 		if own.has(f):
 			pal_files.append(f)
 	for i in pal_files.size():
-		var b := _px_btn(_bname(pal_files[i]) + ("" if int(own[pal_files[i]]) < 2 else " ×%d" % int(own[pal_files[i]])), C_CREAM, 20)
-		b.custom_minimum_size = Vector2(150, 80)
+		var f: String = pal_files[i]
+		var b: Button = extra._card_btn(112, 136, false)
 		b.toggle_mode = true
-		b.add_theme_stylebox_override("pressed", _px_style(C_YELLOW))
+		var on: StyleBoxFlat = Mol.sb(Color(0.494, 0.941, 0.784, 0.18), Mol.MINT, 22, Vector2(6, 6), 3)
+		b.add_theme_stylebox_override("pressed", on)
+		b.add_theme_stylebox_override("hover_pressed", on)
+		var key := "blk:" + f
+		var tr: TextureRect = extra._card_fill(b, extra.thumbs.get(key), _bname(f), "" if int(own[f]) < 2 else "×%d" % int(own[f]), Mol.TEXT_SUB, 80)
+		if not extra.thumbs.has(key):
+			extra._tex_later(tr, key, func(): return _spawn(f))
 		var idx := i
 		b.pressed.connect(func():
 			selected = idx
@@ -2148,6 +2167,8 @@ func _open_shop() -> void:
 
 func _set_edit(on: bool) -> void:
 	edit_mode = on
+	if extra:
+		extra.hide_for_edit(on)     # 땅 편집 중엔 바닥만 보이게
 	if on:
 		_build_palette()
 	_land_marks.call_deferred()

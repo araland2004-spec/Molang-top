@@ -297,7 +297,7 @@ func _process(_dt: float) -> void:
 		f.y = 0
 		f = f.normalized()
 		for w in walls:
-			(w[0] as MeshInstance3D).visible = f.dot(w[1]) > -0.15
+			(w[0] as MeshInstance3D).visible = floor_edit == "" and f.dot(w[1]) > -0.15   # 바닥 칠할 땐 벽도 숨김
 	_step_pets(_dt)
 	_pet_fx(_dt)
 	_gift_tick(_dt)
@@ -314,17 +314,15 @@ func _floor_grid() -> Array:
 func start_floor_edit() -> void:
 	_close_sheet()
 	floor_edit = "plank"
+	hide_for_edit(true)
 	for c in main.hud_groups:
 		c.visible = false
-	floor_bar = PanelContainer.new()
-	floor_bar.add_theme_stylebox_override("panel", main._px_style(main.C_CREAM))
-	floor_bar.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	floor_bar.offset_top = -230
-	floor_bar.offset_bottom = -20
-	floor_bar.offset_left = 20
-	floor_bar.offset_right = -20
-	ui.add_child(floor_bar)
-	main.hud_blocks.append(floor_bar)
+	_bottom_sheet()
+	floor_bar = sheet
+	floor_bar.remove_meta("deco")
+	sheet = null
+	for c in floor_bar.get_children():
+		c.queue_free()
 	_paint_floor_bar()
 
 
@@ -338,30 +336,46 @@ func _paint_floor_bar() -> void:
 	for b in M.get("BLOCKS_IN", []):
 		if b["id"] == floor_edit:
 			nm = b["n"]
-	v.add_child(main._label("바닥 칸을 누르면 「%s」(으)로 칠해져요" % nm, 20, main.C_INK, false))
-	var g := GridContainer.new()
-	g.columns = 4
-	g.add_theme_constant_override("h_separation", 6)
-	g.add_theme_constant_override("v_separation", 6)
-	v.add_child(g)
-	var gb: Button = main._px_btn("실내 블록 뽑기 · 100", main.C_VIOLET, 18)
-	gb.custom_minimum_size.x = 150
+	var head := HBoxContainer.new()
+	v.add_child(head)
+	var t := Mol.lbl("바닥 꾸미기", 26, Mol.TEXT, "b")
+	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(t)
+	var done := Mol.btn("다 했어요", "primary", 22)
+	done.custom_minimum_size.y = 64
+	done.pressed.connect(stop_floor_edit)
+	head.add_child(done)
+	v.add_child(Mol.lbl("바닥 칸을 누르면 「%s」(으)로 칠해져요" % nm, 18, Mol.TEXT_SUB, "r"))
+	var sc := _hscroll(v, 140)
+	var row: HBoxContainer = sc.get_child(0)
+	var gb := _card_btn(112, 136, false)
+	gb.text = "블록\n뽑기\n100"
+	gb.add_theme_font_override("font", Mol.font("m"))
+	gb.add_theme_font_size_override("font_size", 20)
+	gb.add_theme_color_override("font_color", Mol.VIOLET)
 	gb.pressed.connect(open_floor_box)
-	g.add_child(gb)
+	row.add_child(gb)
 	var own: Dictionary = H().get("blocks_in", {"plank": 1})
 	for b in M.get("BLOCKS_IN", []):
 		var id: String = b["id"]
 		if not own.has(id):
 			continue
-		var bt: Button = main._px_btn(b["n"], main.C_YELLOW if id == floor_edit else main.C_CREAM, 18)
-		bt.custom_minimum_size.x = 150
+		var bt := _card_btn(112, 136, id == floor_edit)
+		var key := "in:" + id
+		var tr := _card_fill(bt, thumbs.get(key), str(b["n"]), "", Mol.TEXT_SUB, 84)
+		if not thumbs.has(key):
+			var top: String = b["top"]
+			_tex_later(tr, key, func(): return Boxes.build([{"b": [-0.5, 0, -0.5, 0.5, 0.25, 0.5], "t": top, "tile": 0.5}]))
 		bt.pressed.connect(func():
 			floor_edit = id
 			_paint_floor_bar())
-		g.add_child(bt)
-	var done: Button = main._px_btn("다 했어요", main.C_VIOLET, 20)
-	done.pressed.connect(stop_floor_edit)
-	v.add_child(done)
+		row.add_child(bt)
+
+
+func _tex_later(tr: TextureRect, key: String, make: Callable) -> void:
+	var tex: Texture2D = await node_thumb(key, make)
+	if is_instance_valid(tr):
+		tr.texture = tex
 
 
 ## 실내 블록 뽑기 (선물 상자)
@@ -413,8 +427,42 @@ func _fb_show(repaint: bool) -> void:
 			_paint_floor_bar()
 
 
+## 블록·바닥 편집 중에는 바닥만 보이게: 집·장식·캐릭터·펫 모양을 잠깐 숨겨요 (빛은 그대로). 편집을 마치면 되돌려요.
+var _edit_hidden: Array = []
+func hide_for_edit(on: bool) -> void:
+	for n in _edit_hidden:
+		if is_instance_valid(n):
+			n.visible = true
+	_edit_hidden.clear()
+	if not on:
+		return
+	var keep := {}
+	if inside and interior:
+		keep[interior.get_child(0)] = true     # 바닥 판
+		keep[interior.get_child(1)] = true     # 바닥 칸
+	else:
+		for c in main.floor_nodes:
+			keep[main.floor_nodes[c]] = true
+	_hide_walk(main, keep)
+
+
+func _hide_walk(n: Node, keep: Dictionary) -> void:
+	if keep.has(n) or n is CanvasLayer or n is SubViewport or n is Light3D:
+		return
+	if (n == interior and not inside) or (inside and main.outside_nodes.has(n)):
+		return      # 지금 안 보이는 쪽(집 안/밖)은 건드리지 않아요
+	if n is GeometryInstance3D and not (n is GPUParticles3D or n is CPUParticles3D):
+		if (n as GeometryInstance3D).visible:
+			(n as GeometryInstance3D).visible = false
+			_edit_hidden.append(n)
+		return
+	for c in n.get_children():
+		_hide_walk(c, keep)
+
+
 func stop_floor_edit() -> void:
 	floor_edit = ""
+	hide_for_edit(false)
 	if floor_bar:
 		main.hud_blocks.erase(floor_bar)
 		floor_bar.queue_free()
@@ -750,9 +798,12 @@ func pet_line() -> String:
 
 func _close_sheet() -> void:
 	if sheet:
+		var was_deco := sheet.has_meta("deco")
 		main.hud_blocks.erase(sheet)
 		sheet.queue_free()
 		sheet = null
+		if was_deco:
+			main.refresh_ui()
 
 
 func _sheet(title: String, width := 640) -> VBoxContainer:
@@ -828,67 +879,44 @@ func _auto_plant(id: String) -> void:
 		return
 
 
-func _nature_row(v: VBoxContainer, row: HBoxContainer, id: String) -> void:
-	var cols: Array = NATURE[id]["colors"]
-	var open := nature_colors(id)
-	if open <= 0 and owned(id):
-		_unlock_colors(id, int(H()["own"].get(id, 1)))
-		open = nature_colors(id)
-	row.add_child(main._label("색 %d/%d" % [open, cols.size()], 18, Mol.TEXT_SUB, false))
-	var chips := HFlowContainer.new()
-	chips.add_theme_constant_override("h_separation", 6)
-	chips.add_theme_constant_override("v_separation", 6)
-	v.add_child(chips)
-	for i in cols.size():
-		var ok := i < open
-		var cb: Button = main._px_btn(str(cols[i][1]) if ok else "잠김", main.C_YELLOW if (ok and i == 0) else main.C_CREAM, 17)
-		var asset: String = cols[i][0]
-		var need := i + 1 - int(H()["own"].get(id, 0))
-		cb.pressed.connect(func():
-			if not ok:
-				main.toast("상자에서 %s이(가) %d번 더 나오면 열려요" % [item_name(id), maxi(1, need)])
-				return
-			start_planting(asset, id))
-		chips.add_child(cb)
-
-
 func start_planting(asset: String, id: String) -> void:
 	_close_sheet()
 	plant_asset = asset
 	if plant_bar:
+		main.hud_blocks.erase(plant_bar)
 		plant_bar.queue_free()
-	plant_bar = PanelContainer.new()
-	plant_bar.add_theme_stylebox_override("panel", main._px_style(main.C_CREAM))
-	plant_bar.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	plant_bar.offset_top = -250
-	plant_bar.offset_bottom = -20
-	plant_bar.offset_left = 20
-	plant_bar.offset_right = -20
-	ui.add_child(plant_bar)
-	main.hud_blocks.append(plant_bar)
-	for c in main.hud_groups:
-		c.visible = false
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 10)
-	plant_bar.add_child(v)
+	var v := _bottom_sheet()
+	# 시트를 심기 막대로 씀 (sheet 자리는 비워 둠: 땅 탭이 막히지 않게)
+	plant_bar = sheet
+	plant_bar.remove_meta("deco")
+	sheet = null
 	var cols: Array = NATURE[id]["colors"]
 	var cur := ""
 	for c in cols:
 		if c[0] == asset:
 			cur = c[1]
-	v.add_child(main._label("%s · %s 심기" % [item_name(id), cur], 26, main.C_INK, false))
-	v.add_child(_wrap("내 땅 칸을 누르면 심어요 · 심은 칸을 다시 누르면 뽑아요", 20))
-	var row := HFlowContainer.new()
-	row.add_theme_constant_override("h_separation", 6)
-	v.add_child(row)
+	var head := HBoxContainer.new()
+	v.add_child(head)
+	var t := Mol.lbl("%s · %s 심기" % [item_name(id), cur], 26, Mol.TEXT, "b")
+	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(t)
+	var done := Mol.btn("다 했어요", "primary", 22)
+	done.custom_minimum_size.y = 64
+	done.pressed.connect(func():
+		stop_planting()
+		open_deco())
+	head.add_child(done)
+	v.add_child(Mol.lbl("내 땅 칸을 누르면 심어요 · 심은 칸을 다시 누르면 뽑아요", 18, Mol.TEXT_SUB, "r"))
+	var sc := _hscroll(v, 132)
+	var row: HBoxContainer = sc.get_child(0)
 	for i in nature_colors(id):
 		var a: String = cols[i][0]
-		var b: Button = main._px_btn(str(cols[i][1]), main.C_YELLOW if a == asset else main.C_CREAM, 17)
-		b.pressed.connect(func(): start_planting(a, id))
-		row.add_child(b)
-	var done: Button = main._px_btn("다 했어요", main.C_VIOLET, 20)
-	done.pressed.connect(stop_planting)
-	v.add_child(done)
+		var cb := _card_btn(104, 128, a == asset)
+		var tr := _card_fill(cb, thumbs.get("fit:" + a), str(cols[i][1]), "", Mol.TEXT_SUB, 80)
+		if not thumbs.has("fit:" + a):
+			_thumb_later(tr, a)
+		cb.pressed.connect(func(): start_planting(a, id))
+		row.add_child(cb)
 
 
 func stop_planting() -> void:
@@ -897,8 +925,6 @@ func stop_planting() -> void:
 		main.hud_blocks.erase(plant_bar)
 		plant_bar.queue_free()
 		plant_bar = null
-	for c in main.hud_groups:
-		c.visible = true
 	main.refresh_ui()
 
 
@@ -1191,9 +1217,13 @@ func node_thumb(key: String, make: Callable) -> Texture2D:
 	return tex
 
 
+var _thumbs_state := 0     # 0 아직 · 1 그리는 중 · 2 다 그림 (블록 뽑기 그림이 먼저 있어도 장식 그림은 따로)
 func render_thumbs() -> void:
-	if not thumbs.is_empty():
+	while _thumbs_state == 1:
+		await main.get_tree().process_frame
+	if _thumbs_state == 2:
 		return
+	_thumbs_state = 1
 	var vp := SubViewport.new()
 	vp.size = Vector2i(128, 128)
 	vp.transparent_bg = true
@@ -1238,7 +1268,8 @@ func render_thumbs() -> void:
 	vp.queue_free()
 	for id in NATURE:
 		var a0: String = NATURE[id]["colors"][0][0]
-		thumbs[id] = await node_thumb("nat:" + a0, func(): return main._spawn(a0))
+		thumbs[id] = await model_thumb(a0)
+	_thumbs_state = 2
 
 
 # ───────────────────────── 도감·상자·꾸미기 ─────────────────────────
@@ -1340,7 +1371,7 @@ const GiftBox := preload("res://scripts/gift_box.gd")
 
 
 ## 선물 상자: 3D 상자를 손가락으로 휙 돌리면 팡! (웹 버전과 같게)
-func open_box(n := 1) -> void:
+func open_box(n := 1, tut_done := Callable()) -> void:
 	if vol_done():
 		main.toast("도감을 다 채웠어요! 이제 트리를 꾸며 봐요")
 		return
@@ -1360,6 +1391,13 @@ func open_box(n := 1) -> void:
 			else:
 				break
 			var it: Dictionary = items[randi() % items.size()]
+			var forced := false
+			if force_next != "":
+				for it2 in items:
+					if it2["id"] == force_next:
+						it = it2
+						forced = true
+				force_next = ""
 			var id: String = it["id"]
 			var c := int(H()["own"].get(id, 0)) + 1
 			H()["own"][id] = c
@@ -1371,7 +1409,7 @@ func open_box(n := 1) -> void:
 				elif nature_colors(id) > before:
 					main.toast("%s 새 색이 열렸어요: %s" % [item_name(id), NATURE[id]["colors"][nature_colors(id) - 1][1]])
 			if c == 1:
-				H()["put"][id] = true
+				H()["put"][id] = not forced     # 안내 상자: 직접 놓아 보게 비워 둠
 				nf += 1
 			got.append({"tex": thumb(id), "title": str(it["name"]), "fresh": c == 1, "zone": it["zone"], "dup": c - 1})
 		Save.save()
@@ -1379,14 +1417,17 @@ func open_box(n := 1) -> void:
 		var r := {"items": got, "more": (int(Save.d["jelly"]) >= BOX_PRICE or int(H()["keys"]) > 0) and not vol_done(), "more10": int(Save.d["jelly"]) >= BOX_PRICE * 10 and not vol_done()}
 		if got.size() == 1:
 			var o: Dictionary = got[0]
-			r["sub"] = ("새로 나왔어요! %s 바로 놓았어요" % ("집 안에" if o["zone"] == "in" else "집 밖에")) if o["fresh"] else "중복이에요 (중복 %d개) · 중복 3개를 모으면 다른 가구로 바꿀 수 있어요" % o["dup"]
+			r["sub"] = ("새로 나왔어요! 꾸미기에서 놓아 봐요" if tut_done.is_valid() else ("새로 나왔어요! %s 바로 놓았어요" % ("집 안에" if o["zone"] == "in" else "집 밖에"))) if o["fresh"] else "중복이에요 (중복 %d개) · 중복 3개를 모으면 다른 가구로 바꿀 수 있어요" % o["dup"]
 		else:
 			r["title"] = "상자 %d개! 새 장식 %d개" % [got.size(), nf]
 			r["sub"] = ("새 장식은 바로 놓았어요 · " if nf else "") + "중복 %d개는 도감에서 3개씩 바꿀 수 있어요" % (got.size() - nf)
 		return r
 	_show_gift("상자를 잡고 옆으로 스와이프해 보세요", pop, func():
 		after_deco()
-		open_book("in" if inside else "out"), open_box)
+		if tut_done.is_valid():
+			tut_done.call()
+		else:
+			open_book("in" if inside else "out"), open_box)
 
 
 func _show_gift(line: String, pop: Callable, done: Callable, again: Callable, quit := Callable()) -> void:
@@ -1406,14 +1447,126 @@ func _show_gift(line: String, pop: Callable, done: Callable, again: Callable, qu
 	sheet = g
 
 
+## 꾸미기 (UI v5): 아래 시트 + 모델 미리보기 카드를 좌우로 넘기며 골라요. 위쪽은 집이 그대로 보여서 놓으면 바로 확인.
+var deco_sel := ""          # 고른 자연 장식 (색 줄을 펼침)
+var deco_scroll := 0
+
+
 func open_deco() -> void:
+	await render_thumbs()
 	var zone := "in" if inside else "out"
-	var v := _sheet("집 안 꾸미기" if inside else "집 밖 꾸미기", 620)
-	v.add_child(_wrap("편안함 %d/100 → 공방 수입 ×%s · 가구를 놓으면 +3, 땅 1칸 +1, 펫 +10, 완성한 트리 +10" % [Save.comfort(), str(snappedf(1.0 + Save.comfort() / 100.0, 0.01))], 20, Mol.MINT))
+	var keep := deco_scroll
+	var v := _bottom_sheet()
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 12)
+	v.add_child(head)
+	var t := Mol.lbl("집 안 꾸미기" if inside else "집 밖 꾸미기", 30, Mol.TEXT, "b")
+	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(t)
+	var cf := Mol.lbl("편안함 %d · 수입 ×%s" % [Save.comfort(), str(snappedf(1.0 + Save.comfort() / 100.0, 0.01))], 20, Mol.MINT, "m")
+	cf.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head.add_child(cf)
+	var x := Mol.btn("닫기", "ghost", 22)
+	x.custom_minimum_size.y = 56
+	x.pressed.connect(_close_sheet)
+	head.add_child(x)
+	# 장식 카드: 가진 것 먼저, 아직 없는 건 흐리게
+	var list: Array = zone_items(zone)
+	var mine: Array = list.filter(func(it): return owned(it["id"]))
+	var rest: Array = list.filter(func(it): return not owned(it["id"]))
+	v.add_child(Mol.lbl("장식 %d/%d · 눌러서 놓기·치우기" % [mine.size(), list.size()], 18, Mol.TEXT_SUB, "r"))
+	var sc := _hscroll(v, 200)
+	var row: HBoxContainer = sc.get_child(0)
+	for it in mine + rest:
+		var id: String = it["id"]
+		var own := owned(id)
+		var nat := NATURE.has(id)
+		var on: bool = own and ((deco_sel == id) if nat else is_put(id))
+		var b := _card_btn(150, 196, on)
+		var sub := "상자에서"
+		var col := Mol.TEXT_DIM
+		if own and nat:
+			sub = "색 %d/%d" % [maxi(1, nature_colors(id)), (NATURE[id]["colors"] as Array).size()]
+			col = Mol.AMBER
+		elif own:
+			sub = "놓았어요" if is_put(id) else "놓기"
+			col = Mol.MINT if is_put(id) else Mol.TEXT_SUB
+		_card_fill(b, thumb(id), str(it["name"]), sub, col, 112)
+		if not own:
+			b.modulate = Color(1, 1, 1, 0.42)
+		b.pressed.connect(func():
+			deco_scroll = sc.scroll_horizontal
+			_deco_tap(id))
+		row.add_child(b)
+	# 자연 장식: 색별 모델 줄
+	if deco_sel != "" and NATURE.has(deco_sel) and owned(deco_sel) and not inside:
+		var nid := deco_sel
+		var cols: Array = NATURE[nid]["colors"]
+		if nature_colors(nid) <= 0:
+			_unlock_colors(nid, int(H()["own"].get(nid, 1)))
+		v.add_child(Mol.lbl("%s · 색을 고르면 내 땅에 심어요" % item_name(nid), 18, Mol.AMBER, "m"))
+		var sc2 := _hscroll(v, 150)
+		var row2: HBoxContainer = sc2.get_child(0)
+		for i in cols.size():
+			var ok := i < nature_colors(nid)
+			var asset: String = cols[i][0]
+			var cb := _card_btn(118, 146, false)
+			var tr := _card_fill(cb, thumbs.get("fit:" + asset), str(cols[i][1]) if ok else "잠김", "", Mol.TEXT_SUB, 88)
+			if not thumbs.has("fit:" + asset):
+				_thumb_later(tr, asset)
+			if not ok:
+				cb.modulate = Color(1, 1, 1, 0.4)
+			var need := i + 1 - int(H()["own"].get(nid, 0))
+			cb.pressed.connect(func():
+				if not ok:
+					main.toast("상자에서 %s이(가) %d번 더 나오면 열려요" % [item_name(nid), maxi(1, need)])
+					return
+				start_planting(asset, nid))
+			row2.add_child(cb)
+	# 집 모양 (밖)
+	if not inside:
+		var look: Dictionary = H().get("house", {})
+		for key in main.PARTS:
+			var P: Dictionary = main.PARTS[key]
+			var prow := HBoxContainer.new()
+			prow.add_theme_constant_override("separation", 8)
+			v.add_child(prow)
+			var pl := Mol.lbl(P["name"], 20, Mol.TEXT_SUB, "m")
+			pl.custom_minimum_size.x = 44
+			prow.add_child(pl)
+			for i in (P["list"] as Array).size():
+				var opt: Array = P["list"][i]
+				var open: bool = int(Save.d["prog"]) >= int(opt[1])
+				var pb := _card_btn(0, 60, int(look.get(key, 0)) == i)
+				pb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				pb.text = opt[0] if open else "%d단계" % int(opt[1])
+				pb.add_theme_font_override("font", Mol.font("m"))
+				pb.add_theme_font_size_override("font_size", 18)
+				var fc: Color = Color(opt[2]).lightened(0.35) if opt[2] != "" else Mol.TEXT
+				for cn in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+					pb.add_theme_color_override(cn, fc if open else Mol.TEXT_DIM)
+				var k: String = key
+				var idx: int = i
+				var nm2: String = opt[0]
+				var need2: int = int(opt[1])
+				pb.pressed.connect(func():
+					if not open:
+						main.toast("%d단계를 깨면 「%s」이 열려요" % [need2, nm2])
+						return
+					var hs: Dictionary = H().get("house", {})
+					hs[k] = idx
+					H()["house"] = hs
+					Save.save()
+					main.apply_house_look()
+					deco_scroll = sc.scroll_horizontal
+					open_deco())
+				prow.add_child(pb)
+	# 바닥·땅
 	var er := HBoxContainer.new()
 	er.add_theme_constant_override("separation", 12)
 	v.add_child(er)
-	var eb: Button = main._px_btn("바닥 꾸미기" if inside else "땅 편집 · 넓히기", main.C_YELLOW, 24)
+	var eb := Mol.btn("바닥 꾸미기" if inside else "땅 편집 · 넓히기", "sec", 22)
+	eb.custom_minimum_size.y = 72
 	eb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	eb.pressed.connect(func():
 		_close_sheet()
@@ -1422,7 +1575,8 @@ func open_deco() -> void:
 		else:
 			main._set_edit(true))
 	er.add_child(eb)
-	var bb: Button = main._px_btn("블록 뽑기 · 100", main.C_VIOLET, 24)
+	var bb := Mol.btn("블록 뽑기 · 100", "sec", 22)
+	bb.custom_minimum_size.y = 72
 	bb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bb.pressed.connect(func():
 		_close_sheet()
@@ -1431,67 +1585,170 @@ func open_deco() -> void:
 		else:
 			main.open_block_box())
 	er.add_child(bb)
-	if not inside:
-		v.add_child(_wrap("집의 지붕·벽을 골라 바꿀 수 있어요. 단계를 깰수록 고를 수 있는 모양이 늘어나요.", 20))
-		var look: Dictionary = H().get("house", {})
-		for key in main.PARTS:
-			var P: Dictionary = main.PARTS[key]
-			var prow := HBoxContainer.new()
-			prow.add_theme_constant_override("separation", 6)
-			var pl: Label = main._label(P["name"], 22, main.C_INK, false)
-			pl.custom_minimum_size.x = 60
-			prow.add_child(pl)
-			for i in (P["list"] as Array).size():
-				var opt: Array = P["list"][i]
-				var open: bool = int(Save.d["prog"]) >= int(opt[1])
-				var on: bool = int(look.get(key, 0)) == i
-				var pb: Button = main._px_btn(opt[0] if open else "%d단계" % int(opt[1]), main.C_YELLOW if on else main.C_CREAM, 17)
-				if opt[2] != "":
-					pb.add_theme_color_override("font_color", Color(opt[2]).darkened(0.35))
-				var k: String = key
-				var idx: int = i
-				var nm2: String = opt[0]
-				var need: int = int(opt[1])
-				pb.pressed.connect(func():
-					if not open:
-						main.toast("%d단계를 깨면 「%s」이 열려요" % [need, nm2])
-						return
-					var hs: Dictionary = H().get("house", {})
-					hs[k] = idx
-					H()["house"] = hs
-					Save.save()
-					main.apply_house_look()
-					open_deco())
-				prow.add_child(pb)
-			v.add_child(prow)
-		v.add_child(main._label("마당", 26, main.C_INK, false))
-	var any := false
-	for it in zone_items(zone):
-		var id: String = it["id"]
-		if not owned(id):
-			continue
-		any = true
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 10)
-		v.add_child(row)
-		var nm: Label = main._label(it["name"], 22, main.C_INK, false)
-		nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		row.add_child(nm)
-		if NATURE.has(id):
-			_nature_row(v, row, id)
-			continue
-		var b: Button = main._px_btn("치우기" if is_put(id) else "놓기", main.C_CREAM if is_put(id) else main.C_YELLOW, 20)
-		b.pressed.connect(func():
-			H()["put"][id] = not is_put(id)
-			Save.save()
-			after_deco()
-			open_deco())
-		row.add_child(b)
-	if not any:
-		v.add_child(_wrap("아직 가진 장식이 없어요. 도감에서 상자를 열어 봐요!", 21))
-	var cb: Button = main._px_btn("닫기", main.C_CREAM, 22)
-	cb.pressed.connect(_close_sheet)
-	v.add_child(cb)
+	await main.get_tree().process_frame
+	if is_instance_valid(sc):
+		sc.scroll_horizontal = keep
+
+
+func _deco_tap(id: String) -> void:
+	if not owned(id):
+		main.toast("%s은(는) 도감 상자에서 나와요" % item_name(id))
+		return
+	if NATURE.has(id):
+		deco_sel = "" if deco_sel == id else id
+		open_deco()
+		return
+	H()["put"][id] = not is_put(id)
+	Save.save()
+	main.synth_tone(660 if is_put(id) else 520, 990 if is_put(id) else 260, 0.08, 0.1)
+	after_deco()
+	if onb() == "place" and is_put(id):
+		open_deco()
+		_onb_placed()
+		return
+	if sheet == null or sheet.has_meta("deco"):
+		open_deco()
+
+
+## 아래에 붙는 시트 (위쪽 3D 화면이 보이게). 넓은 화면에선 폰 폭으로 가운데.
+func _bottom_sheet() -> VBoxContainer:
+	_close_sheet()
+	var p := PanelContainer.new()
+	var st := Mol.sb(Mol.PANEL_SOLID, Color(0.494, 0.941, 0.784, 0.16), 36, Vector2(24, 22))
+	st.shadow_color = Color(0, 0, 0, 0.35)
+	st.shadow_size = 24
+	p.add_theme_stylebox_override("panel", st)
+	var w := ui.get_viewport_rect().size.x
+	if w > 900:
+		p.anchor_left = 0.5
+		p.anchor_right = 0.5
+		p.offset_left = -380
+		p.offset_right = 380
+	else:
+		p.anchor_left = 0.0
+		p.anchor_right = 1.0
+		p.offset_left = 16
+		p.offset_right = -16
+	p.anchor_top = 1.0
+	p.anchor_bottom = 1.0
+	p.offset_bottom = -16
+	p.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	p.set_meta("deco", true)
+	ui.add_child(p)
+	main.hud_blocks.append(p)
+	sheet = p
+	for c in main.hud_groups:
+		c.visible = false
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 10)
+	p.add_child(v)
+	return v
+
+
+## 좌우로 넘기는 줄 (손가락으로 끌어 넘김)
+func _hscroll(parent: Control, h: float) -> ScrollContainer:
+	var sc := ScrollContainer.new()
+	sc.custom_minimum_size.y = h
+	sc.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+	sc.scroll_deadzone = 12
+	parent.add_child(sc)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	sc.add_child(row)
+	return sc
+
+
+func _card_btn(w: float, h: float, on: bool) -> Button:
+	var b := Button.new()
+	b.focus_mode = Control.FOCUS_NONE
+	b.custom_minimum_size = Vector2(w, h)
+	var st := Mol.sb(Color(0.494, 0.941, 0.784, 0.18) if on else Color(0.02, 0.07, 0.08, 0.7), Mol.MINT if on else Color(0.494, 0.941, 0.784, 0.16), 22, Vector2(6, 6), 3 if on else 2)
+	for k in ["normal", "hover", "focus", "pressed", "hover_pressed", "disabled"]:
+		b.add_theme_stylebox_override(k, st)
+	Mol.press(b, "icon")
+	return b
+
+
+func _card_fill(b: Button, tex: Texture2D, title: String, sub: String, sub_col: Color, img := 112.0) -> TextureRect:
+	var v := VBoxContainer.new()
+	v.set_anchors_preset(Control.PRESET_FULL_RECT)
+	v.alignment = BoxContainer.ALIGNMENT_CENTER
+	v.add_theme_constant_override("separation", 0)
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	b.add_child(v)
+	var tr := TextureRect.new()
+	tr.texture = tex
+	tr.custom_minimum_size = Vector2(img, img)
+	tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tr.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(tr)
+	var nl := Mol.lbl(title, 19 if title.length() <= 5 else 16, Mol.TEXT, "m")
+	nl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	nl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	nl.max_lines_visible = 2
+	nl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(nl)
+	if sub != "":
+		var sl := Mol.lbl(sub, 16, sub_col, "r")
+		sl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		sl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		v.add_child(sl)
+	return tr
+
+
+func _thumb_later(tr: TextureRect, asset: String) -> void:
+	var tex := await model_thumb(asset)
+	if is_instance_valid(tr):
+		tr.texture = tex
+
+
+## 자연 에셋 미리보기: 마당과 같은 크기로 맞춘 뒤 모델 전체가 들어오게 찍어요
+func model_thumb(asset: String) -> Texture2D:
+	var key := "fit:" + asset
+	if thumbs.has(key):
+		return thumbs[key]
+	var vp := SubViewport.new()
+	vp.size = Vector2i(128, 128)
+	vp.transparent_bg = true
+	vp.own_world_3d = true
+	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	main.add_child(vp)
+	var c := Camera3D.new()
+	vp.add_child(c)
+	var l := DirectionalLight3D.new()
+	l.rotation_degrees = Vector3(-50, -30, 0)
+	vp.add_child(l)
+	var envn := WorldEnvironment.new()
+	var e := Environment.new()
+	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	e.ambient_light_color = Color.WHITE
+	e.ambient_light_energy = 0.6
+	e.background_mode = Environment.BG_CLEAR_COLOR
+	envn.environment = e
+	vp.add_child(envn)
+	var n: Node3D = main._spawn(asset)
+	if n:
+		_fit_prop(n, asset)
+		vp.add_child(n)
+		var ab := AABB()
+		var first := true
+		for mi in n.find_children("*", "MeshInstance3D", true, false):
+			var bb: AABB = (mi as MeshInstance3D).global_transform * (mi as MeshInstance3D).get_aabb()
+			ab = bb if first else ab.merge(bb)
+			first = false
+		var ctr := ab.get_center()
+		c.fov = 35
+		c.position = ctr + Vector3(1, 0.75, 1).normalized() * maxf(ab.size.length(), 0.3) * 1.55
+		c.look_at(ctr)
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	var tex := ImageTexture.create_from_image(vp.get_texture().get_image())
+	thumbs[key] = tex
+	vp.queue_free()
+	return tex
 
 
 func after_deco() -> void:
@@ -1861,7 +2118,12 @@ func open_dev() -> void:
 func open_music() -> void:
 	var v := _sheet("음악", 600)
 	var open: int = Bgm.tracks_open()
-	v.add_child(_wrap("플레이 시간이 %d분 쌓일 때마다 새 곡이 열려요. 지금 %d/%d곡." % [Bgm.TRACK_MIN, open, Bgm.NAMES.size()], 21))
+	v.add_child(_wrap("잔잔한 곡 4개는 처음부터 들을 수 있고, 플레이 시간이 %d분 쌓일 때마다 새 곡이 열려요. 지금 %d/%d곡." % [Bgm.TRACK_MIN, open, Bgm.NAMES.size()], 21))
+	var au: Button = main._px_btn(("✓ " if Bgm.auto() else "") + "시간대에 맞춰 듣기 (아침·낮·저녁·밤)", main.C_YELLOW if Bgm.auto() else main.C_CREAM, 20)
+	au.pressed.connect(func():
+		Bgm.set_auto(not Bgm.auto())
+		open_music())
+	v.add_child(au)
 	var top := HBoxContainer.new()
 	top.add_theme_constant_override("separation", 10)
 	var on_b: Button = main._px_btn("♪ 켜짐" if Bgm.is_on() else "♪ 꺼짐", main.C_YELLOW if Bgm.is_on() else main.C_CREAM, 22)
@@ -1882,7 +2144,8 @@ func open_music() -> void:
 	for i in Bgm.NAMES.size():
 		var idx: int = i
 		var playing: bool = Bgm.is_on() and Bgm.cur == i
-		var label: String = ("▶ " if playing else "%d. " % (i + 1)) + Bgm.NAMES[i] if i < open else "%d분 더 플레이하면 열려요" % ceili((i * Bgm.TRACK_MIN * 60.0 - float(Save.d["play_sec"])) / 60.0)
+		var need_min := ceili(((i - Bgm.CALM.size() + 1) * Bgm.TRACK_MIN * 60.0 - float(Save.d["play_sec"])) / 60.0)
+		var label: String = ("▶ " if playing else "%d. " % (i + 1)) + Bgm.NAMES[i] if i < open else "%d분 더 플레이하면 열려요" % need_min
 		var b: Button = main._px_btn(label, main.C_YELLOW if playing else main.C_CREAM, 20)
 		b.custom_minimum_size = Vector2(280, 56)
 		b.disabled = i >= open
@@ -1894,3 +2157,336 @@ func open_music() -> void:
 	var cb: Button = main._px_btn("닫기", main.C_CREAM, 22)
 	cb.pressed.connect(_close_sheet)
 	v.add_child(cb)
+
+
+# ───────────────────────── 처음 온 사람 안내 (체험형) ─────────────────────────
+## 짧은 시네마틱 → 이름 짓기 → 무한 모드 한 판(짧게) → 젤리로 상자 열기 → 장식 놓기 → 스테이지 1
+## 단계는 Save.d["onb"]: "" · name · endless · box · place · stage · done  (중간에 나가도 이어서)
+var force_next := ""        # 다음 상자에서 꼭 나올 장식 (안내용)
+
+
+func onb() -> String:
+	return str(Save.d.get("onb", ""))
+
+
+func set_onb(s: String) -> void:
+	Save.d["onb"] = s
+	Save.save()
+
+
+func mol_name() -> String:
+	return str(H().get("mol", "몰랑이"))
+
+
+## main._greet 이 물어봄: 안내를 이어서 했으면 true
+func run_onboarding() -> bool:
+	match onb():
+		"", "story":
+			play_story(_onb_name)
+		"name":
+			_onb_name()
+		"endless":
+			say(["무한 모드를 한 판 끝까지 해 보면 젤리를 받아요.", "다시 가 볼까요?"], func(): main._go_game("endless"))
+		"box":
+			_onb_box()
+		"place":
+			_onb_place()
+		"stage":
+			say(["스테이지 1단계를 깨 볼까요?"], func(): main._go_game("stage:0"))
+		_:
+			return false
+	return true
+
+
+func _onb_name() -> void:
+	set_onb("name")
+	say(["안녕! 나는 이 섬에 막 이사 온 말랑이에요.", "먼저 내 이름을 지어 줄래요?"], func():
+		ask_name("말랑이 이름", "몰랑", func(nm: String):
+			H()["mol"] = nm.left(8)
+			ask_name("우리 집 이름", nm.left(6) + "네", func(hn: String):
+				H()["name"] = hn.left(10)
+				Save.save()
+				if main.name_label:
+					main.name_label.text = H()["name"]
+				set_onb("endless")
+				say(["「%s」, 마음에 쏙 들어요!" % H()["name"],
+					"집을 꾸미려면 젤리가 필요해요.",
+					"무한 모드에서 숫자 몰랑이를 던져 같은 숫자끼리 합치면 점수가 쌓여요.",
+					"한 판이 끝나면 점수만큼 젤리를 받아요. 짧게 한 판 해 볼까요?"], func(): main._go_game("endless")))))
+
+
+func _onb_box() -> void:
+	say(["수고했어요! 젤리 %s개가 들어왔어요." % str(Save.d["jelly"]),
+		"젤리 100개로 장식 상자를 하나 열 수 있어요.",
+		"상자를 잡고 옆으로 쓱 밀어 보세요!"], func():
+		force_next = "bench"
+		open_box(1, func():
+			set_onb("place")
+			_onb_place()))
+
+
+func _onb_place() -> void:
+	say(["벤치가 나왔어요!", "꾸미기에서 벤치 카드를 눌러 집 앞에 놓아 봐요."], func():
+		deco_sel = ""
+		open_deco())
+
+
+func _onb_placed() -> void:
+	set_onb("stage")
+	await main.get_tree().create_timer(0.9).timeout
+	_close_sheet()
+	say(["와, 집이 한결 포근해졌어요!",
+		"장식을 놓을수록 편안함이 올라가고, 공방에서 젤리가 더 빨리 모여요.",
+		"이번엔 스테이지예요. 판마다 목표가 있고, 깨면 젤리와 새 아이템이 열려요.",
+		"1단계부터 가 볼까요?"], func(): main._go_game("stage:0"))
+
+
+## 몰랑이 말풍선: 아래 상자에 한 글자씩. 누르면 다음 줄 (글자가 다 안 나왔으면 먼저 다 보여 줌)
+func say(lines: Array, done: Callable) -> void:
+	_close_sheet()
+	var ov := Control.new()
+	ov.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.mouse_filter = Control.MOUSE_FILTER_STOP
+	ov.set_meta("deco", true)
+	ui.add_child(ov)
+	main.hud_blocks.append(ov)
+	sheet = ov
+	for c in main.hud_groups:
+		c.visible = false
+	var p := PanelContainer.new()
+	var st := Mol.sb(Mol.PANEL_SOLID, Color(0.494, 0.941, 0.784, 0.22), 36, Vector2(26, 24))
+	st.shadow_color = Color(0, 0, 0, 0.35)
+	st.shadow_size = 24
+	p.add_theme_stylebox_override("panel", st)
+	var w := ui.get_viewport_rect().size.x
+	p.anchor_left = 0.5 if w > 900 else 0.0
+	p.anchor_right = 0.5 if w > 900 else 1.0
+	p.offset_left = -380 if w > 900 else 16
+	p.offset_right = 380 if w > 900 else -16
+	p.anchor_top = 1.0
+	p.anchor_bottom = 1.0
+	p.offset_bottom = -40
+	p.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ov.add_child(p)
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 20)
+	hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.add_child(hb)
+	var av := _face(92)
+	av.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	hb.add_child(av)
+	var v := VBoxContainer.new()
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_theme_constant_override("separation", 6)
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hb.add_child(v)
+	v.add_child(Mol.lbl(mol_name(), 22, Mol.AMBER, "b"))
+	var tl := Mol.lbl("", 27, Mol.TEXT, "m")
+	tl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tl.custom_minimum_size = Vector2(100, 110)
+	tl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(tl)
+	var nx := Mol.lbl("눌러서 계속 ▸", 18, Mol.TEXT_DIM, "r")
+	nx.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	nx.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(nx)
+	var blink := nx.create_tween().set_loops()
+	blink.tween_property(nx, "modulate:a", 0.3, 0.6)
+	blink.tween_property(nx, "modulate:a", 1.0, 0.6)
+	var state := {"i": 0, "tw": null}
+	var show_line := func():
+		tl.text = str(lines[state["i"]])
+		tl.visible_ratio = 0.0
+		var tw := tl.create_tween()
+		tw.tween_property(tl, "visible_ratio", 1.0, tl.text.length() * 0.035)
+		state["tw"] = tw
+		var bt := av.create_tween()
+		bt.tween_property(av, "position:y", av.position.y - 10, 0.09).set_ease(Tween.EASE_OUT)
+		bt.tween_property(av, "position:y", av.position.y, 0.16).set_ease(Tween.EASE_IN)
+		main.synth_tone(620 + state["i"] * 40, 760 + state["i"] * 40, 0.06, 0.05)
+		_hop(main.player)
+	ov.gui_input.connect(func(e: InputEvent):
+		var tap: bool = (e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT) or (e is InputEventScreenTouch and e.pressed)
+		if not tap:
+			return
+		if tl.visible_ratio < 1.0:
+			if state["tw"]:
+				(state["tw"] as Tween).kill()
+			tl.visible_ratio = 1.0
+			return
+		state["i"] = int(state["i"]) + 1
+		if int(state["i"]) >= lines.size():
+			if sheet == ov:
+				_close_sheet()
+			done.call()
+			return
+		show_line.call())
+	p.scale = Vector2(0.94, 0.94)
+	p.pivot_offset = Vector2(360, 120)
+	p.modulate.a = 0.0
+	var pt := p.create_tween().set_parallel()
+	pt.tween_property(p, "scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	pt.tween_property(p, "modulate:a", 1.0, 0.18)
+	show_line.call()
+
+
+## 몰랑이 얼굴 (프로필과 같은 하얀 말랑 네모)
+func _face(sz: float) -> Control:
+	var av := Panel.new()
+	av.custom_minimum_size = Vector2(sz, sz)
+	av.add_theme_stylebox_override("panel", Mol.sb(Color(0.094, 0.231, 0.231, 0.9), Color(0.494, 0.941, 0.784, 0.3), 24, Vector2.ZERO))
+	av.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var k := sz / 88.0
+	var face := ColorRect.new()
+	face.color = Color.WHITE
+	face.position = Vector2(20, 30) * k
+	face.size = Vector2(48, 30) * k
+	av.add_child(face)
+	for ex in [30, 52]:
+		var e := ColorRect.new()
+		e.color = Color("#2a2533")
+		e.position = Vector2(ex, 40) * k
+		e.size = Vector2(6, 6) * k
+		av.add_child(e)
+	for bx in [24, 58]:
+		var b := ColorRect.new()
+		b.color = Color("#f7b7c2")
+		b.position = Vector2(bx, 50) * k
+		b.size = Vector2(6, 4) * k
+		av.add_child(b)
+	for c in av.get_children():
+		(c as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return av
+
+
+func _hop(n: Node3D) -> void:
+	if n == null or not is_instance_valid(n):
+		return
+	var y0 := n.position.y
+	var tw := n.create_tween()
+	tw.tween_property(n, "position:y", y0 + 0.28, 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(n, "position:y", y0, 0.16).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+
+
+## 시작 이야기 (짧은 시네마틱): 눈 내리는 하늘에서 섬으로 천천히 내려오며 자막 다섯 줄. 아무 데나 누르면 건너뛰기.
+const STORY := [
+	"눈이 소복소복 내리는 겨울 끝자락,",
+	"아무도 살지 않던 작은 섬에",
+	"말랑한 친구 하나가 이사를 왔어요.",
+	"가진 건 작은 집 한 채와, 숫자를 쌓는 재주뿐.",
+	"젤리를 모아 이 섬을 포근하게 꾸며 볼까요?",
+]
+
+
+func play_story(done: Callable) -> void:
+	set_onb("story")
+	_close_sheet()
+	var ov := Control.new()
+	ov.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.mouse_filter = Control.MOUSE_FILTER_STOP
+	ov.set_meta("deco", true)
+	ui.add_child(ov)
+	main.hud_blocks.append(ov)
+	sheet = ov
+	for c in main.hud_groups:
+		c.visible = false
+	var bars: Array = []
+	for top in [true, false]:
+		var r := ColorRect.new()
+		r.color = Color(0.02, 0.04, 0.05)
+		r.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		r.anchor_right = 1.0
+		r.anchor_top = 0.0 if top else 1.0
+		r.anchor_bottom = 0.0 if top else 1.0
+		r.offset_top = 0.0 if top else 0.0
+		r.offset_bottom = 0.0
+		ov.add_child(r)
+		bars.append([r, top])
+	var cap := Mol.lbl("", 32, Color.WHITE, "m")
+	cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cap.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	cap.anchor_left = 0.0
+	cap.anchor_right = 1.0
+	cap.anchor_top = 1.0
+	cap.anchor_bottom = 1.0
+	cap.offset_left = 40
+	cap.offset_right = -40
+	cap.offset_top = -150
+	cap.offset_bottom = -60
+	cap.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.6))
+	cap.add_theme_constant_override("shadow_offset_y", 2)
+	cap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ov.add_child(cap)
+	var skip := Mol.lbl("누르면 건너뛰어요", 18, Color(1, 1, 1, 0.55), "r")
+	skip.anchor_left = 1.0
+	skip.anchor_right = 1.0
+	skip.offset_left = -260
+	skip.offset_right = -28
+	skip.offset_top = 56
+	skip.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	skip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ov.add_child(skip)
+	# 카메라: 높은 하늘에서 비스듬히 돌며 내려와 평소 자리로
+	var end := [main.zoom, main.pitch, main.yaw]
+	main.follow = true
+	main.zoom = 46.0
+	main.pitch = deg_to_rad(-72.0)
+	main.yaw = deg_to_rad(-40.0)
+	main._update_camera()
+	var cam_tw := main.create_tween().set_parallel().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	var dur := 12.5
+	cam_tw.tween_property(main, "zoom", end[0], dur)
+	cam_tw.tween_property(main, "pitch", end[1], dur)
+	cam_tw.tween_property(main, "yaw", end[2], dur)
+	cam_tw.tween_method(func(_v: float): main._update_camera(), 0.0, 1.0, dur)
+	var bar_tw := ov.create_tween().set_parallel()
+	for b in bars:
+		var r: ColorRect = b[0]
+		if b[1]:
+			bar_tw.tween_property(r, "offset_bottom", 130.0, 0.6)
+		else:
+			bar_tw.tween_property(r, "offset_top", -130.0, 0.6)
+	var st := {"skip": false, "done": false}
+	var finish := func():
+		if st["done"]:
+			return
+		st["done"] = true
+		if cam_tw.is_valid():
+			cam_tw.kill()
+		main.zoom = end[0]
+		main.pitch = end[1]
+		main.yaw = end[2]
+		main._update_camera()
+		var out := ov.create_tween().set_parallel()
+		out.tween_property(cap, "modulate:a", 0.0, 0.3)
+		for b in bars:
+			var r: ColorRect = b[0]
+			if b[1]:
+				out.tween_property(r, "offset_bottom", 0.0, 0.45)
+			else:
+				out.tween_property(r, "offset_top", 0.0, 0.45)
+		await out.finished
+		if sheet == ov:
+			_close_sheet()
+		_hop(main.player)
+		await main.get_tree().create_timer(0.35).timeout
+		done.call()
+	ov.gui_input.connect(func(e: InputEvent):
+		if (e is InputEventMouseButton and e.pressed) or (e is InputEventScreenTouch and e.pressed):
+			st["skip"] = true
+			finish.call())
+	await main.get_tree().create_timer(0.8).timeout
+	for line in STORY:
+		if st["skip"]:
+			return
+		cap.text = line
+		cap.modulate.a = 0.0
+		var ft := cap.create_tween()
+		ft.tween_property(cap, "modulate:a", 1.0, 0.5)
+		ft.tween_interval(1.5)
+		ft.tween_property(cap, "modulate:a", 0.0, 0.4)
+		await ft.finished
+		if st["skip"] or not is_instance_valid(ov):
+			return
+	finish.call()

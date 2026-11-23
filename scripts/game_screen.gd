@@ -501,6 +501,8 @@ func start_endless(resume := true) -> void:
 		_toast("하던 무한 모드를 이어서 해요")
 	else:
 		core.new_game()
+		if str(Save.d.get("onb", "")) == "endless":
+			core.throws_left = 40      # 처음 안내 판은 짧게
 	restart_btn.text = "새 판"
 	_close_overlays()
 	_paint_info()
@@ -781,11 +783,19 @@ func _game_over(reason: String) -> void:
 				e = {"day": Save.kst_day(), "n": 0}
 			e["n"] = int(e["n"]) + 1
 			Save.d["erew"] = e
+			if str(Save.d.get("onb", "")) == "endless":
+				j = maxi(j, 160)          # 안내 판: 상자 하나는 꼭 열 수 있게
 			Save.add_jelly(j)
 			reward = "무한 모드 보상 젤리 +%d" % j if j > 0 else ""
 		else:
 			reward = "오늘 보상 판(%d번)을 다 썼어요" % Save.ENDLESS_PAID
 		Save.save()
+		if str(Save.d.get("onb", "")) == "endless":
+			Save.d["onb"] = "box"
+			Save.save()
+			card_act = "home"
+			_show_card(reason, GameCore.score_text(core.score), "받은 젤리로 집에서 장식 상자를 열 수 있어요", reward, "집에 가서 상자 열기", false)
+			return
 		_show_card(reason, GameCore.score_text(core.score), "최고 기록 %s · 가장 큰 숫자 %s" % [GameCore.score_text(core.best), GameCore.num_text(core.max_tier)], reward, "다시 하기", false)
 		card_act = "retry"
 
@@ -796,6 +806,8 @@ func _stage_clear() -> void:
 	var last := i == core.stages.size() - 1
 	var first := i + 1 > int(Save.d["prog"])
 	Save.d["prog"] = maxi(int(Save.d["prog"]), i + 1)
+	if str(Save.d.get("onb", "")) == "stage":
+		Save.d["onb"] = "done"     # 처음 안내 끝
 	core.prog = int(Save.d["prog"])
 	var j := Save.stage_jelly(i, first)
 	Save.add_jelly(j)
@@ -858,6 +870,7 @@ func _on_card_main() -> void:
 	match card_act:
 		"next": start_stage(core.stage_idx + 1)
 		"menu": show_menu()
+		"home": go_home()
 		_: _restart_same()
 
 
