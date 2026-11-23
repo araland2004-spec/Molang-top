@@ -252,6 +252,29 @@ func _load_blocks() -> void:
 		if info[n]["k"] == "block" and str(n).begins_with("Block_"):
 			block_files.append(n)
 	selected = maxi(block_files.find(FLOOR_OF["grass"]), 0)
+	_tune_nature_mats()
+
+
+## 자연 에셋 재질 손보기: 이미션 텍스처 바탕이 검정이 아닌 회색이라 모든 면이 스스로 빛나서
+## 그림자가 지워지고 색이 뿌옇게 떴음. 금속값도 그림자를 지움 → 낮엔 이미션 거의 끄고(빛나는 풀은 밤에),
+## 금속은 절반으로.
+var nature_mats: Array = []
+
+
+func _tune_nature_mats() -> void:
+	var seen := {}
+	for mi in lib.find_children("*", "MeshInstance3D", true, false):
+		var m3 := mi as MeshInstance3D
+		for k in m3.mesh.get_surface_count():
+			var m = m3.mesh.surface_get_material(k)
+			if m is BaseMaterial3D and not seen.has(m):
+				seen[m] = true
+				var bm := m as BaseMaterial3D
+				bm.metallic = 0.4
+				bm.roughness = 1.0
+				if bm.emission_enabled and bm.emission_texture != null:
+					nature_mats.append(bm)
+					bm.emission_energy_multiplier = 0.05
 
 
 func _bname(asset: String) -> String:
@@ -348,7 +371,7 @@ func _build_world() -> void:
 	env.ambient_light_energy = 0.5
 	# ACES: 밝은 곳이 하얗게 날아가지 않고 대비가 살아남 (희뿌연 화면 개선)
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.tonemap_exposure = 1.0
+	env.tonemap_exposure = 0.85
 	env.tonemap_white = 6.0
 	env.fog_enabled = true
 	env.fog_density = 0.01
@@ -690,17 +713,17 @@ func _update_mood() -> void:
 	var s := _sky_now()
 	var night: float = s["night"]
 	# 낮: 따뜻한 햇빛 + 청록 그늘(밤과 같은 색 계열), 채도는 낮추고 그림자를 진하게 → 민트색이 형광처럼 뜨지 않게
-	sun.light_energy = lerpf(1.15, 0.15, night)
+	sun.light_energy = lerpf(0.95, 0.15, night)
 	sun.light_color = Color(1.0, 0.9, 0.76).lerp(Color(0.45, 0.7, 0.85), night)
 	sun.shadow_opacity = lerpf(0.7, 0.45, night)
 	env.ambient_light_color = Color(0.45, 0.62, 0.72).lerp(Color(0.22, 0.42, 0.45), night)   # 밤: 짙은 청록
-	env.ambient_light_energy = lerpf(0.45, 0.8, night)   # 하늘(0.35배)에서 받는 환경광
+	env.ambient_light_energy = lerpf(0.22, 0.8, night)   # 하늘(0.35배)에서 받는 환경광
 	env.adjustment_enabled = true
 	env.adjustment_brightness = lerpf(1.0, 0.92, night)
-	env.adjustment_saturation = lerpf(1.05, 0.85, night)
-	env.adjustment_contrast = lerpf(1.14, 1.08, night)
+	env.adjustment_saturation = lerpf(1.18, 0.9, night)
+	env.adjustment_contrast = lerpf(1.08, 1.1, night)
 	env.fog_light_color = (s["bot"] as Color).lerp(Color(0.06, 0.14, 0.16), 0.55 + 0.35 * night)
-	env.fog_density = lerpf(0.0015, 0.018, night)
+	env.fog_density = lerpf(0.0, 0.018, night)
 	for l in lamps:
 		(l[0] as OmniLight3D).light_energy = lerpf(0.1, 1.1, night)
 		(l[1] as StandardMaterial3D).emission_energy_multiplier = lerpf(0.3, 3.2, night)
@@ -716,7 +739,9 @@ func _update_mood() -> void:
 	sky_mat.sky_horizon_color = s["bot"]
 	sky_mat.ground_horizon_color = (s["bot"] as Color).darkened(0.3)
 	sky_mat.ground_bottom_color = Color(0.12, 0.2, 0.14).lerp(Color(0.03, 0.07, 0.08), night)
-	env.glow_intensity = lerpf(0.0, 0.8, night)   # 낮엔 블룸 끔 (밝은 바닥이 번져서 뿌옇게 됨)
+	env.glow_intensity = lerpf(0.0, 0.8, night)
+	for nm in nature_mats:
+		(nm as BaseMaterial3D).emission_energy_multiplier = lerpf(0.05, 0.9, night * night)   # 낮엔 블룸 끔 (밝은 바닥이 번져서 뿌옇게 됨)
 
 
 ## 처마 끝 깜빡이는 크리스마스 전구
