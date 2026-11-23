@@ -151,6 +151,8 @@ var blockers: Array = [HOUSE_BOX]
 var out_btn: Button
 var deco_btn: Button
 var name_label: Label
+var gem_btn: Button
+var quest_dot: Control
 var pet_label: Label
 var toast_t := 0.0
 var jelly_btn: Button
@@ -219,6 +221,8 @@ func _greet() -> void:
 			return
 	if extra.resume_move_flow():
 		return      # 새 집 안내(땅 넓히기 → 집 놓기)를 하다 나갔으면 이어서
+	if extra.quest_greet():
+		return      # 깬 퀘스트가 있으면 보석 받으러
 	if not h["events"].has("tut1"):
 		# 이미 하던 사람도 안내가 새로 생겼으니 한 번만 보여 줌
 		h["events"].append("tut1")
@@ -1232,6 +1236,10 @@ func _process(delta: float) -> void:
 	hud_t -= delta
 	if hud_t <= 0 and jelly_btn:
 		hud_t = 1.0
+		if gem_btn:
+			gem_btn.text = str(Save.gem())
+		if quest_dot:
+			quest_dot.visible = Save.quest_ready()
 		# 젤리 받기 (인터랙션 제안서 C): 게임에서 돌아와 늘었으면 칩이 톡 + 0.6초 동안 숫자가 올라감 + 「+N」
 		var jn := int(Save.d.get("jelly", 0))
 		if Save.jelly_seen >= 0 and jn >= Save.jelly_seen + 10:   # 공방 수입(+1씩)은 조용히, 보상처럼 크게 늘 때만 연출
@@ -1430,6 +1438,7 @@ func _on_tap(pos: Vector2) -> void:
 		if land_set.has(c):
 			if floor_map[c] != want:
 				_swap_floor(c, want)
+				Save.bump("floor")
 		elif _claimable(c):
 			var h := Save.home()
 			if int(h["land_free"]) > 0:
@@ -1438,6 +1447,7 @@ func _on_tap(pos: Vector2) -> void:
 				(h["land_own"] as Array).append("%d,%d" % [c.x, c.y])
 				Save.save()
 				_swap_floor(c, want)
+				Save.bump("floor")
 				_land_marks()
 				land_vis()
 				reset_walk_area()
@@ -1602,6 +1612,36 @@ func _comma(n: int) -> String:
 	return out
 
 
+## 홈 이어하기 카드 한 장: 위 작은 글씨(STAGE 26 · BEST …) / 큰 제목 / 목표 / 남은 횟수
+func _play_card(day: bool, col: Color, bg: Color, cap: String, title: String, line1: String, line2: String) -> Button:
+	var b := Button.new()
+	b.focus_mode = Control.FOCUS_NONE
+	var st := Mol.primary(30)
+	st.bg_color = bg
+	st.border_color = Color(col, 0.55)
+	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
+		b.add_theme_stylebox_override(k, st)
+	b.custom_minimum_size.y = 150
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	Mol.press(b, "primary")
+	hud_blocks.append(b)
+	var v := VBoxContainer.new()
+	v.set_anchors_preset(Control.PRESET_FULL_RECT)
+	v.offset_left = 24
+	v.offset_right = -16
+	v.alignment = BoxContainer.ALIGNMENT_CENTER
+	v.add_theme_constant_override("separation", 0)
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	b.add_child(v)
+	for ln in [[cap, 18, Color(col, 0.85), "num_m"], [title, 34, col, "b"], [line1, 19, Color(col, 0.85), "r"], [line2, 19, Color(col, 0.7), "r"]]:
+		var l := Mol.lbl(str(ln[0]), int(ln[1]), ln[2], str(ln[3]))
+		l.clip_text = true
+		l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		v.add_child(l)
+	return b
+
+
 func _go_game(m: String) -> void:
 	Save.next_mode = m
 	# 게임에서 돌아왔을 때 몰랑이가 있던 자리 그대로 (집 안/밖·카메라 방향·확대까지)
@@ -1755,6 +1795,54 @@ func _build_hud() -> void:
 	ui_root.add_child(flip)
 	hud_groups.append(flip)
 	hud_blocks.append(flip)
+	# 퀘스트 (왼쪽 가운데): 보석 수 + 받을 게 있으면 빨간 점
+	var qcol := VBoxContainer.new()
+	qcol.anchor_top = 0.5
+	qcol.anchor_bottom = 0.5
+	qcol.offset_left = 44
+	qcol.offset_top = -100
+	qcol.add_theme_constant_override("separation", 6)
+	ui_root.add_child(qcol)
+	hud_groups.append(qcol)
+	var gpill := Button.new()
+	gpill.focus_mode = Control.FOCUS_NONE
+	gpill.icon = gem_icon()
+	gpill.add_theme_constant_override("h_separation", 6)
+	gpill.add_theme_font_override("font", Mol.font("num"))
+	gpill.add_theme_font_size_override("font_size", 22)
+	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
+		gpill.add_theme_stylebox_override(k, Mol.sb(Color(1, 1, 1, 0.82) if day else Color(0.031, 0.094, 0.106, 0.7), Mol.DAY_LINE if day else Color(0.494, 0.941, 0.784, 0.28), 999, Vector2(14, 6)))
+	for k in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+		gpill.add_theme_color_override(k, txt)
+	gpill.text = str(Save.gem())
+	gpill.pressed.connect(func(): extra.open_quests())
+	qcol.add_child(gpill)
+	hud_blocks.append(gpill)
+	gem_btn = gpill
+	var qb := Button.new()
+	qb.focus_mode = Control.FOCUS_NONE
+	qb.text = "★\n퀘스트"
+	qb.add_theme_font_override("font", Mol.font("m"))
+	qb.add_theme_font_size_override("font_size", 20)
+	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
+		qb.add_theme_stylebox_override(k, Mol.sb(Color(1, 1, 1, 0.82) if day else Color(0.031, 0.094, 0.106, 0.7), Mol.DAY_LINE if day else Color(0.494, 0.941, 0.784, 0.28), 999, Vector2(6, 6)))
+	for k in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+		qb.add_theme_color_override(k, txt)
+	qb.custom_minimum_size = Vector2(96, 96)
+	qb.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	qb.pivot_offset = Vector2(48, 48)
+	Mol.press(qb, "icon")
+	qb.pressed.connect(func(): extra.open_quests())
+	qcol.add_child(qb)
+	hud_blocks.append(qb)
+	var dot := Panel.new()
+	dot.add_theme_stylebox_override("panel", Mol.sb(Mol.ALERT, Color(0, 0, 0, 0), 999, Vector2.ZERO))
+	dot.position = Vector2(72, 4)
+	dot.size = Vector2(20, 20)
+	dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	qb.add_child(dot)
+	quest_dot = dot
+	dot.visible = Save.quest_ready()
 
 	# 상태 알약 (하늘 위 글씨는 반투명 바탕) + 점 달린 구분선
 	var mid := VBoxContainer.new()
@@ -1807,30 +1895,9 @@ func _build_hud() -> void:
 	hud_groups.append(bot)
 	var prog := int(Save.d.get("prog", 0))
 	var cur := mini(prog, 199)
-	var cont := Button.new()
-	cont.focus_mode = Control.FOCUS_NONE
-	var csb := Mol.primary(32)
-	csb.bg_color = Color(1.0, 0.92, 0.78, 0.92) if day else Color(0.17, 0.15, 0.1, 0.88)
-	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
-		cont.add_theme_stylebox_override(k, csb)
-	cont.custom_minimum_size.y = 136
-	cont.pressed.connect(func(): _go_game("stage:%d" % cur))
-	bot.add_child(cont)
-	hud_blocks.append(cont)
-	var crow := HBoxContainer.new()
-	crow.set_anchors_preset(Control.PRESET_FULL_RECT)
-	crow.offset_left = 40
-	crow.offset_right = -40
-	crow.add_theme_constant_override("separation", 24)
-	crow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	cont.add_child(crow)
-	var ccol := VBoxContainer.new()
-	ccol.alignment = BoxContainer.ALIGNMENT_CENTER
-	ccol.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	ccol.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	crow.add_child(ccol)
+	# 이어하기: 두 장으로 나눔 — 왼쪽 스테이지 · 오른쪽 무한 모드
 	var amber := Mol.DAY_PRIMARY_TEXT if day else Mol.AMBER
-	ccol.add_child(Mol.lbl("이어하기", 44, amber, "b"))
+	var mint := Mol.DAY_LINE if day else Mol.MINT
 	var stg: Array = Save.data.get("stages", [])
 	var gtxt := ""
 	if cur < stg.size():
@@ -1841,43 +1908,22 @@ func _build_hud() -> void:
 			"up": gtxt = "위로 %d번 합치기" % int(st["v"])
 			_: gtxt = "대기줄에서 %s" % _num_text(int(st["t"]))
 		if cur >= 24 and (cur + 1) % 5 == 0:
-			gtxt += " · 고비 판"
-	gtxt += " · 오늘 %d/%d번" % [Save.stage_left(), Save.STAGE_DAILY]
-	ccol.add_child(Mol.lbl(gtxt, 26, Color(amber, 0.8), "r"))
-	var dv := Mol.DashLine.new(Color(amber, 0.45), true)
-	dv.custom_minimum_size = Vector2(4, 100)
-	dv.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	crow.add_child(dv)
-	var scol := VBoxContainer.new()
-	scol.alignment = BoxContainer.ALIGNMENT_CENTER
-	scol.add_theme_constant_override("separation", -6)
-	scol.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	crow.add_child(scol)
-	var stl := Mol.lbl("STAGE", 20, Color(amber, 0.85), "num_m")
-	stl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	scol.add_child(stl)
-	var snl := Mol.lbl(str(cur + 1), 72, amber, "num")
-	snl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	scol.add_child(snl)
-	var row2 := HBoxContainer.new()
-	row2.add_theme_constant_override("separation", 12)
-	bot.add_child(row2)
-	var endless := Mol.btn("무한 모드 · 보상 %d판" % Save.endless_paid_left(), "sec", 28, day)
-	endless.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	endless.size_flags_stretch_ratio = 1.6
-	endless.custom_minimum_size.y = 88
-	endless.pressed.connect(func(): _go_game("endless"))
-	row2.add_child(endless)
-	hud_blocks.append(endless)
-	var lofi := Mol.btn("틀어 두기", "sec", 28, day)
-	lofi.icon = Mol.icon("lofi_mode", day)
-	lofi.expand_icon = false
-	lofi.add_theme_constant_override("icon_max_width", 44)
-	lofi.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	lofi.custom_minimum_size.y = 88
-	lofi.pressed.connect(_lofi_on)
-	row2.add_child(lofi)
-	hud_blocks.append(lofi)
+			gtxt += " · 고비"
+	var crow := HBoxContainer.new()
+	crow.add_theme_constant_override("separation", 12)
+	bot.add_child(crow)
+	var sc_btn := _play_card(day, amber, Color(1.0, 0.92, 0.78, 0.92) if day else Color(0.17, 0.15, 0.1, 0.88),
+		"STAGE %d" % (cur + 1), "스테이지", gtxt, "오늘 %d/%d번" % [Save.stage_left(), Save.STAGE_DAILY])
+	sc_btn.pressed.connect(func(): _go_game("stage:%d" % cur))
+	crow.add_child(sc_btn)
+	var run: Dictionary = Save.d.get("run", {})
+	var going: bool = run.get("blobs", []).size() > 0 and not run.get("over", false)
+	var en_btn := _play_card(day, mint, Color(0.9, 1.0, 0.96, 0.92) if day else Color(0.05, 0.16, 0.15, 0.88),
+		"BEST %s" % _comma(int(Save.d.get("best", 0))), "무한 모드",
+		("하던 판 · %s점" % _comma(int(run.get("score", 0)))) if going else "던지기 제한 없음",
+		"보상 %d판 남음" % Save.endless_paid_left())
+	en_btn.pressed.connect(func(): _go_game("endless"))
+	crow.add_child(en_btn)
 	var mrow := HBoxContainer.new()
 	mrow.add_theme_constant_override("separation", 18)
 	mrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1894,7 +1940,7 @@ func _build_hud() -> void:
 	var dock := HBoxContainer.new()
 	dock.add_theme_constant_override("separation", 12)
 	bot.add_child(dock)
-	for d in [["book", "도감"], ["shop", "상점"], ["decorate", "꾸미기"], ["music", "음악"]]:
+	for d in [["book", "도감"], ["shop", "상점"], ["decorate", "꾸미기"], ["music", "음악"], ["lofi_mode", "틀어 두기"]]:
 		var b := Mol.icon_btn(d[0], d[1], day, 116)
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		match d[0]:
@@ -1902,6 +1948,7 @@ func _build_hud() -> void:
 			"shop": b.pressed.connect(_open_shop)
 			"decorate": b.pressed.connect(func(): extra.open_deco())
 			"music": b.pressed.connect(func(): extra.open_music())
+			"lofi_mode": b.pressed.connect(_lofi_on)
 		dock.add_child(b)
 		hud_blocks.append(b)
 
@@ -2004,6 +2051,51 @@ func _layout_hud() -> void:
 func _num_text(t: int) -> String:
 	var n := 1 << t
 	return _comma(n) if n < 100000 else "%dK" % (n / 1000)
+
+
+## 보석 아이콘 (하늘색 마름모)
+var _gem_tex: Texture2D
+func gem_icon() -> Texture2D:
+	if _gem_tex:
+		return _gem_tex
+	var img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
+	for y in 16:
+		for x in 16:
+			var d := absf(x - 7.5) / 7.5 + absf(y - 8.0) / 7.0
+			if d <= 1.0:
+				var c := Color("#7ED6FF")
+				if y < 8 and x < 8:
+					c = Color("#c9f0ff")
+				elif y >= 9:
+					c = Color("#4aa8e0")
+				img.set_pixel(x, y, c)
+	var t := ImageTexture.create_from_image(img)
+	t.set_size_override(Vector2i(32, 32))
+	_gem_tex = t
+	return t
+
+
+## 퀘스트 보상: 바닥 블록 하나 (아직 없는 블록 먼저) + 땅 칸
+func grant_block() -> String:
+	var h := Save.home()
+	var bo: Dictionary = h["blocks_out"]
+	var all: Array = Array(block_files)
+	var fresh_list: Array = all.filter(func(f): return not bo.has(f))
+	var pool: Array = fresh_list if not fresh_list.is_empty() else all
+	var pick: String = pool[randi() % pool.size()]
+	var fresh := not bo.has(pick)
+	bo[pick] = int(bo.get(pick, 0)) + 1
+	h["land_free"] = int(h["land_free"]) + (LAND_NEW if fresh else LAND_DUP)
+	Save.save()
+	_build_palette()
+	return pick
+
+
+func select_block(f: String) -> void:
+	var i := pal_files.find(f)
+	if i >= 0:
+		selected = i
+		_refresh_ui()
 
 
 ## 젤리 아이콘 (분홍 말랑 네모)
@@ -2383,6 +2475,8 @@ func _set_edit(on: bool) -> void:
 	edit_mode = on
 	if extra:
 		extra.hide_for_edit(on)     # 땅 편집 중엔 바닥만 보이게
+		if not on:
+			extra._quest_check_later()
 	if on:
 		_build_palette()
 	_land_marks.call_deferred()

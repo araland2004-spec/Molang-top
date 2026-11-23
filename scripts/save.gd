@@ -162,6 +162,85 @@ func use_stage_entry() -> bool:
 	return true
 
 
+# ───────────────────────── 보석 · 퀘스트 ─────────────────────────
+## 보석: 퀘스트를 깨면 받는 재화. 지금은 스테이지 입장 +1(보석 10개)에 써요.
+## 퀘스트는 한 줄로 이어져요(앞의 걸 받아야 다음이 열림). 진행은 깬 단계 수(prog) 또는 횟수 기록(cnt)으로 셈.
+const STAGE_ENTRY_GEM := 10
+const QUESTS := [
+	{"id": "stage5", "t": "스테이지 5단계까지 깨기", "kind": "prog", "need": 5, "gem": 30},
+	{"id": "box1", "t": "선물 상자 1번 열기", "kind": "box", "need": 1, "gem": 20},
+	{"id": "endless1", "t": "무한 모드 1판 하기", "kind": "endless", "need": 1, "gem": 20},
+	{"id": "stage20", "t": "스테이지 20단계까지 깨기", "kind": "prog", "need": 20, "gem": 50},
+	{"id": "deco1", "t": "방이나 섬 꾸미기 (장식 1개 놓기)", "kind": "place", "need": 1, "gem": 30},
+	{"id": "stage30", "t": "스테이지 30단계까지 깨기", "kind": "prog", "need": 30, "gem": 50, "block": 1},
+	{"id": "floor1", "t": "땅 편집으로 바닥 블록 바꾸기", "kind": "floor", "need": 1, "gem": 30},
+]
+
+
+func gem() -> int:
+	return int(d.get("gem", 0))
+
+
+func add_gem(n: int) -> void:
+	d["gem"] = gem() + n
+	save()
+
+
+## 횟수 기록: box(상자 연 수) · endless(무한 모드 끝낸 판) · place(장식 놓기) · floor(바닥 바꾸기)
+func bump(kind: String, n := 1) -> void:
+	if not (d.get("cnt") is Dictionary):
+		d["cnt"] = {}
+	d["cnt"][kind] = int(d["cnt"].get(kind, 0)) + n
+
+
+func quest_idx() -> int:
+	return int(d.get("quest", 0))
+
+
+func quest_cur() -> Dictionary:
+	var i := quest_idx()
+	return QUESTS[i] if i < QUESTS.size() else {}
+
+
+func quest_val(q: Dictionary) -> int:
+	if q.is_empty():
+		return 0
+	if q["kind"] == "prog":
+		return int(d["prog"])
+	var c: Dictionary = d.get("cnt", {}) if d.get("cnt") is Dictionary else {}
+	return int(c.get(q["kind"], 0))
+
+
+func quest_ready() -> bool:
+	var q := quest_cur()
+	return not q.is_empty() and quest_val(q) >= int(q["need"])
+
+
+## 보상 받기: 보석 더하고 다음 퀘스트로. 받은 퀘스트를 돌려줘요 (없으면 빈 것)
+func quest_claim() -> Dictionary:
+	if not quest_ready():
+		return {}
+	var q := quest_cur()
+	add_gem(int(q.get("gem", 0)))
+	d["quest"] = quest_idx() + 1
+	save()
+	return q
+
+
+## 보석으로 오늘 스테이지 입장 1번 더
+func buy_stage_entry() -> bool:
+	if gem() < STAGE_ENTRY_GEM:
+		return false
+	d["gem"] = gem() - STAGE_ENTRY_GEM
+	var sd: Dictionary = d.get("sday", {})
+	if sd.get("day", "") != kst_day():
+		sd = {"day": kst_day(), "n": 0}
+	sd["n"] = int(sd.get("n", 0)) - 1
+	d["sday"] = sd
+	save()
+	return true
+
+
 func bag_count(k: String) -> int:
 	return int(d["bag"].get(k, 0))
 

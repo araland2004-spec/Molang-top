@@ -453,7 +453,7 @@ func _bonus_str() -> String:
 func _paint_info() -> void:
 	if core.mode != "stage":
 		stage_lbl.text = "무한 모드"
-		throws_lbl.text = "던지기 %d 남음 · 최고 %s" % [core.throws_left, GameCore.score_text(core.best)] + _bonus_str()
+		throws_lbl.text = "던진 %d번 · 최고 %s" % [core.thrown, GameCore.score_text(core.best)] + _bonus_str()
 		# 목표 게이지: 점수가 목표에 닿을 때마다 아이템 하나 (가방에 남아 다음 판에도 씀)
 		goal_row.visible = true
 		var a := endless_goal(core.got_items - 1) if core.got_items > 0 else 0
@@ -507,7 +507,7 @@ func start_endless(resume := true) -> void:
 	var run: Dictionary = Save.d.get("run", {})
 	if str(Save.d.get("onb", "")) == "endless":
 		resume = false        # 안내 판은 늘 새 판(짧게)
-	if resume and run.get("blobs", []).size() > 0 and not run.get("over", false) and int(run.get("throws_left", 0)) > 0:
+	if resume and run.get("blobs", []).size() > 0 and not run.get("over", false):
 		core.restore(run)
 		_toast("하던 무한 모드를 이어서 해요")
 	else:
@@ -523,10 +523,10 @@ func start_endless(resume := true) -> void:
 func start_stage(i: int) -> void:
 	i = clampi(i, 0, core.stages.size() - 1)
 	# 하루 입장 횟수 (처음 안내 중인 1단계는 빼고)
-	if str(Save.d.get("onb", "")) != "stage" and not Save.use_stage_entry():
-		if not menu.visible:
-			show_menu()
-		_toast("오늘 스테이지 입장 %d번을 다 썼어요 · 내일 다시 열려요" % Save.STAGE_DAILY)
+	# 처음 5단계(첫 퀘스트)까지는 횟수를 안 써요
+	if int(Save.d["prog"]) >= 5 and str(Save.d.get("onb", "")) != "stage" and not Save.use_stage_entry():
+		show_menu()
+		_toast("오늘 입장 %d번을 다 썼어요 · 보석 %d개로 1번 더 들어갈 수 있어요" % [Save.STAGE_DAILY, Save.STAGE_ENTRY_GEM])
 		return
 	core.mode = "stage"
 	core.stage_idx = i
@@ -837,6 +837,7 @@ func _game_over(reason: String) -> void:
 		card_act = "retry"
 	else:
 		Save.d["best"] = maxi(int(Save.d["best"]), core.best)
+		Save.bump("endless")
 		var reward := ""
 		var j := 0
 		if int(Save.d.get("erew_rid", -1)) == core.run_id:
@@ -887,10 +888,6 @@ func _stage_clear() -> void:
 	var extra := ""
 	if first:
 		var n := i + 1
-		if n == 20:
-			extra += " · 무한 모드 던지기 550번으로!"
-		elif n > 20:
-			extra += " · 무한 모드 던지기 %d번 늘었어요" % (roundi(550 + (n - 20) * 450.0 / 80) - roundi(550 + (n - 21) * 450.0 / 80))
 		for k in core.endless_at:
 			if int(core.endless_at[k]) == n:
 				extra += " · 이제 무한 모드에서 %s를 하루 3번 쓸 수 있어요!" % ITEM_NAMES[k]
@@ -909,6 +906,8 @@ func _stage_clear() -> void:
 		names.append(ITEM_NAMES[k])
 	var note := ("던지기 %d번 남기고 성공" % core.throws_left if throws else "점수 " + GameCore.score_text(core.score)) + extra
 	note += "\n무한 모드 가방에 %s · 오늘 입장 %d번 남음" % [" · ".join(names), Save.stage_left()]
+	if Save.quest_ready():
+		note += "\n퀘스트 완료! 「%s」 · 집에서 보석을 받아요" % Save.quest_cur()["t"]
 	_show_card("모든 단계를 깼어요!" if last else "클리어!", big, note,
 		("첫 클리어 " if first else "다시 깨기 ") + "젤리 +%d · 아이템 %d개" % [j, gift.size()], "목록으로" if last else "다음 단계 · %d" % (i + 2), not last)
 	card_act = "menu" if last else "next"
@@ -986,9 +985,19 @@ func show_menu() -> void:
 	head.add_child(Mol.lbl("%d" % prog, 40, Mol.TEXT, "num"))
 	head.add_child(Mol.lbl(" / %d" % total, 40, Mol.TEXT_SUB, "num_m"))
 	menu_grid_box.add_child(Mol.GradLine.new(Color(0.494, 0.941, 0.784, 0.35), true))
-	var ent := Mol.lbl("오늘 입장 %d/%d · 깨면 무한 모드에서 쓸 아이템을 받아요" % [Save.stage_left(), Save.STAGE_DAILY], 22, Mol.AMBER if Save.stage_left() > 0 else Mol.ALERT, "m")
+	var free_now := int(Save.d["prog"]) < 5
+	var ent := Mol.lbl(("처음 5단계까지는 횟수 없이 · " if free_now else "오늘 입장 %d/%d · " % [Save.stage_left(), Save.STAGE_DAILY]) + "깨면 무한 모드에서 쓸 아이템을 받아요", 22, Mol.AMBER if (free_now or Save.stage_left() > 0) else Mol.ALERT, "m")
 	ent.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	menu_grid_box.add_child(ent)
+	if not free_now and Save.stage_left() <= 0:
+		var gb := Mol.btn("보석 %d개로 1번 더 들어가기 (가진 보석 %d)" % [Save.STAGE_ENTRY_GEM, Save.gem()], "glow", 22)
+		gb.custom_minimum_size.y = 72
+		gb.disabled = Save.gem() < Save.STAGE_ENTRY_GEM
+		gb.pressed.connect(func():
+			if Save.buy_stage_entry():
+				_toast("오늘 입장 +1")
+				show_menu())
+		menu_grid_box.add_child(gb)
 	# 이어하기 카드 (주 버튼)
 	var st: Dictionary = core.stages[cur]
 	var cont := Button.new()

@@ -93,6 +93,7 @@ var shake_safe := 0.0
 var chamfer := CHAMFER
 var run_id := 0          # 판마다 새 번호: 같은 판 보상을 두 번 받지 않게
 var got_items := 0       # 무한 모드: 이번 판에 목표 게이지로 받은 아이템 수
+var thrown := 0          # 무한 모드: 이번 판에 던진 수 (던지기 제한 없음, 보여 주기만)
 var sensor_y := SENSOR_Y
 var sensor_clock := 0.0
 var pegs: Array = []
@@ -1247,7 +1248,7 @@ func goal_text(st: Dictionary) -> String:
 
 func info_text() -> String:
 	if mode != "stage":
-		return "무한 모드 · 던지기 %d · 최고 %s" % [throws_left, score_text(best)]
+		return "무한 모드 · 던진 %d번 · 최고 %s" % [thrown, score_text(best)]
 	var st: Dictionary = stages[stage_idx]
 	var g := ("대기줄 합치기 %d/%d" % [mini(up_count, int(st["v"])), int(st["v"])]) if st["goal"] == "up" else goal_text(st)
 	return "%d단계 · %s · %s" % [stage_idx + 1, g, ("던지기 %d" % throws_left) if int(st["throws"]) else "던지기 무제한"]
@@ -1327,10 +1328,15 @@ func tick_row(dt: float) -> void:
 
 # ───────────────────────── 던지기·아이템 ─────────────────────────
 
+## 던지기 수 제한이 있는 판인지 (무한 모드는 제한 없음 · 양쪽 반원이 다 눌리면 끝)
+func limited() -> bool:
+	return mode == "stage" and int(stages[stage_idx]["throws"]) > 0
+
+
 func can_throw() -> bool:
 	if over or clear_t > 0:
 		return false
-	if (mode == "stage" and int(stages[stage_idx]["throws"])) or mode != "stage":
+	if limited():
 		return throws_left > 0
 	return true
 
@@ -1477,8 +1483,11 @@ func shoot(q: Blob, p: float) -> String:
 	queue = queue.filter(func(o): return o != q)
 	if q.t > max_tier:
 		max_tier = q.t
-	if (mode == "stage" and int(stages[stage_idx]["throws"])) or mode != "stage":
+	if limited():
 		throws_left -= 1; out_t = 0
+		info_changed.emit()
+	elif mode != "stage":
+		thrown += 1
 		info_changed.emit()
 	if mode == "stage" and int(stages[stage_idx]["throws"]) - throws_left >= 3:
 		for b: Blob in blobs:
@@ -1497,6 +1506,7 @@ func new_game() -> void:
 	score = 0; max_tier = 0; aim = 0; over = false; out_t = 0; since_merge = 0; clear_t = 0
 	run_id = int(Time.get_unix_time_from_system() * 1000.0) % 2000000000 + randi() % 1000
 	got_items = 0
+	thrown = 0
 	board_tier = 0; up_count = 0; up_tier = 0
 	miss_count = 0; miss_watch = null; held_combo = 0; held_shot = 0; streak = 0; shot_wait = {}
 	var ch = stage_opt("chamfer")
@@ -1597,7 +1607,7 @@ func snapshot() -> Dictionary:
 		bl.append({"t": b.t, "x": roundi(b.cx), "y": roundi(b.cy)})
 	for q: Blob in queue:
 		qu.append(q.t)
-	return {"score": score, "max_tier": max_tier, "throws_left": throws_left, "over": over, "blobs": bl, "queue": qu, "streak": streak, "rid": run_id, "got": got_items}
+	return {"score": score, "max_tier": max_tier, "throws_left": throws_left, "over": over, "blobs": bl, "queue": qu, "streak": streak, "rid": run_id, "got": got_items, "thrown": thrown}
 
 
 func restore(d: Dictionary) -> void:
@@ -1605,6 +1615,7 @@ func restore(d: Dictionary) -> void:
 	streak = int(d.get("streak", 0))   # 이어 하기: 연속 합치기 배율도 그대로 (new_game 이 0으로 만든 뒤에)
 	run_id = int(d.get("rid", run_id))
 	got_items = int(d.get("got", 0))
+	thrown = int(d.get("thrown", 0))
 	score = int(d.get("score", 0))
 	max_tier = int(d.get("max_tier", 0))
 	throws_left = int(d.get("throws_left", endless_throws()))
@@ -1740,7 +1751,7 @@ func sim_step(dt: float) -> void:
 				over = true
 				buzz.emit(30)
 				finished.emit("clear", "")
-		elif (mode != "stage" or int(stages[stage_idx]["throws"])) and throws_left <= 0:
+		elif limited() and throws_left <= 0:
 			out_t += dt
 			if out_t > 2.5 and since_merge > 1.2:
 				end_game("던지기를 다 썼어요")

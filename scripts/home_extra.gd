@@ -479,6 +479,7 @@ func _hide_walk(n: Node, keep: Dictionary) -> void:
 
 func stop_floor_edit() -> void:
 	floor_edit = ""
+	_quest_check_later()
 	hide_for_edit(false)
 	if floor_bar:
 		main.hud_blocks.erase(floor_bar)
@@ -508,6 +509,7 @@ func tap(pos: Vector2) -> bool:
 				var key := "%d,%d" % [i, j]
 				if H()["floors_in"].get(key, "plank") != floor_edit:
 					H()["floors_in"][key] = floor_edit
+					Save.bump("floor")
 					Save.save()
 					after_deco()
 					main.synth_tone(660, 880, 0.06, 0.15)
@@ -838,7 +840,11 @@ func pet_line() -> String:
 
 # ───────────────────────── 시트(창) 공통 ─────────────────────────
 
+var _sheet_gen := 0          # 창을 닫거나 바꿀 때마다 +1 (늦게 열리는 꾸미기 창이 새 창을 덮지 않게)
+
+
 func _close_sheet() -> void:
+	_sheet_gen += 1
 	if sheet:
 		var was_deco := sheet.has_meta("deco")
 		main.hud_blocks.erase(sheet)
@@ -968,6 +974,7 @@ func stop_planting() -> void:
 		plant_bar.queue_free()
 		plant_bar = null
 	main.refresh_ui()
+	_quest_check_later()
 
 
 ## 심어 둔 값: 예전엔 모델 이름(String), 지금은 [모델 이름, 회전]
@@ -1004,6 +1011,7 @@ func _plant_at(pos: Vector2) -> void:
 		return
 	else:
 		props["%.2f,%.2f" % [x, z]] = [plant_asset, randf() * TAU]
+		Save.bump("place")
 		main.synth_tone(660, 990, 0.08, 0.1)
 		Save.buzz(8)
 	# 심어 둔 게 하나라도 있으면 그 장식은 「놓은 것」(편안함 계산)
@@ -1137,7 +1145,7 @@ func tutorial_pages() -> Array:
 			unl.append("%d단계 %s" % [int(iu[k]), nm[k]])
 	return [
 		{"ic": "list", "t": "몰랑탑에 어서 와요!", "b": "놀이는 두 가지예요.\n\n• 스테이지 — 목표가 있는 퍼즐 %d단계. 깰수록 게임이 커져요.\n• 무한 모드 — 판이 다 찰 때까지 점수 내기. 젤리를 가장 많이 버는 곳이에요.\n\n모은 젤리로 집을 꾸미고 넓혀요." % n_st},
-		{"ic": "list", "t": "스테이지를 깨면", "b": "• 젤리: 처음 깰 때 40~150개 (5단계마다 더 많이), 다시 깨면 10개\n• 무한 모드 던지기 수가 늘어요: 처음 300번 → 20단계부터 550번 → 그 뒤로 계속\n• 무한 모드 아이템이 열려요: " + ", ".join(unl) + "\n• 공방 수입 +0.1/분, 집 지붕·벽 색, 20단계엔 햄스터 친구"},
+		{"ic": "list", "t": "스테이지를 깨면", "b": "• 젤리: 처음 깰 때 40~150개 (5단계마다 더 많이), 다시 깨면 10개\n• 무한 모드에서 쓸 아이템을 가방에 받아요 (스테이지는 하루 " + str(Save.STAGE_DAILY) + "번)\n• 무한 모드 아이템이 열려요: " + ", ".join(unl) + "\n• 공방 수입 +0.1/분, 집 지붕·벽 색, 20단계엔 햄스터 친구"},
 		{"ic": "item_shake", "t": "무한 모드를 하면", "b": "• 판이 끝날 때 점수만큼 젤리 (하루 %d판까지): 1만 점 %d개 · 3만 점 %d개 · 10만 점 %d개 · 30만 점 %d개\n• 아이템은 종류마다 하루 3번 무료, 더 쓰려면 상점에서\n• 던진 숫자가 계속 합쳐지면 「연속」 배율(최대 ×5), 512·1024… 처음 만들 때마다 「기세」 +10%%\n  → 막 던지기보다 노려서 이어 가는 게 점수가 훨씬 커요" % [Save.ENDLESS_PAID, Save.endless_jelly(10000), Save.endless_jelly(30000), Save.endless_jelly(100000), Save.endless_jelly(300000)]},
 		{"ic": "shop", "t": "젤리는 여기에 써요", "b": "• 선물 상자 (100개): 가구가 나와요. 도감 16칸을 다 채우면 새 집을 지을 수 있어요\n• 블록 상자 (100개): 바닥 블록 + 땅을 넓힐 칸\n• 상점: 무한 모드 아이템\n• 상자는 옆으로 스와이프해서 열고, 「×10」으로 한 번에 10개도 돼요"},
 		{"ic": "decorate", "t": "꾸미고 오래 있으면", "b": "• 공방: 앱이 켜져 있으면 1분마다 젤리 (지금 %s개/분)\n• 편안함: 가구를 놓고 땅을 넓히고 펫과 살수록 올라가서 공방 수입이 최대 2배 (지금 %d/100)\n• 오너먼트: 30분마다 하나(하루 6개). 닦아 달면 젤리·무한 아이템·상자 열쇠 중 하나! 10개면 트리 완성 → 공방 +10%%\n• 펫 선물: 집에 있으면 20분마다 펫이 선물을 물어 와요 (하루 3번)\n\n이 안내는 설정 → 도움말에서 다시 볼 수 있어요." % [str(snappedf(Save.work_rate(), 0.1)), Save.comfort()]},
@@ -1448,6 +1456,7 @@ func open_box(n := 1, tut_done := Callable()) -> void:
 				Save.d["jelly"] = int(Save.d["jelly"]) - BOX_PRICE
 			else:
 				break
+			Save.bump("box")
 			var it: Dictionary = items[randi() % items.size()]
 			var forced := false
 			if force_next != "":
@@ -1484,7 +1493,7 @@ func open_box(n := 1, tut_done := Callable()) -> void:
 		after_deco()
 		if tut_done.is_valid():
 			tut_done.call()
-		else:
+		elif not quest_greet():
 			open_book("in" if inside else "out"), open_box)
 
 
@@ -1511,7 +1520,10 @@ var deco_scroll := 0
 
 
 func open_deco() -> void:
+	var gen := _sheet_gen
 	await render_thumbs()
+	if gen != _sheet_gen:
+		return      # 그림을 그리는 사이에 다른 창이 열렸으면 그쪽을 그대로 둬요
 	var zone := "in" if inside else "out"
 	var keep := deco_scroll
 	var v := _bottom_sheet()
@@ -2277,21 +2289,15 @@ func mol_name() -> String:
 
 
 ## main._greet 이 물어봄: 안내를 이어서 했으면 true
+## 처음 온 사람: 시작 이야기 → 이름 → (퀘스트 1) 스테이지로. 그 뒤 안내는 퀘스트가 이끌어요.
 func run_onboarding() -> bool:
 	match onb():
 		"", "story":
 			play_story(_onb_name)
 		"name":
 			_onb_name()
-		"endless":
-			_onb_endless_back()
-		"box":
-			_onb_box()
-		"place":
-			_onb_place()
-		"stage":
-			say(["스테이지 1단계를 깨 볼까요?"], func(): main._go_game("stage:0"))
 		_:
+			set_onb("done")     # 예전 안내(무한 모드→상자→놓기→스테이지) 중이던 사람은 퀘스트로 넘어가요
 			return false
 	return true
 
@@ -2306,11 +2312,10 @@ func _onb_name() -> void:
 				Save.save()
 				if main.name_label:
 					main.name_label.text = H()["name"]
-				set_onb("endless")
-				say(["「%s」, 마음에 쏙 들어요!" % H()["name"],
-					"집을 꾸미려면 젤리가 필요해요.",
-					"무한 모드에서 숫자 몰랑이를 던져 같은 숫자끼리 합치면 점수가 쌓여요.",
-					"판이 끝나면 점수만큼 젤리를 받아요. 마음껏 해 보고, 언제든 홈 버튼으로 돌아와요!"], func(): main._go_game("endless")))))
+				set_onb("done")
+				Save.d["quest"] = 0
+				Save.save()
+				say(["「%s」, 마음에 쏙 들어요!" % H()["name"]], func(): quest_intro(0)))))
 
 
 ## 안내 중 무한 모드에서 (판이 끝나기 전에) 돌아왔을 때: 다시 보내지 않고 맛보기 선물을 주고 다음으로
@@ -2734,6 +2739,15 @@ func stop_moving() -> void:
 		plant_bar = null
 	main.refresh_ui()
 	after_deco()
+	_quest_check_later()
+
+
+## 편집·배치를 마친 뒤 깬 퀘스트가 있으면 알려 줘요 (시트가 닫힌 다음에)
+func _quest_check_later() -> void:
+	await main.get_tree().create_timer(0.4).timeout
+	var free_sheet: bool = sheet == null or (sheet.has_meta("deco") and sheet.find_children("*", "ScrollContainer", true, false).size() > 0)
+	if free_sheet and move_id == "" and plant_asset == "" and floor_edit == "" and not main.edit_mode:
+		quest_greet()      # 꾸미기 시트가 열려 있어도 닫고 알려 줘요
 
 
 func _move_at(pos: Vector2) -> void:
@@ -2759,6 +2773,7 @@ func _move_at(pos: Vector2) -> void:
 			main.toast("집 자리에는 못 놓아요")
 			return
 		_set_pos(move_id, x, z, rot)
+	Save.bump("place")
 	main.synth_tone(660, 990, 0.08, 0.1)
 	Save.buzz(8)
 	after_deco()
@@ -2976,3 +2991,127 @@ func coach(title: String, sub := "") -> void:
 	coach_box.pivot_offset = coach_box.size / 2
 	coach_box.offset_left = -coach_box.size.x / 2
 	coach_box.offset_right = coach_box.size.x / 2
+
+
+# ───────────────────────── 퀘스트 (보석) ─────────────────────────
+## 퀘스트를 깨면 보석. 퀘스트 창은 홈 왼쪽 「퀘스트」 버튼. 받을 게 있으면 버튼에 빨간 점.
+## 퀘스트가 열릴 때마다 몰랑이가 할 일을 알려 주고 그곳으로 데려가요 (새 튜토리얼).
+
+## 집에 돌아왔을 때: 깬 퀘스트가 있으면 알려 주고 창을 열어요
+func quest_greet() -> bool:
+	if onb() != "done" or not Save.quest_ready():
+		return false
+	say(["퀘스트를 깼어요! 「%s」" % Save.quest_cur()["t"], "퀘스트 창에서 보석을 받아요."], func(): open_quests())
+	return true
+
+
+## 퀘스트 i 가 열릴 때 안내 + 데려가기
+func quest_intro(i: int) -> void:
+	if i >= Save.QUESTS.size():
+		say(["지금 준비된 퀘스트는 여기까지예요!", "곧 새 퀘스트가 생겨요. 무한 모드에서 최고 점수를 노려 봐요."], func(): pass)
+		return
+	match Save.QUESTS[i]["id"]:
+		"stage5":
+			say(["첫 번째 퀘스트예요: 스테이지 5단계까지 깨기!",
+				"스테이지는 판마다 목표가 있는 퍼즐이에요. 같은 숫자 몰랑이를 던져 합치면 돼요.",
+				"깨면 젤리와, 무한 모드에서 쓸 아이템을 받아요. 가 볼까요?"], func(): main._go_game("stage:%d" % mini(int(Save.d["prog"]), 196)))
+		"box1":
+			say(["이번엔 스테이지에서 모은 젤리로 선물 상자를 열어 봐요.",
+				"젤리 %d개로 하나 열 수 있어요. 상자를 잡고 옆으로 쓱 밀어요!" % BOX_PRICE], func():
+				if int(Save.d["jelly"]) < BOX_PRICE:
+					Save.add_jelly(BOX_PRICE - int(Save.d["jelly"]))     # 첫 상자는 꼭 열 수 있게
+				open_box())
+		"endless1":
+			say(["이제 무한 모드를 알려 줄게요!",
+				"던지기 제한 없이, 양쪽 반원이 다 눌리기 전까지 계속 점수를 쌓는 놀이예요.",
+				"점수 목표를 넘을 때마다 아이템이 생기고, 판이 끝나면 점수만큼 젤리를 받아요.",
+				"스테이지에서 모은 아이템을 무한 모드에서 쓰면 점수가 훨씬 잘 나와요. 한 판 해 볼까요?"], func(): main._go_game("endless"))
+		"stage20":
+			say(["다음 퀘스트: 스테이지 20단계까지!",
+				"스테이지는 하루 %d번 들어갈 수 있어요. 깰수록 무한 모드 아이템이 쌓여요." % Save.STAGE_DAILY], func(): pass)
+		"deco1":
+			say(["상자에서 장식이 꽤 모였네요!",
+				"이제 방이나 섬을 꾸며 볼까요?",
+				"꾸미기에서 장식 카드를 누르고, 놓고 싶은 바닥을 눌러요."], func(): open_deco())
+		"stage30":
+			say(["다음은 스테이지 30단계까지!", "깨면 새 바닥 블록을 선물로 줄게요."], func(): pass)
+		"floor1":
+			var pick: String = main.grant_block()
+			say(["새 바닥 블록을 받았어요: 「%s」!" % main._bname(pick),
+				"땅 편집에서 블록을 고르고 내 땅 칸을 누르면 바닥이 바뀌어요.",
+				"블록을 받으면 땅도 넓힐 수 있어요 (민트색 칸). 바꿔 볼까요?"], func():
+				main._set_edit(true)
+				main.select_block(pick))
+
+
+## 받은 뒤 한마디 (보석 쓰는 곳 안내 등) → 다음 퀘스트 안내
+func _after_claim(q: Dictionary) -> void:
+	var lines: Array = ["보석 %d개를 받았어요!" % int(q.get("gem", 0))]
+	match q["id"]:
+		"box1":
+			lines.append_array(["보석은 스테이지 입장 횟수를 늘리는 데 써요.",
+				"스테이지는 하루 %d번인데, 보석 %d개로 1번 더 들어갈 수 있어요." % [Save.STAGE_DAILY, Save.STAGE_ENTRY_GEM],
+				"퀘스트를 깰 때마다 보석을 받아요. 퀘스트는 홈 왼쪽 「퀘스트」 버튼에 있어요."])
+		"floor1":
+			lines.append("바닥까지 내 마음대로 꾸밀 수 있게 됐어요!")
+	say(lines, func(): quest_intro(Save.quest_idx()))
+
+
+func open_quests() -> void:
+	var v := _sheet("퀘스트", 640)
+	var gh := HBoxContainer.new()
+	gh.add_theme_constant_override("separation", 10)
+	v.add_child(gh)
+	var gi := TextureRect.new()
+	gi.texture = main.gem_icon()
+	gi.custom_minimum_size = Vector2(36, 36)
+	gi.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	gi.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	gh.add_child(gi)
+	gh.add_child(Mol.lbl("보석 %d개 · 스테이지 입장 +1 (보석 %d개)" % [Save.gem(), Save.STAGE_ENTRY_GEM], 22, Mol.TEXT_SUB, "m"))
+	var idx := Save.quest_idx()
+	for i in Save.QUESTS.size():
+		var q: Dictionary = Save.QUESTS[i]
+		var done := i < idx
+		var cur := i == idx
+		if i > idx + 1:
+			break      # 다음 하나까지만 미리 보여 줘요
+		var p := PanelContainer.new()
+		p.add_theme_stylebox_override("panel", Mol.sb(Color(0.494, 0.941, 0.784, 0.12) if cur else Color(0.02, 0.07, 0.08, 0.6), Mol.MINT if cur else Color(0.494, 0.941, 0.784, 0.14), 24, Vector2(22, 14), 3 if cur else 2))
+		v.add_child(p)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 12)
+		p.add_child(row)
+		var col := VBoxContainer.new()
+		col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(col)
+		var title := ("✓ " if done else "") + str(q["t"])
+		col.add_child(Mol.lbl(title, 22, Mol.TEXT if cur else Mol.TEXT_DIM, "b" if cur else "m"))
+		var rw := "보석 %d" % int(q.get("gem", 0)) + (" · 바닥 블록" if q.has("block") else "")
+		if cur:
+			var val := mini(Save.quest_val(q), int(q["need"]))
+			col.add_child(Mol.lbl("%d / %d · 보상 %s" % [val, int(q["need"]), rw], 18, Mol.AMBER, "r"))
+		elif not done:
+			col.add_child(Mol.lbl("다음 퀘스트 · 보상 %s" % rw, 18, Mol.TEXT_DIM, "r"))
+		if cur:
+			var ready := Save.quest_ready()
+			var b := Mol.btn("받기" if ready else "하러 가기", "primary" if ready else "sec", 22)
+			b.custom_minimum_size = Vector2(150, 64)
+			b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			b.pressed.connect(func():
+				if Save.quest_ready():
+					var got := Save.quest_claim()
+					_close_sheet()
+					main.refresh_ui()
+					main.synth_tone(660, 1320, 0.12, 0.12)
+					Save.buzz(30)
+					_after_claim(got)
+				else:
+					_close_sheet()
+					quest_intro(Save.quest_idx()))
+			row.add_child(b)
+	if idx >= Save.QUESTS.size():
+		v.add_child(_wrap("준비된 퀘스트를 모두 깼어요! 곧 새 퀘스트가 생겨요.", 20))
+	var cb: Button = main._px_btn("닫기", main.C_CREAM, 22)
+	cb.pressed.connect(_close_sheet)
+	v.add_child(cb)
