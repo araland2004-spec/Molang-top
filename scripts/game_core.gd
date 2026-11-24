@@ -152,6 +152,7 @@ var synth = null    # 소리 (game_screen 이 넣어 줌)
 
 class Blob:
 	var rest := false        # 멈춰서 쉬는 중: 움직임 계산을 건너뜀 (반원 누름은 계속 셈)
+	var woke := 0.0          # 막 깨어난 뒤 잠깐: 모양 되돌리기가 튀어 오르는 속도로 바뀌지 않게
 	var still := 0.0
 	var spd := 0.0
 	var spd_avg := 100.0
@@ -651,6 +652,14 @@ func points_into(A: Blob, B: Blob, resolve: bool) -> bool:
 	var row_shove := (A.launch and B.row) or (B.launch and A.row)
 	var wp := A.w * ((0.2 if A.launch_up else 0.03) if (A.launch and B.row) else 1.0)
 	var we := B.w * ((0.2 if B.launch_up else 0.03) if (B.launch and A.row) else 1.0)
+	# 쉬는 숫자는 움직이지 않는 받침처럼: 밀리지도 찌그러지지도 않음
+	# (예전엔 쉬는 동안 옆 숫자에 조금씩 눌려 모양이 쌓여 찌그러졌다가, 깨는 순간 한꺼번에 되돌아오며 팍 튀었음)
+	if A.rest:
+		wp = 0.0
+	if B.rest:
+		we = 0.0
+	if wp == 0.0 and we == 0.0:
+		return false
 	var grip := (0.14 if (A.launch_up or B.launch_up) else 0.005) if A.row != B.row else 0.11
 	var hit := false
 	var apx := A.px
@@ -745,9 +754,7 @@ func collide() -> void:
 			if a.rest != b.rest:
 				var mover: Blob = b if a.rest else a
 				if mover.spd > WAKE_SPD or mover.launch or mover.row:
-					var sl: Blob = a if a.rest else b
-					sl.rest = false
-					sl.still = 0.0
+					_wake(a if a.rest else b)
 			var wild_pair := (a.wild or b.wild) and not (a.wild and b.wild) and not (a.wild and a.row) and not (b.wild and b.row)
 			var same := not a.rock and not b.rock and ((a.t == b.t and not a.wild and not b.wild) or wild_pair) and maxi(0 if a.wild else a.t, 0 if b.wild else b.t) < TIER_MAX and not (a.sleep and b.sleep)
 			var h1 := points_into(a, b, true)
@@ -792,6 +799,10 @@ func collide() -> void:
 				var mb := b.r * b.r
 				var fa := mb / (ma + mb)
 				var fb := ma / (ma + mb)
+				if a.rest:
+					fa = 0.0; fb = 1.0
+				elif b.rest:
+					fb = 0.0; fa = 1.0
 				var ux := dx / d * push
 				var uy := dy / d * push
 				var axs := a.x; var ays := a.y
@@ -996,8 +1007,7 @@ func substep(h: float) -> void:
 	if shrunk or shake_ax != 0.0 or shake_ay != 0.0 or tilt_g != 0.0 or warps.size() > 0:
 		for b: Blob in blobs:
 			if b.rest:
-				b.rest = false
-				b.still = 0.0
+				_wake(b)
 	for b: Blob in blobs:
 		if b.s < 1:
 			b.s += (1 - b.s) * minf(1, h * 5)
@@ -1089,12 +1099,16 @@ func substep(h: float) -> void:
 		var my_out := my1 * (CONTACT - 0.015 - 0.06 * maxf(0, (42 - b.r) / 25.0)) if (b.touch and my < 0) else my1
 		b.touch = false
 		var jg := 0.9975 if b.wob > 0 else jiggle
+		var vmax := VMAX
+		if b.woke > 0:
+			b.woke -= h
+			vmax = 260.0       # 막 깨어난 숫자는 모양이 돌아오는 힘으로 튀어 오르지 않게
 		for i in n:
 			var wx := mx_out + (vx[i] - mx) * jg
 			var wy := my_out + (vy[i] - my) * jg
 			var sp := wx * wx + wy * wy
-			if sp > VMAX * VMAX:
-				var f := VMAX / sqrt(sp)
+			if sp > vmax * vmax:
+				var f := vmax / sqrt(sp)
 				wx *= f; wy *= f
 			vx[i] = wx; vy[i] = wy
 		b.x = x; b.y = y; b.vx = vx; b.vy = vy
@@ -1711,8 +1725,16 @@ func _rest_walls(b: Blob) -> void:
 	var y0 := b.y[0] + b.y[b.n / 2]
 	walls(b)
 	if absf(b.x[0] + b.x[b.n / 2] - x0) + absf(b.y[0] + b.y[b.n / 2] - y0) > 0.05:
-		b.rest = false
-		b.still = 0.0
+		_wake(b)
+
+
+## 쉬던 숫자 깨우기: 이전 자리를 지금 자리로 맞춰서 「멈춰 있던 동안 밀린 거리」가 속도로 튀지 않게
+func _wake(b: Blob) -> void:
+	b.rest = false
+	b.still = 0.0
+	b.woke = 0.3
+	b.px = b.x.duplicate()
+	b.py = b.y.duplicate()
 
 
 func update_stuck(b: Blob, dt: float) -> void:
