@@ -681,6 +681,9 @@ func _build_house_model() -> void:
 			var m = m3.mesh.surface_get_material(k)
 			if m is BaseMaterial3D and (m as BaseMaterial3D).emission_enabled and not house_emit.has(m):
 				house_emit.append(m)
+				# 이 모델의 이미션 맵은 창 부분 바탕색을 그대로 복사한 것 → 바탕색 + 이미션이 더해지면
+				# 1을 넘겨 하얗게 잘리면서 창살·커튼 같은 무늬가 사라짐. 바탕색을 낮춰 합이 안 넘치게.
+				(m as BaseMaterial3D).albedo_color = Color(0.65, 0.65, 0.65)
 	# 모델 안 등불 (밤에만 켜지게)
 	house_lights.clear()
 	for l in cottage.find_children("*", "Light3D", true, false):
@@ -830,10 +833,10 @@ func _update_mood() -> void:
 	env.fog_light_color = (s["bot"] as Color).lerp(Color(0.06, 0.14, 0.16), 0.55 + 0.35 * night)
 	env.fog_density = lerpf(0.0, 0.018, night)
 	for em in house_emit:
-		(em as BaseMaterial3D).emission_energy_multiplier = lerpf(0.28, 1.1, night)   # 낮에도 창이 은은하게 (레퍼런스처럼)
+		(em as BaseMaterial3D).emission_energy_multiplier = lerpf(0.35, 0.6, night)   # 낮에도 창이 은은하게 (레퍼런스처럼)
 	for hl in house_lights:
 		if is_instance_valid(hl[0]):
-			(hl[0] as Light3D).light_energy = minf(float(hl[1]), 1.5) * night
+			(hl[0] as Light3D).light_energy = minf(float(hl[1]), 0.7) * night
 	for l in lamps:
 		(l[0] as OmniLight3D).light_energy = lerpf(0.1, 1.1, night)
 		(l[1] as StandardMaterial3D).emission_energy_multiplier = lerpf(0.3, 3.2, night)
