@@ -640,6 +640,12 @@ func _make_block(asset: String) -> Node3D:
 	return _spawn(asset)
 
 
+## 블록 바닥 높이: 물 블록은 다른 블록보다 40% 낮게 (물가처럼 움푹)
+const WATER_SINK := 0.4
+func _block_y(asset: String) -> float:
+	return FLOOR_TOP - 1.0 - (WATER_SINK if asset.contains("Water") else 0.0)
+
+
 ## 블록은 돌리지 않고 같은 방향으로만 놓아서 무늬가 이어지게
 func _set_floor(c: Vector2i, asset: String, save := true) -> void:
 	var n := _make_block(asset)
@@ -647,7 +653,7 @@ func _set_floor(c: Vector2i, asset: String, save := true) -> void:
 		return
 	if floor_nodes.has(c):
 		floor_nodes[c].queue_free()
-	n.position = Vector3(c.x, FLOOR_TOP - 1.0, c.y)   # 블록 glb 는 바닥이 기준점(0~1)
+	n.position = Vector3(c.x, _block_y(asset), c.y)   # 블록 glb 는 바닥이 기준점(0~1)
 	land_root.add_child(n)
 	_flow_register(n, asset)
 	floor_map[c] = asset
@@ -711,9 +717,9 @@ func _swap_floor(c: Vector2i, asset: String) -> void:
 	if old == null or floor_swapping.has(c):
 		return
 	floor_swapping[c] = true
-	var base := Vector3(c.x, FLOOR_TOP - 1.0, c.y)
+	var base := Vector3(c.x, _block_y(asset), c.y)     # 새 블록이 내려앉을 높이 (물이면 낮게)
 	var tw := create_tween()
-	tw.tween_property(old, "position:y", base.y + 0.45, 0.13).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(old, "position:y", old.position.y + 0.45, 0.13).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	tw.tween_callback(func():
 		floor_swapping.erase(c)
 		var n := _make_block(asset)
@@ -1526,7 +1532,7 @@ func _ghost_at(pos: Vector2) -> void:
 		_make_ghost(land_ghost)
 	var ok := floor_map.has(c) and (land_set.has(c) or _claimable(c))
 	land_ghost.visible = ok
-	land_ghost.position = Vector3(c.x, FLOOR_TOP - 1.0 + 0.12, c.y)
+	land_ghost.position = Vector3(c.x, _block_y(want) + 0.12, c.y)
 	land_ghost.scale = Vector3.ONE * 1.03
 
 
