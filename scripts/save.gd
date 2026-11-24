@@ -25,6 +25,9 @@ var data := {}           # mollang_data.json
 var DEFAULTS := {}
 
 
+var monet: Node      # 광고·결제
+
+
 func _ready() -> void:
 	DEFAULTS = d.duplicate(true)
 	var parsed = JSON.parse_string(FileAccess.get_file_as_string("res://data/mollang_data.json"))
@@ -36,6 +39,10 @@ func _ready() -> void:
 			for k in s:
 				d[k] = s[k]
 	_migrate_stages()
+	# 광고·결제 (scripts/monet.gd): Save.monet 으로 써요
+	monet = preload("res://scripts/monet.gd").new()
+	add_child(monet)
+	monet.restore.call_deferred()
 
 
 ## 겹치던 단계를 빼서 번호가 당겨졌을 때(stageRev): 깬 단계 수·별 기록을 새 번호로 옮김
@@ -233,12 +240,35 @@ func buy_stage_entry() -> bool:
 	if gem() < STAGE_ENTRY_GEM:
 		return false
 	d["gem"] = gem() - STAGE_ENTRY_GEM
+	_add_stage_entry()
+	return true
+
+
+func _add_stage_entry() -> void:
 	var sd: Dictionary = d.get("sday", {})
 	if sd.get("day", "") != kst_day():
 		sd = {"day": kst_day(), "n": 0}
 	sd["n"] = int(sd.get("n", 0)) - 1
 	d["sday"] = sd
 	save()
+
+
+## 광고(보상형)로 오늘 스테이지 입장 1번 더: 하루 monet.AD_STAGE_MAX 번까지
+func ad_stage_left() -> int:
+	var a: Dictionary = d.get("ad_stage", {})
+	var used := int(a.get("n", 0)) if a.get("day", "") == kst_day() else 0
+	return maxi(0, int(monet.AD_STAGE_MAX) - used)
+
+
+func ad_stage_entry() -> bool:
+	if ad_stage_left() <= 0:
+		return false
+	var a: Dictionary = d.get("ad_stage", {})
+	if a.get("day", "") != kst_day():
+		a = {"day": kst_day(), "n": 0}
+	a["n"] = int(a.get("n", 0)) + 1
+	d["ad_stage"] = a
+	_add_stage_entry()
 	return true
 
 

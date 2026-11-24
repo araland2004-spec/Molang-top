@@ -1378,7 +1378,9 @@ func _sky_now() -> Dictionary:
 	var b = SKY[i + 1]
 	var k: float = (hh - a[0]) / (b[0] - a[0])
 	var night := 1.0 if (hh < 5.5 or hh > 19.5) else (6.5 - hh if hh < 6.5 else (hh - 18.5 if hh > 18.5 else 0.0))
-	return {"top": Color(a[1]).lerp(Color(b[1]), k), "bot": Color(a[2]).lerp(Color(b[2]), k), "night": clampf(night, 0, 1)}
+	# 노을(해 질 녘 17~19.5시, 해 뜰 녘 5.5~7.5시는 약하게): 집 안 창 빛을 주황으로 낮게
+	var dusk := maxf(clampf(1.0 - absf(hh - 18.2) / 1.5, 0.0, 1.0), 0.6 * clampf(1.0 - absf(hh - 6.4) / 1.1, 0.0, 1.0))
+	return {"top": Color(a[1]).lerp(Color(b[1]), k), "bot": Color(a[2]).lerp(Color(b[2]), k), "night": clampf(night, 0, 1), "dusk": dusk}
 
 
 func _update_sky(now: float) -> void:
@@ -3125,12 +3127,62 @@ func _open_shop() -> void:
 			lk.add_theme_stylebox_override("normal", Mol.sb(Color(1.0, 0.757, 0.443, 0.12), Color(1.0, 0.757, 0.443, 0.35), 999, Vector2(20, 10)))
 			lk.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			row.add_child(lk)
+	_shop_paid(v)
 	var close := _px_btn("닫기", C_CREAM, 22)
 	close.pressed.connect(func():
 		hud_blocks.erase(shop_panel)
 		shop_panel.queue_free()
 		shop_panel = null)
 	v.add_child(close)
+
+
+## 상점 아래: 광고 제거 · 시즌 팩 (실제 결제는 scripts/monet.gd — 지금은 테스트용 가짜 결제)
+func _shop_paid(v: VBoxContainer) -> void:
+	var mo = Save.monet
+	if not mo.available():
+		return
+	if not mo.changed.is_connected(_shop_refresh):
+		mo.changed.connect(_shop_refresh)
+	v.add_child(Mol.DashLine.new())
+	var rows := [[mo.NO_ADS, "광고 제거", "판 사이 광고가 사라지고, 광고 보고 받는 보상은 광고 없이 바로 받아요. 한 번 사면 계속.", mo.NO_ADS_PRICE]]
+	for pid in mo.PACKS:
+		var pk: Dictionary = mo.PACKS[pid]
+		if bool(pk["on"]) or mo.owns(pid):
+			rows.append([pid, str(pk["n"]), str(pk["d"]), str(pk["price"])])
+	for r in rows:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 18)
+		row.custom_minimum_size.y = 88
+		v.add_child(row)
+		var col := VBoxContainer.new()
+		col.alignment = BoxContainer.ALIGNMENT_CENTER
+		col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(col)
+		col.add_child(Mol.lbl(str(r[1]), 28, Mol.TEXT, "b"))
+		var dl := Mol.lbl(str(r[2]), 20, Mol.TEXT_SUB, "r")
+		dl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		col.add_child(dl)
+		var pid: String = r[0]
+		if mo.owns(pid):
+			var ok := Mol.lbl("구매함", 24, Mol.AMBER, "b")
+			ok.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			row.add_child(ok)
+		else:
+			var b := _px_btn(str(r[3]), C_VIOLET, 24)
+			b.custom_minimum_size = Vector2(150, 76)
+			b.disabled = pid != mo.NO_ADS and (mo.PACKS[pid]["items"] as Array).is_empty()     # 에셋이 아직 없는 팩은 못 사요
+			b.pressed.connect(func(): mo.buy(pid))
+			row.add_child(b)
+	var rb := _px_btn("구매 복원", C_CREAM, 18)
+	rb.pressed.connect(func():
+		mo.restore()
+		_toast("구매 내역을 다시 불러왔어요"))
+	v.add_child(rb)
+
+
+func _shop_refresh() -> void:
+	if shop_panel:
+		_open_shop()
 
 
 func _set_edit(on: bool) -> void:

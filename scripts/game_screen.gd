@@ -828,6 +828,7 @@ func _on_finished(kind: String, reason: String) -> void:
 		_stage_clear()
 	else:
 		_game_over(reason)
+	Save.monet.game_finished()       # 몇 판에 한 번 전면 광고 (광고 제거 샀으면 없음)
 
 
 func _game_over(reason: String) -> void:
@@ -1012,6 +1013,17 @@ func show_menu() -> void:
 				_toast("오늘 입장 +1")
 				show_menu())
 		menu_grid_box.add_child(gb)
+		# 광고 보고 1번 더 (광고 제거를 샀으면 광고 없이 바로)
+		var mo = Save.monet
+		if mo.available() and Save.ad_stage_left() > 0:
+			var ab := Mol.btn(("무료로 1번 더 · 광고 제거 혜택" if mo.has_no_ads() else "광고 보고 1번 더") + " (오늘 %d번 남음)" % Save.ad_stage_left(), "glow", 22)
+			ab.custom_minimum_size.y = 72
+			ab.pressed.connect(func():
+				mo.rewarded(func(ok: bool):
+					if ok and Save.ad_stage_entry():
+						_toast("오늘 입장 +1")
+						show_menu()))
+			menu_grid_box.add_child(ab)
 	# 이어하기 카드 (주 버튼)
 	var st: Dictionary = core.stages[cur]
 	var cont := Button.new()
