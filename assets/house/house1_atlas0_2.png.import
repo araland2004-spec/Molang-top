@@ -2,19 +2,19 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://b1lmr6g5i70ao"
-path="res://.godot/imported/house1_emission0.png-29d56ff09e4be68611e9f48f82d1f9f0.ctex"
+uid="uid://bc4fm1dnypyin"
+path="res://.godot/imported/house1_atlas0_2.png-542bc2fc0e6119500cffac891a784bae.ctex"
 metadata={
 "vram_texture": false
 }
 generator_parameters={
-"md5": "438cb80aa16d11dcad0a973cabae4f4c"
+"md5": "461f7f685d9153711ee0be4ef1839489"
 }
 
 [deps]
 
-source_file="res://assets/house/house1_emission0.png"
-dest_files=["res://.godot/imported/house1_emission0.png-29d56ff09e4be68611e9f48f82d1f9f0.ctex"]
+source_file="res://assets/house/house1_atlas0_2.png"
+dest_files=["res://.godot/imported/house1_atlas0_2.png-542bc2fc0e6119500cffac891a784bae.ctex"]
 
 [params]
 

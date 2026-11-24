@@ -675,14 +675,35 @@ func _build_cottage() -> void:
 		place_house(Vector2i(int(ha[0]), int(ha[1])), false)
 	else:
 		place_house(Vector2i.ZERO, false)
-	var sm := StandardMaterial3D.new()
-	sm.albedo_color = Color(0.97, 0.97, 1.0, 0.9)
-	sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	var bm := BoxMesh.new()
-	bm.material = sm
-	for i in 3:
+
+
+var smoke_mesh: Mesh
+var smoke_mat: BaseMaterial3D
+var smoke_size := 0.1
+const SMOKE_N := 5
+
+
+## 굴뚝 연기: 집 모델의 연기 구름 메쉬를 몇 개 띄워 올리며 커졌다가 사라지게
+func _setup_smoke() -> void:
+	for m in smoke:
+		if is_instance_valid(m):
+			outside_nodes.erase(m)
+			m.queue_free()
+	smoke.clear()
+	for i in SMOKE_N:
 		var m := MeshInstance3D.new()
-		m.mesh = bm
+		if smoke_mesh:
+			m.mesh = smoke_mesh
+			m.material_override = smoke_mat.duplicate()      # 하나씩 따로 흐려지게
+		else:
+			var bm := BoxMesh.new()
+			m.mesh = bm
+			var sm := StandardMaterial3D.new()
+			sm.albedo_color = Color(0.97, 0.97, 1.0, 0.9)
+			sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			m.material_override = sm
+		m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		m.rotation.y = randf() * TAU
 		add_child(m)
 		smoke.append(m)
 		outside_nodes.append(m)
@@ -707,8 +728,8 @@ func _build_house_model() -> void:
 	var bases: Array = []
 	for n in cottage.find_children("*", "Node3D", true, false):
 		var nm := String(n.name)
-		if nm.begins_with("smoke"):
-			(n as Node3D).visible = false
+		if nm.begins_with("smoke") or nm.begins_with("Water_Flow") or nm.begins_with("Lava_Flow"):
+			(n as Node3D).visible = false      # 모델 연기는 아래에서 굴뚝 연기로 움직여요 / 같이 딸려 온 물·용암 블록은 숨김
 		elif nm.begins_with("base"):
 			bases.append(n)
 	# 크기: 받침 땅까지 3칸 폭에 맞춤
@@ -751,6 +772,16 @@ func _build_house_model() -> void:
 		var lt := l as Light3D
 		house_lights.append([lt, lt.light_energy])
 		lt.shadow_enabled = false
+	# 모델 안 연기 구름 메쉬를 굴뚝 연기로 씀
+	var sn := cottage.find_child("smoke1", true, false) as MeshInstance3D
+	if sn and sn.mesh:
+		smoke_mesh = sn.mesh
+		smoke_size = sn.global_basis.get_scale().x
+		var mat = sn.get_active_material(0)
+		smoke_mat = (mat.duplicate() if mat is BaseMaterial3D else StandardMaterial3D.new()) as BaseMaterial3D
+		smoke_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		smoke_mat.emission_enabled = false
+	_setup_smoke()
 	apply_house_look()
 	_add_lights()
 	house_root.position = keep_at
@@ -1398,10 +1429,14 @@ func _process(delta: float) -> void:
 		lights[i].material_override = light_mats[(i + ph) % light_mats.size()]
 	# 굴뚝 연기
 	for i in smoke.size():
-		var f := fmod(now * 0.35 + i / 3.0, 1.0)
-		var w := 0.09 * (1.0 - f * 0.6)
-		smoke[i].scale = Vector3.ONE * w * 2.0
-		smoke[i].position = chimney_top + Vector3(sin(now + i * 2) * 0.06 + f * 0.25, f * 0.9, 0)
+		var f := fmod(now * 0.22 + float(i) / smoke.size(), 1.0)
+		var sz := smoke_size if smoke_mesh else 0.18
+		smoke[i].scale = Vector3.ONE * sz * (0.45 + f * 1.25)          # 올라갈수록 부풀어
+		smoke[i].position = chimney_top + Vector3(sin(now * 0.8 + i * 1.7) * 0.05 + f * 0.35, f * 1.2, -f * 0.1)
+		smoke[i].rotation.y += delta * 0.3
+		var mo := smoke[i].material_override as BaseMaterial3D
+		if mo:
+			mo.albedo_color.a = clampf(sin(f * PI) * 1.4, 0.0, 0.9)      # 나올 때·사라질 때 흐리게
 	hud_t -= delta
 	if hud_t <= 0 and jelly_btn:
 		hud_t = 1.0
