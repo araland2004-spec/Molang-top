@@ -331,6 +331,18 @@ func _load_flows() -> void:
 		r.free()
 
 
+## 물·용암 블록이면 흐르는 목록에 넣기 (처음 깔 때·땅 편집에서 바꿀 때 모두)
+func _flow_register(n: Node3D, asset: String) -> void:
+	if not flow_frames.has(asset):
+		return
+	var ms: Array = n.find_children("*", "MeshInstance3D", true, false)
+	if n is MeshInstance3D:
+		ms.append(n)
+	if ms.size() > 0:
+		flow_cells[asset].append(ms[0])
+		ms[0].mesh = flow_frames[asset][maxi(flow_idx[asset], 0)]
+
+
 func _tick_flows(now: float) -> void:
 	for k in flow_frames:
 		var fr: Array = flow_frames[k]
@@ -630,13 +642,7 @@ func _set_floor(c: Vector2i, asset: String, save := true) -> void:
 		floor_nodes[c].queue_free()
 	n.position = Vector3(c.x, FLOOR_TOP - 1.0, c.y)   # 블록 glb 는 바닥이 기준점(0~1)
 	land_root.add_child(n)
-	if flow_frames.has(asset):
-		var ms: Array = n.find_children("*", "MeshInstance3D", true, false)
-		if n is MeshInstance3D:
-			ms.append(n)
-		if ms.size() > 0:
-			flow_cells[asset].append(ms[0])
-			ms[0].mesh = flow_frames[asset][maxi(flow_idx[asset], 0)]
+	_flow_register(n, asset)
 	floor_map[c] = asset
 	floor_nodes[c] = n
 	if save:
@@ -708,6 +714,7 @@ func _swap_floor(c: Vector2i, asset: String) -> void:
 			return
 		n.position = base + Vector3(0, 0.45, 0)
 		land_root.add_child(n)
+		_flow_register(n, asset)
 		old.queue_free()
 		floor_map[c] = asset
 		floor_nodes[c] = n
