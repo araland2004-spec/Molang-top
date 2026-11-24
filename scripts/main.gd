@@ -1429,7 +1429,11 @@ func _load_floor() -> bool:
 func _follow_transform() -> Transform3D:
 	var dir := Vector3(0, 0, 1).rotated(Vector3.RIGHT, pitch).rotated(Vector3.UP, yaw)
 	var look := pivot + Vector3(0, -0.6 if not (extra and extra.inside) else 0.35, 0)
-	return Transform3D(Basis(), look + dir * zoom).looking_at(look, Vector3.UP)
+	var dist := zoom * _dist_k()
+	if extra and extra.inside:
+		# 집 안: 예전 정사영 크기(iso_size)만큼 세로로 담기게 거리를 정해요 (원근 조금)
+		dist = extra.iso_size() * zoom / 13.0 * 0.5 / tan(deg_to_rad(_vfov()) * 0.5) * 1.18     # 원근으로 앞쪽이 커지는 만큼 조금 뒤로
+	return Transform3D(Basis(), look + dir * dist).looking_at(look, Vector3.UP)
 
 
 func _update_camera() -> void:
@@ -1437,12 +1441,7 @@ func _update_camera() -> void:
 		return
 	cam.global_transform = _follow_transform()
 	cam.fov = _vfov()
-	# 집 안: 원근 없는 아이소메트릭 뷰로 방 전체가 한 화면에 (확대·축소는 크기로)
-	if extra and extra.inside:
-		cam.projection = Camera3D.PROJECTION_ORTHOGONAL
-		cam.size = extra.iso_size() * zoom / 13.0
-	else:
-		cam.projection = Camera3D.PROJECTION_PERSPECTIVE
+	cam.projection = Camera3D.PROJECTION_PERSPECTIVE     # 집 안도 원근 조금 (예전 정사영 → 거리로 같은 범위)
 	_aim_fill()
 
 
@@ -1453,17 +1452,30 @@ func _aim_fill() -> void:
 	fill.rotation_degrees = Vector3(-18, rad_to_deg(yaw) + 20.0, 0)   # 낮게 → 윗면보다 옆면을 주로 밝힘
 
 
-## 세로 화면에서도 가로로 보이는 범위가 같게 (가로 시야 20도 기준)
-func _vfov() -> float:
+## 세로 화면에서도 가로로 보이는 범위가 같게. 화면에 담기는 범위는 예전(가로 시야 20도) 그대로 두고,
+## 시야각만 넓혀(CAM_HFOV) 카메라를 그만큼 가까이 → 원근이 조금 생겨요
+const CAM_HFOV := 32.0
+
+
+func _vfov_for(hfov: float) -> float:
 	var vs := get_viewport().get_visible_rect().size
 	var asp := vs.x / maxf(1.0, vs.y)
-	return clampf(rad_to_deg(2.0 * atan(tan(deg_to_rad(20.0) / 2.0) / asp)), 25.0, 60.0)
+	return clampf(rad_to_deg(2.0 * atan(tan(deg_to_rad(hfov) / 2.0) / asp)), 25.0 * hfov / 20.0, 75.0)
+
+
+func _vfov() -> float:
+	return _vfov_for(CAM_HFOV)
+
+
+## 예전 20도 시야일 때의 거리(zoom) → 넓힌 시야에서 같은 범위가 담기는 거리 비율
+func _dist_k() -> float:
+	return tan(deg_to_rad(_vfov_for(20.0)) * 0.5) / tan(deg_to_rad(_vfov()) * 0.5)
 
 
 func _pan_by(delta_px: Vector2) -> void:
 	follow = false
 	var vp_h := get_viewport().get_visible_rect().size.y
-	var per_px := 2.0 * zoom * tan(deg_to_rad(_vfov()) * 0.5) / vp_h
+	var per_px := 2.0 * zoom * tan(deg_to_rad(_vfov_for(20.0)) * 0.5) / vp_h
 	var right := cam.global_transform.basis.x
 	right.y = 0
 	right = right.normalized()

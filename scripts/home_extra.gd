@@ -437,10 +437,10 @@ func _process(_dt: float) -> void:
 				(w[0] as MeshInstance3D).visible = on
 		for pp in posts:
 			(pp[0] as Node3D).visible = vis.get(pp[1], true) or vis.get(pp[2], true)
-		for wf in win_fx:       # 창문 빛줄기는 그 창문이 있는 벽이 보일 때만 (반대편으로 돌렸을 때)
+		for wf in win_fx:       # 공중 빛기둥·먼지는 창 벽이 보일 때만, 바닥에 맺힌 빛·스포트라이트는 어느 쪽에서 봐도 보여요
 			var won: bool = vis.get(wf["dir"], true)
 			for nd in wf["nodes"]:
-				(nd as Node3D).visible = won
+				(nd as Node3D).visible = won or nd is SpotLight3D or nd == wf["nodes"][1]
 		for rp in roof_parts:
 			# 지붕: 카메라 쪽 경사면·서까래는 숨기고 반대쪽만 남김 (가운데 용마루는 위에서 가리니까 숨김)
 			var d: Vector3 = rp[1]
