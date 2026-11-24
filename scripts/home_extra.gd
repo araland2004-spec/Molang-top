@@ -437,6 +437,18 @@ func _process(_dt: float) -> void:
 				(w[0] as MeshInstance3D).visible = on
 		for pp in posts:
 			(pp[0] as Node3D).visible = vis.get(pp[1], true) or vis.get(pp[2], true)
+		# 창 빛: 창이 있는 벽이 보일 때(반대편 뷰)만 빛기둥·먼지, 벽이 숨은 기본 뷰에선 바닥에 떨어진 빛만 은은하게 (공중에 뜬 빛기둥 없이 깔끔하게)
+		var to_cam: Vector3 = main.cam.global_transform.basis.z
+		for wf in win_fx:
+			var won: bool = vis.get(wf["dir"], true)
+			(wf["shaft_mi"] as Node3D).visible = won
+			(wf["dust_n"] as Node3D).visible = won
+			if won and wf.has("axis"):
+				var ax: Vector3 = wf["axis"]
+				var zz := (to_cam - ax * to_cam.dot(ax))
+				if zz.length() > 0.01:
+					zz = zz.normalized()
+					(wf["shaft_mi"] as Node3D).basis = Basis(ax.cross(zz), ax, zz)
 		for rp in roof_parts:
 			# 지붕: 카메라 쪽 경사면·서까래는 숨기고 반대쪽만 남김 (가운데 용마루는 위에서 가리니까 숨김)
 			var d: Vector3 = rp[1]
@@ -3787,11 +3799,10 @@ uniform float strength = 0.3;
 varying vec3 wp;
 void vertex() { wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz; }
 void fragment() {
-	float edge = smoothstep(0.0, 0.3, UV.x) * smoothstep(1.0, 0.7, UV.x);
-	float along = mix(1.0, 0.35, UV.y) * smoothstep(0.0, 0.06, UV.y);
-	float face = pow(abs(dot(NORMAL, VIEW)), 1.4);
-	float dust = 0.82 + 0.18 * sin(wp.x * 7.0 + TIME * 0.6) * sin(wp.y * 9.0 - TIME * 0.45) * sin(wp.z * 6.0 + TIME * 0.3);
-	ALBEDO = col * strength * edge * along * face * dust;
+	float edge = smoothstep(0.0, 0.35, UV.x) * smoothstep(1.0, 0.65, UV.x);
+	float along = mix(1.0, 0.3, UV.y) * smoothstep(0.0, 0.08, UV.y) * smoothstep(1.0, 0.85, UV.y);
+	float dust = 0.9 + 0.1 * sin(wp.x * 5.0 + TIME * 0.5) * sin(wp.y * 6.0 - TIME * 0.4);
+	ALBEDO = col * strength * 1.6 * edge * along * dust;
 }
 """
 const PATCH_SHADER := """
@@ -3902,19 +3913,25 @@ func _shape_window(wf: Dictionary, slope: float) -> void:
 	var bot: Array = []
 	for p in top:
 		bot.append(p + d * minf(((p as Vector3).y - fy) / -d.y, lim))
+	# 빛기둥: 창 하나에 한 줄기 — 빛 방향 축을 따라 놓인 판 하나를 카메라 쪽으로 돌려서(_process) 깔끔하게 한 갈래로
+	var fc: Vector3 = ((bot[0] + bot[1] + bot[2] + bot[3]) as Vector3) / 4.0
+	var length := wc.distance_to(fc)
+	var w0 := float(wf["hw"])
+	var w1 := w0 * 1.15
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for k in 4:
-		var a: Vector3 = interior.to_local(top[k])
-		var b: Vector3 = interior.to_local(top[(k + 1) % 4])
-		var c: Vector3 = interior.to_local(bot[(k + 1) % 4])
-		var e: Vector3 = interior.to_local(bot[k])
-		var nrm := (b - a).cross(e - a).normalized()
-		for q in [[a, Vector2(0, 0)], [b, Vector2(1, 0)], [c, Vector2(1, 1)], [a, Vector2(0, 0)], [c, Vector2(1, 1)], [e, Vector2(0, 1)]]:
-			st.set_normal(nrm)
-			st.set_uv(q[1])
-			st.add_vertex(q[0])
-	(wf["shaft_mi"] as MeshInstance3D).mesh = st.commit()
+	var q0 := Vector3(-w0, 0, 0)
+	var q1 := Vector3(w0, 0, 0)
+	var q2 := Vector3(w1, -length, 0)
+	var q3 := Vector3(-w1, -length, 0)
+	for q in [[q0, Vector2(0, 0)], [q1, Vector2(1, 0)], [q2, Vector2(1, 1)], [q0, Vector2(0, 0)], [q2, Vector2(1, 1)], [q3, Vector2(0, 1)]]:
+		st.set_normal(Vector3.BACK)
+		st.set_uv(q[1])
+		st.add_vertex(q[0])
+	var smi := wf["shaft_mi"] as MeshInstance3D
+	smi.mesh = st.commit()
+	smi.position = interior.to_local(wc)
+	wf["axis"] = -d             # 판의 +Y (창 쪽) — 바닥 쪽이 -Y
 	var st2 := SurfaceTool.new()
 	st2.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var f: Array = []
@@ -3955,8 +3972,8 @@ func interior_mood(s: Dictionary) -> void:
 	var sky: Color = (s["bot"] as Color).lerp(s["top"], 0.4)
 	var outside := sky.lerp(Color(0.6, 0.82, 1.0), 0.35 * (1.0 - night) * (1.0 - dusk)).lerp(Color(0.18, 0.34, 0.78), night * 0.8)
 	var beam := Color(1.0, 0.93, 0.78).lerp(Color(1.0, 0.55, 0.28), dusk).lerp(Color(0.38, 0.58, 1.0), night)    # 햇빛 → 노을 → 달빛
-	var bs := lerpf(0.2, 0.5, night) + 0.22 * dusk
-	var slope := lerpf(lerpf(1.2, 0.8, dusk), 1.2, night)         # 노을엔 해가 낮아 조금 더 길게 (겹치지 않을 만큼만)
+	var bs := lerpf(0.3, 0.5, night) + 0.2 * dusk
+	var slope := lerpf(lerpf(1.0, 0.7, dusk), 1.0, night)         # 노을엔 해가 낮아 조금 더 길게 (겹치지 않을 만큼만)
 	for wf in win_fx:
 		_shape_window(wf, slope)
 		for g in wf["glass"]:
