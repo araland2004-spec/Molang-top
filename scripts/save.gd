@@ -69,7 +69,8 @@ func _migrate_stages() -> void:
 ## 공방(웹 버전과 같게): 화면이 켜져 있는 동안 1분에 0.5 + 0.1 × 깬 단계 젤리. 플레이 시간도 여기서 셈.
 func work_rate() -> float:
 	# 기본(단계) × 편안함(꾸미기, 최대 ×2) × 완성한 트리마다 +10%
-	return (0.5 + 0.1 * int(d["prog"])) * (1.0 + comfort() / 100.0) * (1.0 + 0.1 * int(home().get("trees", 0)))
+	var ws := 1.5 if home().get("workshop_at") is Array else 1.0      # 공방을 지으면 ×1.5
+	return (0.5 + 0.1 * int(d["prog"])) * (1.0 + comfort() / 100.0) * (1.0 + 0.1 * int(home().get("trees", 0))) * ws
 
 
 ## 집 편안함 0~100: 놓아 둔 가구 ×3 · 넓힌 땅 칸 ×1 · 함께 사는 펫 ×10 · 완성한 트리 ×10

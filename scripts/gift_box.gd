@@ -135,14 +135,15 @@ func _ready() -> void:
 	btns.alignment = BoxContainer.ALIGNMENT_CENTER
 	btns.add_theme_constant_override("separation", 16)
 	v.add_child(btns)
-	x10_btn = Mol.btn("×10 한 번에", "sec", 26)
-	x10_btn.toggle_mode = true
+	# 「10개 열기」: 한 번만 누르면 바로 10개가 빙글 돌며 열려요 (예전엔 켜고 → 다시 밀어야 했음)
+	x10_btn = Mol.btn("10개 열기 · %s" % _comma(PRICE * 10), "sec", 26)
 	x10_btn.custom_minimum_size.x = 250
 	x10_btn.disabled = int(Save.d.get("jelly", 0)) < PRICE * 10
-	x10_btn.toggled.connect(func(on: bool):
-		count = 10 if on else 1
-		x10_btn.add_theme_stylebox_override("normal", Mol.primary() if on else Mol.secondary())
-		_paint_sub())
+	x10_btn.pressed.connect(func():
+		if phase != "idle":
+			return
+		count = 10
+		_start_spin(1200.0 * (1.0 if randf() < 0.5 else -1.0)))
 	btns.add_child(x10_btn)
 	_paint_sub()
 	var q := Mol.btn("그만두기", "sec", 28)
@@ -260,14 +261,7 @@ func _gui_input(ev: InputEvent) -> void:
 				speed *= 0.5       # 밀다가 멈추고 뗐으면 조금 느리게
 			# 민 속도 그대로 돌고, 빠를수록 여러 바퀴 돌다가 열림
 			speed = clampf(speed, SLOW, TOP)
-			vel = speed * signf(dx)
-			spun = 0.0
-			spin_goal = 360.0 + speed * 0.3
-			phase = "whirl"
-			t = 0
-			tag.text = "촤라라락!" if speed > 1100 else "빙그르르…"
-			sub.text = ""
-			x10_btn.visible = false
+			_start_spin(speed * signf(dx))
 	elif ev is InputEventMouseMotion and dragging:
 		var now := Time.get_ticks_msec()
 		var dx: float = ev.position.x - drag_x
@@ -277,6 +271,18 @@ func _gui_input(ev: InputEvent) -> void:
 		vel = vel * 0.5 + v * 0.5
 		drag_x = ev.position.x
 		drag_t = now
+
+
+func _start_spin(v: float) -> void:
+	var speed := absf(v)
+	vel = v
+	spun = 0.0
+	spin_goal = 360.0 + speed * 0.3
+	phase = "whirl"
+	t = 0
+	tag.text = "촤라라락!" if speed > 1100 else "빙그르르…"
+	sub.text = ""
+	x10_btn.visible = false
 
 
 func _process(delta: float) -> void:

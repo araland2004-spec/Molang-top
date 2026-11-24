@@ -145,8 +145,14 @@ func enter() -> void:
 	interior.visible = true
 	main.set_walk_area(Vector2(-room.x + 0.3, -room.y + 0.3), Vector2(room.x - 0.3, room.y - 0.3), _blockers())
 	main.player.position = Vector3(0, main.FLOOR_TOP, room.y - 0.6)
-	main.pivot = main.player.position
+	# 아이소메트릭: 방 가운데를 보고, 45도 돌려서 35도 내려다봄 (나올 때 원래대로)
+	cam_out = [main.yaw, main.pitch, main.zoom]
+	main.pivot = Vector3(0, main.FLOOR_TOP, 0)
+	main.follow = false
+	main.yaw = deg_to_rad(45.0)
+	main.pitch = deg_to_rad(-35.26)
 	main.zoom = 13.0
+	main._update_camera()
 	main.path.clear()
 	main.going_seat = null
 	_move_pets_inside(true)
@@ -155,6 +161,15 @@ func enter() -> void:
 		H()["events"].append("howto_in")
 		Save.save()
 		say(["집 안이에요!", "의자를 누르면 앉아요.", "「← 밖으로」를 누르면 다시 나가요."], func(): pass)
+
+
+## 집 안 정사영 카메라 크기: 방 대각선 + 벽 높이가 세로·가로 모두 들어오게
+var cam_out: Array = []
+func iso_size() -> float:
+	var vs: Vector2 = main.get_viewport().get_visible_rect().size
+	var asp := vs.x / maxf(1.0, vs.y)
+	var diag := (room.x + room.y) * 1.414 + 1.0
+	return maxf(diag / asp, diag * 0.62 + 2.6) * 1.05
 
 
 func leave() -> void:
@@ -170,6 +185,13 @@ func leave() -> void:
 	main.player.position = door() + Vector3(0, main.FLOOR_TOP, 0.15)
 	main.pivot = main.player.position
 	main.zoom = 15.0
+	main.follow = true
+	if cam_out.size() == 3:
+		main.yaw = cam_out[0]
+		main.pitch = cam_out[1]
+		main.zoom = cam_out[2]
+		cam_out = []
+	main._update_camera()
 	main.path.clear()
 	main.going_seat = null
 	_move_pets_inside(false)
@@ -540,7 +562,7 @@ func open_floor_box(n := 1) -> void:
 func _preset_x10(n: int) -> void:
 	var g = sheet
 	if n == 10 and g is GiftBox and g.x10_btn and not g.x10_btn.disabled:
-		g.x10_btn.button_pressed = true
+		g.x10_btn.pressed.emit.call_deferred()      # 「10개 더」 한 번으로 바로 10개가 열려요
 
 
 func _fb_show(repaint: bool) -> void:
@@ -652,6 +674,12 @@ func tap(pos: Vector2) -> bool:
 	var dir := cam.project_ray_normal(pos)
 	var hb: Rect2 = main.HOUSE_BOX
 	var box := AABB(Vector3(hb.position.x - 0.2, main.FLOOR_TOP, hb.position.y - 0.2), Vector3(hb.size.x + 0.4, 3.6, hb.size.y + 0.4))
+	if main.workshop:
+		var wb: Rect2 = main.WORKSHOP_BOX
+		var wbox := AABB(Vector3(wb.position.x - 0.2, main.FLOOR_TOP, wb.position.y - 0.2), Vector3(wb.size.x + 0.4, 3.6, wb.size.y + 0.4))
+		if wbox.intersects_ray(from, dir) != null and (box.intersects_ray(from, dir) == null or from.distance_to(Vector3(wb.get_center().x, 1, wb.get_center().y)) < from.distance_to(Vector3(hb.get_center().x, 1, hb.get_center().y))):
+			open_workshop()
+			return true
 	if box.intersects_ray(from, dir) != null:
 		# 집 앞(문 앞 칸)에 와 있을 때만 들어가요. 멀리서 누르면 문 앞까지 걸어가기만 (잘못 눌러 들어가지 않게)
 		if near_door():
@@ -1962,7 +1990,7 @@ func after_deco() -> void:
 	if vol_done() and int(H().get("asked_vol", 0)) != int(H()["no"]):
 		H()["asked_vol"] = int(H()["no"])
 		Save.save()
-		ask_move()
+		main.toast("도감을 다 모았어요!")      # 집은 바꾸지 않아요 (넓힌 땅에 공방을 짓는 쪽으로)
 
 
 ## 도감(실내+실외 장식)을 다 모았는지
@@ -2775,15 +2803,19 @@ func _box_center(boxes: Array) -> Vector2:
 func _placed(id: String, boxes: Array, off: Vector3) -> Node3D:
 	var mi := Boxes.build(boxes, off)
 	var pz = pos_of(id)
-	if not (pz is Array) or not MOVABLE.has(id):
+	if not MOVABLE.has(id):
 		return mi
 	var c := _box_center(boxes)
+	if not (pz is Array):
+		pz = [c.x, c.y, 0]      # 아직 안 옮긴 가구도 받침을 둬요 (벤치 앉는 자리·끌기)
 	var piv := Node3D.new()
 	piv.position = Vector3(float(pz[0]), 0, float(pz[1]))
 	piv.rotation.y = int(pz[2]) * PI / 2
 	mi.position = Vector3(-c.x, 0, -c.y)
 	piv.add_child(mi)
 	item_nodes[id] = piv
+	if id == "bench":
+		_add_bench_seat(piv, off.y)
 	if id == move_id:
 		piv.scale = Vector3.ONE * 1.12
 		piv.create_tween().tween_property(piv, "scale", Vector3.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
@@ -2977,22 +3009,26 @@ func _move_house_step() -> void:
 		start_house_place(true))
 
 
-func start_house_place(guided: bool) -> void:
+var place_kind := "house"     # "house" | "workshop"
+
+
+func start_house_place(guided: bool, kind := "house") -> void:
 	_close_sheet()
+	place_kind = kind
 	house_placing = true
 	house_guided = guided
 	main.follow = false
 	main.zoom = maxf(main.zoom, 19.0)
 	main._update_camera()
 	hide_for_edit(false)
-	coach("집을 놓아주세요!", "집을 둘 내 땅을 눌러요")
+	coach("공방 자리를 골라 주세요!" if kind == "workshop" else "집을 놓아주세요!", ("공방" if kind == "workshop" else "집") + "을 둘 내 땅을 눌러요")
 	var v := _bottom_sheet()
 	plant_bar = sheet
 	plant_bar.remove_meta("deco")
 	sheet = null
 	var head := HBoxContainer.new()
 	v.add_child(head)
-	var t := Mol.lbl("집 놓기", 26, Mol.TEXT, "b")
+	var t := Mol.lbl("공방 놓기" if kind == "workshop" else "집 놓기", 26, Mol.TEXT, "b")
 	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(t)
 	var done := Mol.btn("여기로 할래요", "primary", 22)
@@ -3000,13 +3036,24 @@ func start_house_place(guided: bool) -> void:
 	done.pressed.connect(_house_done)
 	head.add_child(done)
 	v.add_child(Mol.lbl("놓을 수 있는 자리는 민트색, 안 되는 자리는 빨간색으로 보여요", 18, Mol.TEXT_SUB, "r"))
-	_house_marks(main.house_cell)
+	_house_marks(main.workshop_cell if kind == "workshop" else main.house_cell)
 
 
 func _house_ok(c: Vector2i) -> String:
-	for cell in main.house_cells(c):
+	var mine: Array = main.house_cells(c)
+	for cell in mine:
 		if not main.land_set.has(cell):
-			return "집이 들어갈 땅이 모자라요 · 내 땅 안쪽을 눌러 보세요"
+			return "들어갈 땅이 모자라요 · 내 땅 안쪽을 눌러 보세요"
+	# 집과 공방은 서로 겹치지 않게
+	var other = null
+	if place_kind == "workshop":
+		other = main.house_cell
+	elif main.workshop:
+		other = main.workshop_cell
+	if other != null:
+		for cell in main.house_cells(other):
+			if mine.has(cell):
+				return "집과 공방이 겹쳐요 · 조금 떨어진 곳을 눌러 보세요"
 	var props: Dictionary = H()["props"]
 	for k in props:
 		var xz: PackedStringArray = str(k).split(",")
@@ -3027,6 +3074,15 @@ func _house_tap(pos: Vector2) -> void:
 	if why != "":
 		main.toast(why)
 		Save.buzz(20)
+		return
+	if place_kind == "workshop":
+		if c == main.workshop_cell:
+			return
+		main.place_workshop(c, true)
+		H()["workshop_at"] = [c.x, c.y]
+		Save.save()
+		main.synth_tone(300, 180, 0.12, 0.14)
+		Save.buzz(15)
 		return
 	if c == main.house_cell:
 		return
@@ -3067,6 +3123,25 @@ func _house_marks(c: Vector2i) -> void:
 
 func _house_done() -> void:
 	house_placing = false
+	if place_kind == "workshop":
+		_house_marks(main.workshop_cell)
+		coach("")
+		if plant_bar:
+			main.hud_blocks.erase(plant_bar)
+			plant_bar.queue_free()
+			plant_bar = null
+		var first: bool = str(H().get("ws_step", "")) == "place"
+		H()["ws_step"] = ""
+		Save.save()
+		main.follow = true
+		main.reset_walk_area()
+		main.refresh_ui()
+		place_kind = "house"
+		if first:
+			say(["와, 공방이 생겼어요!", "이제 공방에서 젤리가 1.5배로 모여요.", "공방을 누르면 언제든 자리를 옮길 수 있어요."], func(): check_pets())
+		else:
+			main.toast("공방을 옮겼어요")
+		return
 	_house_marks(main.house_cell)
 	coach("")
 	if plant_bar:
@@ -3529,3 +3604,84 @@ func drop_drag(pos: Vector2) -> void:
 	if inside:
 		after_deco()
 	_sel_ring_update()
+
+
+# ───────────────────────── 공방 이야기 ─────────────────────────
+## 땅을 WORKSHOP_LAND 칸 이상 넓히면: 친구(펫)가 찾아옴 → 넓힌 땅에 공방 짓기 (H()["ws_step"]: "" · place)
+const WORKSHOP_LAND := 60
+
+
+func workshop_greet() -> bool:
+	if onb() != "done" or H().get("workshop_at") is Array and str(H().get("ws_step", "")) != "place":
+		return false
+	if str(H().get("ws_step", "")) == "place":
+		_workshop_place_step()
+		return true
+	if main.land_set.size() < WORKSHOP_LAND:
+		return false
+	_workshop_story()
+	return true
+
+
+func _workshop_story() -> void:
+	var have := {}
+	for p in H()["pets"]:
+		have[p["k"]] = true
+	var pick := ["dog", "강아지", "흑당"]
+	for kd in [["dog", "강아지", "흑당"], ["cat", "고양이", "보리"], ["ham", "햄스터", "햄찌"]]:
+		if not have.has(kd[0]):
+			pick = kd
+			break
+	say(["땅이 꽤 넓어졌어요!", "어? 저기서 누가 이쪽을 보고 있어요…", "작은 %s 한 마리가 같이 살고 싶대요!" % pick[1]], func():
+		ask_name(str(pick[1]) + "의 이름을 지어 주세요", str(pick[2]), func(nm: String):
+			H()["pets"].append({"k": pick[0], "name": nm, "since": Save.kst_day()})
+			H()["ws_step"] = "place"
+			Save.save()
+			spawn_pets()
+			say(["%s, 반가워요!" % nm, "새 친구랑 같이 일할 공방을 지어 볼까요?", "공방이 생기면 공방 수입이 1.5배가 돼요. 넓힌 땅에서 자리를 골라 주세요."], func(): _workshop_place_step())))
+
+
+func _workshop_place_step() -> void:
+	# 처음 놓을 자리: 내 땅 중 집과 안 겹치고 들어가는 곳
+	place_kind = "workshop"
+	if not (H().get("workshop_at") is Array):
+		var best = null
+		var bd := 1e9
+		for c in main.land_set:
+			var cell: Vector2i = c
+			if _house_ok(cell) == "":
+				var d := Vector2(cell - main.house_cell).length()
+				if d < bd:
+					bd = d
+					best = cell
+		if best == null:
+			place_kind = "house"
+			say(["공방이 들어갈 자리가 아직 없어요.", "땅을 조금 더 넓히면 다시 알려 줄게요."], func(): pass)
+			return
+		H()["workshop_at"] = [best.x, best.y]
+		Save.save()
+		main.build_workshop()
+	start_house_place(true, "workshop")
+
+
+func open_workshop() -> void:
+	var v := _sheet("몰랑 공방", 600)
+	v.add_child(_wrap("친구들이 함께 일하는 공방이에요. 공방 수입 ×1.5 · 지금 +%s/분" % str(snappedf(Save.work_rate(), 0.1)), 22))
+	var mv: Button = main._px_btn("공방 옮기기", main.C_CREAM, 22)
+	mv.pressed.connect(func(): start_house_place(false, "workshop"))
+	v.add_child(mv)
+	var cb: Button = main._px_btn("닫기", main.C_CREAM, 22)
+	cb.pressed.connect(_close_sheet)
+	v.add_child(cb)
+
+
+## 벤치에 앉기: 의자 장면(seat.tscn)을 벤치 가운데에 붙이고 의자 모양은 숨겨요. 등받이(-z)를 등지고 앞(+z)을 봐요.
+func _add_bench_seat(piv: Node3D, y: float) -> void:
+	var seat := (load("res://scenes/seat.tscn") as PackedScene).instantiate() as Node3D
+	seat.set("seat_label", "벤치")
+	seat.position = Vector3(0, y + 0.15, 0.05)      # 의자 앉는 점(0.27)을 벤치 판 높이(0.42)에 맞춤
+	seat.rotation.y = PI
+	piv.add_child(seat)
+	var ch := seat.get_node_or_null("Chair") as Node3D
+	if ch:
+		ch.visible = false

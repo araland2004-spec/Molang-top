@@ -198,6 +198,7 @@ func _ready() -> void:
 	# 맵 둘레 나무·풀·버섯 자동 배치는 끔 → 자연 장식은 상자 보상으로 모아서 직접 심어요 (home_extra NATURE)
 	_land_init()
 	_build_cottage()
+	build_workshop()
 	_build_clouds()       # 배경 구름은 집과 상관없이
 	_make_player()
 	_make_hamster()
@@ -208,7 +209,11 @@ func _ready() -> void:
 	outside_nodes.append_array([land_root, cottage])     # ham(임시 햄스터)은 펫이 생기면 숨겨서, 집 밖으로 나올 때 다시 보이면 안 돼요
 	var seats_node := get_node_or_null("Seats")
 	if seats_node:
-		outside_nodes.append(seats_node)
+		# 기본 의자는 숨기고 앉기에서도 빼요 → 뽑기에서 나오는 벤치에 앉아요 (home_extra._placed)
+		seats_node.visible = false
+		for st in seats_node.find_children("*", "", true, false):
+			if st.is_in_group("seat"):
+				st.remove_from_group("seat")
 	extra = HomeExtra.new()
 	add_child(extra)
 	extra.setup(self, ui_root)
@@ -247,6 +252,8 @@ func _greet() -> void:
 		Save.save()
 		extra.say(["바닥을 누르면 몰랑이가 걸어가요.", "문 앞에서 집을 누르면 집에 들어가요."], func(): extra.quest_greet())
 		return
+	if extra.workshop_greet():
+		return      # 땅을 넓혔으면: 친구가 찾아오고 공방 짓기
 	if extra.quest_greet():
 		return      # 깬 퀘스트가 있으면 보석 받으러
 	if not h["events"].has("tut1"):
@@ -1094,7 +1101,7 @@ func _update_mood() -> void:
 	env.fog_light_color = (s["bot"] as Color).lerp(Color(0.06, 0.14, 0.16), 0.55 + 0.35 * night)
 	env.fog_density = lerpf(0.0, 0.018, night)
 	for em in house_emit:
-		(em as BaseMaterial3D).emission_energy_multiplier = lerpf(0.35, 0.6, night)   # 낮에도 창이 은은하게 (레퍼런스처럼)
+		(em as BaseMaterial3D).emission_energy_multiplier = lerpf(0.35, 1.9, night * night)   # 낮엔 은은하게, 밤엔 창문이 환하게 빛나요
 	for hl in house_lights:
 		if is_instance_valid(hl[0]):
 			(hl[0] as Light3D).light_energy = minf(float(hl[1]), 0.7) * night
@@ -1343,6 +1350,12 @@ func _update_camera() -> void:
 		return
 	cam.global_transform = _follow_transform()
 	cam.fov = _vfov()
+	# 집 안: 원근 없는 아이소메트릭 뷰로 방 전체가 한 화면에 (확대·축소는 크기로)
+	if extra and extra.inside:
+		cam.projection = Camera3D.PROJECTION_ORTHOGONAL
+		cam.size = extra.iso_size() * zoom / 13.0
+	else:
+		cam.projection = Camera3D.PROJECTION_PERSPECTIVE
 	_aim_fill()
 
 
@@ -1432,7 +1445,10 @@ func reset_walk_area() -> void:
 	if land_set.is_empty():
 		mn = Vector2(X0, Z0)
 		mx = Vector2(X1, Z1)
-	set_walk_area(mn - Vector2(0.4, 0.4), mx + Vector2(0.4, 0.4), [HOUSE_BOX])
+	var bl: Array = [HOUSE_BOX]
+	if workshop:
+		bl.append(WORKSHOP_BOX)
+	set_walk_area(mn - Vector2(0.4, 0.4), mx + Vector2(0.4, 0.4), bl)
 
 
 ## 내 땅 아무 칸이나 (햄스터·펫이 돌아다닐 곳)
@@ -1451,6 +1467,73 @@ func house_cells(c: Vector2i) -> Array:
 		for z in range(-1, 3):
 			out.append(c + Vector2i(x, z))
 	return out
+
+
+# ───────────────────────── 공방 (두 번째 건물) ─────────────────────────
+## 집은 바꾸지 않고, 땅을 넓히면 이야기로 친구(펫)가 찾아오고 넓힌 땅에 공방을 지어요. 공방이 있으면 공방 수입 ×1.5.
+## 모델은 2번째 집(house2)을 씀. 자리는 Save.home()["workshop_at"] = [x, z] (가운데 칸), 집처럼 3×3 + 문 앞 칸.
+var workshop: Node3D
+var workshop_cell := Vector2i.ZERO
+var WORKSHOP_BOX := Rect2()
+var _ws_box0 := Rect2()
+
+
+func build_workshop() -> void:
+	if workshop:
+		workshop.queue_free()
+		workshop = null
+	var at = Save.home().get("workshop_at")
+	if not (at is Array and at.size() == 2):
+		return
+	var ps := load(HOUSE_GLBS[1]) as PackedScene
+	if ps == null:
+		return
+	var root := Node3D.new()
+	add_child(root)
+	var m := ps.instantiate() as Node3D
+	root.add_child(m)
+	_pixel(m)
+	for n in m.find_children("*", "Node3D", true, false):
+		var nm := String(n.name)
+		if nm.begins_with("smoke") or nm.begins_with("Water_Flow") or nm.begins_with("Lava_Flow") or nm.begins_with("base"):
+			(n as Node3D).visible = false
+	var box := _vis_aabb(m)
+	m.scale = Vector3.ONE * (3.0 / maxf(box.size.x, box.size.z))
+	box = _vis_aabb(m)
+	var c := box.get_center()
+	m.position += Vector3(-c.x, FLOOR_TOP + 0.04 - box.position.y, -c.z)
+	box = _vis_aabb(m)
+	_ws_box0 = Rect2(box.position.x + 0.05, box.position.z + 0.05, box.size.x - 0.1, box.size.z - 0.1)
+	for mi in m.find_children("*", "MeshInstance3D", true, false):
+		var m3 := mi as MeshInstance3D
+		for k in m3.mesh.get_surface_count():
+			var mat = m3.mesh.surface_get_material(k)
+			if mat is BaseMaterial3D and (mat as BaseMaterial3D).emission_enabled and not house_emit.has(mat):
+				house_emit.append(mat)      # 공방 창문도 밤에 빛나게
+				(mat as BaseMaterial3D).albedo_color = Color(0.65, 0.65, 0.65)
+	for l in m.find_children("*", "Light3D", true, false):
+		(l as Light3D).queue_free()
+	workshop = root
+	place_workshop(Vector2i(int(at[0]), int(at[1])), false)
+	_update_mood()
+
+
+func place_workshop(c: Vector2i, anim := true) -> void:
+	workshop_cell = c
+	WORKSHOP_BOX = Rect2(_ws_box0.position + Vector2(c), _ws_box0.size)
+	if workshop == null:
+		return
+	var to := Vector3(c.x, 0, c.y)
+	if anim:
+		workshop.position = to + Vector3(0, 2.2, 0)
+		var tw := workshop.create_tween()
+		tw.tween_property(workshop, "position", to, 0.38).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tw.tween_property(workshop, "scale", Vector3(1.06, 0.9, 1.06), 0.07)
+		tw.tween_property(workshop, "scale", Vector3.ONE, 0.2).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	else:
+		workshop.position = to
+	if not (extra and extra.inside):
+		reset_walk_area()
 
 
 func place_house(c: Vector2i, anim := true) -> void:
@@ -1497,6 +1580,11 @@ func set_outside_visible(v: bool) -> void:
 	for n in outside_nodes:
 		if is_instance_valid(n):
 			n.visible = v
+	# 집 모델은 새로 지으면 바뀌어서 목록에 없을 수 있음 → 받침째로 숨김 (집 안에 집이 또 보이던 문제)
+	if house_root:
+		house_root.visible = v
+	if workshop:
+		workshop.visible = v
 	for l in sky_layers:
 		(l as CanvasLayer).visible = v
 	env.background_mode = Environment.BG_CANVAS if v else Environment.BG_COLOR
@@ -2736,7 +2824,7 @@ func _land_init() -> void:
 	_migrate_blocks()
 	if not (h.get("land_own") is Array):
 		var own: Array = []
-		for x in range(-2, 3):
+		for x in range(-3, 4):          # 처음 땅 7×6칸 (예전 5×6)
 			for z in range(-2, 4):
 				own.append("%d,%d" % [x, z])
 		h["land_own"] = own
@@ -2872,6 +2960,7 @@ func open_block_box(n := 1) -> void:
 		_build_palette()
 		_land_marks()
 		_refresh_ui(), open_block_box)
+	extra._preset_x10(n)
 
 
 ## 상점 (웹 버전과 같게): 무한 모드용 아이템을 젤리로 사서 가방에
