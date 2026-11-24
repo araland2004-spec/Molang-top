@@ -46,11 +46,19 @@ const C_VIOLET := Color("#B9A2FF")     # 보조 강조
 const C_SUB := Color(0.624, 0.737, 0.714)
 
 # 섞기 규칙의 바닥 종류 → ground_test 블록
+## 바닥 블록: 마인크래프트풍 16×16 도트 블록 (D:\Molang\Modeling\Ground → assets/blocks). 자연 에셋은 장식에만 씀.
+const BLOCK_DIR := "res://assets/blocks/"
+const PIXEL_BLOCKS := [
+	"Block_Grass_01", "Block_Grass_02", "Block_Grass_03_flower", "Block_Dirt_Light_01", "Block_Dirt_Stony_01", "Block_Soil_Dark_01",
+	"Block_Sand_01", "Block_Sand_02", "Block_Stone_Light_01", "Block_Stone_Slate_01", "Block_StoneBrick_01", "Block_StoneBrick_02",
+	"Block_StoneBrick_03", "Block_StoneBrick_Moss_01", "Block_Brick_Red_01", "Block_Wood_Crate_01", "Block_Water_Base_01",
+	"Block_Water_Base_02", "Block_Lava_Static_01", "Block_Lava_Base_01",
+]
 const FLOOR_OF := {
-	"grass": "Block_Grass_Green_Wavy_01", "grass2": "Block_Grass_Teal_Wavy_01", "grass3": "Block_Grass_Green_Layered_01",
-	"path": "Block_Dirt_Solid_01", "path_edge": "Block_Dirt_Gravel_01", "plaza": "Block_Dirt_Layered_01", "plaza2": "Block_Sand_Solid_01",
-	"water": "Block_Water_Ripple_01", "bank": "Block_Stone_Light_01", "bank2": "Block_Dirt_Gravel_02", "bank3": "Block_Water_Gravel_01",
-	"soil": "Block_Dirt_Layered_02", "gravel": "Block_Dirt_Gravel_01",
+	"grass": "Block_Grass_01", "grass2": "Block_Grass_02", "grass3": "Block_Grass_03_flower",
+	"path": "Block_Dirt_Light_01", "path_edge": "Block_Dirt_Stony_01", "plaza": "Block_Sand_01", "plaza2": "Block_Sand_02",
+	"water": "Block_Water_Base_01", "bank": "Block_Stone_Light_01", "bank2": "Block_Dirt_Stony_01", "bank3": "Block_Stone_Slate_01",
+	"soil": "Block_Soil_Dark_01", "gravel": "Block_Dirt_Stony_01",
 }
 const KO := {
 	"Block": "", "Grass": "잔디", "Dirt": "흙", "Sand": "모래", "Stone": "돌", "StoneBrick": "돌벽돌", "Lava": "용암",
@@ -59,6 +67,8 @@ const KO := {
 	"Blue": "파랑", "Red": "빨강", "Yellow": "노랑", "Light": "밝은", "Dark": "어두운", "Charcoal": "숯색",
 	"Layered": "층", "Wavy": "물결", "Solid": "", "Fractured": "갈라진", "Striped": "줄무늬", "Ripple": "잔물결",
 	"Speckled": "점박이", "Gravel": "자갈", "Vein": "광맥", "Nodules": "덩이", "MixedOre": "섞인 광석",
+	"Flower": "꽃", "flower": "꽃", "Moss": "이끼", "Wood": "나무", "Crate": "상자", "Brick": "벽돌", "Stony": "돌 섞인",
+	"Slate": "판석", "Base": "", "Static": "", "Soil": "흙", "02": "2", "03": "3",
 	"SilverOre": "은광석", "RedOre": "빨간 광석", "CyanOre": "하늘 광석", "YellowOre": "노란 광석", "DarkOre": "어두운 광석",
 }
 
@@ -268,13 +278,64 @@ func _load_blocks() -> void:
 		for r in cat.get_children():
 			if info.has(str(r.name)):
 				roots[str(r.name)] = r
-	var names := roots.keys()
-	names.sort()
-	for n in names:
-		if info[n]["k"] == "block" and str(n).begins_with("Block_"):
-			block_files.append(n)
-	selected = maxi(block_files.find(FLOOR_OF["grass"]), 0)
 	_tune_nature_mats()
+	# 바닥 블록은 도트 블록으로 (자연 에셋 블록은 안 씀)
+	for n in roots.keys():
+		if info[n]["k"] == "block":
+			roots.erase(n)
+	for n in PIXEL_BLOCKS:
+		var bp := load(BLOCK_DIR + n + ".glb") as PackedScene
+		if bp == null:
+			continue
+		var r := bp.instantiate() as Node3D
+		_pixel(r)
+		pix_lib.add_child(r)
+		roots[n] = r
+		info[n] = {"n": n, "k": "block", "d": [1, 1, 1]}
+		block_files.append(n)
+	selected = maxi(block_files.find(FLOOR_OF["grass"]), 0)
+
+
+var pix_lib := Node3D.new()
+
+
+## 예전(자연 에셋) 블록 이름 → 도트 블록 이름 (저장된 바닥·가진 블록 옮기기)
+func blk(name: String) -> String:
+	if PIXEL_BLOCKS.has(name):
+		return name
+	var n := name.to_lower()
+	if "water" in n:
+		return "Block_Water_Base_01" if not "gravel" in n else "Block_Stone_Slate_01"
+	if "lava" in n:
+		return "Block_Lava_Static_01"
+	if "grass" in n:
+		if "teal" in n or "dark" in n:
+			return "Block_Grass_02"
+		return "Block_Grass_03_flower" if "layered" in n else "Block_Grass_01"
+	if "sand" in n:
+		return "Block_Sand_02" if "solid" in n else "Block_Sand_01"
+	if "gravel" in n:
+		return "Block_Dirt_Stony_01"
+	if "dirt" in n:
+		return "Block_Soil_Dark_01" if ("layered_02" in n or "dark" in n) else "Block_Dirt_Light_01"
+	if "brick" in n:
+		return "Block_StoneBrick_01"
+	if "stone" in n or "ore" in n or "crystal" in n or "coal" in n or "metal" in n:
+		return "Block_Stone_Slate_01" if "dark" in n or "charcoal" in n else "Block_Stone_Light_01"
+	if "snow" in n or "ice" in n:
+		return "Block_Water_Base_02"
+	return "Block_Grass_01"
+
+
+func _migrate_blocks() -> void:
+	var h := Save.home()
+	var bo = h.get("blocks_out")
+	if bo is Dictionary:
+		var nb := {}
+		for k in bo:
+			var nk := blk(str(k))
+			nb[nk] = int(nb.get(nk, 0)) + int(bo[k])
+		h["blocks_out"] = nb
 
 
 ## 자연 에셋 재질 손보기: 이미션 텍스처 바탕이 검정이 아닌 회색이라 모든 면이 스스로 빛나서
@@ -1058,9 +1119,14 @@ func _load_floor() -> bool:
 	var parsed = JSON.parse_string(FileAccess.get_file_as_string(SAVE_PATH))
 	if not (parsed is Dictionary) or not parsed.has("floor_map"):
 		return false
+	var changed := false
 	for t in parsed["floor_map"]:
-		if roots.has(str(t[2])):
-			_set_floor(Vector2i(int(t[0]), int(t[1])), str(t[2]), false)
+		var a := blk(str(t[2]))
+		changed = changed or a != str(t[2])
+		if roots.has(a):
+			_set_floor(Vector2i(int(t[0]), int(t[1])), a, false)
+	if changed:
+		_save_floor()
 	return floor_map.size() > 0
 
 
@@ -2331,6 +2397,7 @@ func _build_palette() -> void:
 ## 내 땅: 처음엔 집 둘레 5×6칸만. 블록 뽑기로 새 블록 +6칸, 중복 +2칸 (웹과 같게)
 func _land_init() -> void:
 	var h := Save.home()
+	_migrate_blocks()
 	if not (h.get("land_own") is Array):
 		var own: Array = []
 		for x in range(-2, 3):
