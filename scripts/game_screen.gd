@@ -93,7 +93,6 @@ func _ready() -> void:
 	_build_ui()
 	core.score_changed.connect(func(s):
 		score_lbl.text = GameCore.score_text(s)
-		_check_endless_goal()
 		_paint_info())
 	core.buzz.connect(func(ms: int): Save.buzz(ms))
 	core.info_changed.connect(_paint_info)
@@ -454,15 +453,8 @@ func _paint_info() -> void:
 	if core.mode != "stage":
 		stage_lbl.text = "무한 모드"
 		throws_lbl.text = "던진 %d번 · 최고 %s" % [core.thrown, GameCore.score_text(core.best)] + _bonus_str()
-		# 목표 게이지: 점수가 목표에 닿을 때마다 아이템 하나 (가방에 남아 다음 판에도 씀)
-		goal_row.visible = true
-		var a := endless_goal(core.got_items - 1) if core.got_items > 0 else 0
-		var b := endless_goal(core.got_items)
-		goal_name.text = "목표 · 다음 아이템까지"
-		goal_val.text = "%s / %s" % [GameCore.score_text(core.score), GameCore.score_text(b)]
-		goal_frac = clampf(float(core.score - a) / maxf(1.0, float(b - a)), 0.0, 1.0)
-		goal_bar.frac = goal_frac
-		goal_bar.queue_redraw()
+		# 무한 모드는 목표 게이지·아이템 보상 없음 (아이템이 너무 빨리 쌓였음 → 아이템은 스테이지에서)
+		goal_row.visible = false
 	else:
 		var i: int = core.stage_idx
 		var st: Dictionary = core.stages[i]
@@ -735,6 +727,9 @@ func _read_tilt() -> void:
 			core.tilt_deg = clampf(rad_to_deg(atan2(-g.x, -g.y if absf(g.y) > absf(g.z) else -g.z)), -50, 50)
 
 
+var sim_ms := 0.0      # 물리 한 번에 걸리는 시간 (평균)
+
+
 func _process(delta: float) -> void:
 	if input_guard > 0:
 		input_guard -= delta
@@ -743,12 +738,17 @@ func _process(delta: float) -> void:
 		_read_tilt()
 	if not card.visible and not menu.visible and not guide.visible:
 		acc += dt
+		# 밀린 시간 따라잡기: 계산이 무거울 땐(숫자가 많을 때) 한 프레임에 한 번만.
+		# 예전엔 최대 3번 → 느린 기기에서 한 프레임이 3배로 길어지고 또 밀려서 점점 뚝뚝 끊겼어요.
+		var cap := 1 if sim_ms > 6.0 else 2
 		var steps := 0
-		while acc >= 1.0 / 60 and steps < 3:
+		while acc >= 1.0 / 60 and steps < cap:
+			var t0 := Time.get_ticks_usec()
 			core.sim_step(1.0 / 60)
+			sim_ms += ((Time.get_ticks_usec() - t0) / 1000.0 - sim_ms) * 0.1
 			acc -= 1.0 / 60
 			steps += 1
-		if steps == 3:
+		if steps >= cap:
 			acc = 0
 	if card.visible or menu.visible or guide.visible:
 		core.queue_redraw()
@@ -867,7 +867,7 @@ func _game_over(reason: String) -> void:
 			card_act = "home"
 			_show_card(reason, GameCore.score_text(core.score), "받은 젤리로 집에서 장식 상자를 열 수 있어요", reward, "집에 가서 상자 열기", false)
 			return
-		_show_card(reason, GameCore.score_text(core.score), "최고 기록 %s · 가장 큰 숫자 %s%s" % [GameCore.score_text(core.best), GameCore.num_text(core.max_tier), (" · 목표 아이템 %d개" % core.got_items) if core.got_items else ""], reward, "다시 하기", false)
+		_show_card(reason, GameCore.score_text(core.score), "최고 기록 %s · 가장 큰 숫자 %s%s" % [GameCore.score_text(core.best), GameCore.num_text(core.max_tier), ""], reward, "다시 하기", false)
 		card_act = "retry"
 
 

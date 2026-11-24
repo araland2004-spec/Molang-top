@@ -97,7 +97,7 @@ func _process(delta: float) -> void:
 		d["work_total"] = int(d.get("work_total", 0)) + n
 		jelly_changed.emit()
 	save_t += delta
-	if save_t > 10.0:
+	if save_t > 30.0:      # 웹에선 저장할 때마다 브라우저 저장소를 맞춰서, 너무 자주 하면 잠깐씩 끊겨요
 		save_t = 0
 		save()
 

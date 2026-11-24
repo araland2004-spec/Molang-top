@@ -8,9 +8,7 @@ signal track_changed(i: int)
 signal unlocked(name: String)
 
 const CALM := ["아침 산책", "오후의 낮잠", "바닷가 오솔길", "별 보는 밤"]
-const NAMES := ["아침 산책", "오후의 낮잠", "바닷가 오솔길", "별 보는 밤",
-	"첫눈 오르골", "별빛 창가", "따뜻한 코코아", "반짝반짝 트리", "눈사람 왈츠", "종소리 골목",
-	"벽난로 자장가", "선물 포장 중", "썰매 산책", "요정의 춤", "창밖 함박눈", "크리스마스 아침"]
+const NAMES := ["아침 산책", "오후의 낮잠", "바닷가 오솔길", "별 보는 밤"]     # 예전 칩튠 12곡은 가볍고 분위기에 안 맞아서 뺌
 const TRACK_MIN := 25
 const CALM_DB := -9.0      # 잔잔한 곡: 말소리·효과음을 가리지 않게 작게
 const OLD_DB := 3.0
@@ -30,6 +28,8 @@ func _ready() -> void:
 		Save.d["bgm_track"] = int(Save.d.get("bgm_track", 0)) + CALM.size()
 		Save.d["bgm_auto"] = true
 		Save.d["bgm_v2"] = true
+	if int(Save.d.get("bgm_track", 0)) >= NAMES.size():
+		Save.d["bgm_track"] = 0
 	cur = clampi(int(Save.d.get("bgm_track", 0)), 0, tracks_open() - 1)
 	last_open = tracks_open()
 	if is_on():
@@ -62,11 +62,11 @@ func time_track() -> int:
 
 
 func tracks_open() -> int:
-	return mini(NAMES.size(), CALM.size() + int(float(Save.d.get("play_sec", 0.0)) / (TRACK_MIN * 60.0)))
+	return NAMES.size()
 
 
 func _path(i: int) -> String:
-	return "res://assets/bgm/c%d.ogg" % i if i < CALM.size() else "res://assets/bgm/t%d.ogg" % (i - CALM.size())
+	return "res://assets/bgm/c%d.ogg" % clampi(i, 0, CALM.size() - 1)
 
 
 func _play(i: int) -> void:
@@ -74,7 +74,7 @@ func _play(i: int) -> void:
 	loops = 0
 	var st: AudioStream = load(_path(i))
 	player.stream = st
-	player.volume_db = CALM_DB if i < CALM.size() else OLD_DB
+	player.volume_db = CALM_DB
 	player.play()
 	track_changed.emit(i)
 

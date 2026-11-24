@@ -166,6 +166,8 @@ var out_btn: Button
 var deco_btn: Button
 var name_label: Label
 var gem_btn: Button
+var asmr: Node
+var asmr_btn: Button
 var quest_dot: Control
 var pet_label: Label
 var toast_t := 0.0
@@ -209,6 +211,9 @@ func _ready() -> void:
 	extra = HomeExtra.new()
 	add_child(extra)
 	extra.setup(self, ui_root)
+	asmr = load("res://scripts/asmr.gd").new()
+	add_child(asmr)
+	asmr.setup(self)
 	outside_nodes.append(extra.yard_root)
 	_update_camera()
 	_restore_view()
@@ -1474,7 +1479,83 @@ func _walk_to(p: Vector3) -> void:
 	follow = true
 
 
+## 꾹 누르기(0.35초, 거의 안 움직임): 놓인 물건이면 집어서 끌기 · 땅 편집이면 반투명 블록을 끌어 놓기
+const HOLD_SEC := 0.35
+var hold_t := -1.0
+var hold_pos := Vector2.ZERO
+var hold_mode := ""
+var land_ghost: Node3D
+var ghost_asset := ""
+
+
+func _hold_tick(delta: float) -> void:
+	if hold_t < 0.0 or hold_mode != "" or touches.size() != 1 or tap_multi or tap_travel >= 14.0 or sitting or cam_busy:
+		return
+	hold_t += delta
+	if hold_t < HOLD_SEC:
+		return
+	hold_t = -1.0
+	if edit_mode:
+		hold_mode = "land"
+		Save.buzz(15)
+		return
+	if extra and extra.begin_drag(hold_pos):
+		hold_mode = "obj"
+		Save.buzz(20)
+
+
+func _ghost_at(pos: Vector2) -> void:
+	if pal_files.is_empty() or (extra and extra.inside):
+		return
+	var p = _floor_point(pos)
+	if p == null:
+		_ghost_hide()
+		return
+	var c := Vector2i(roundi(p.x), roundi(p.z))
+	var want: String = pal_files[clampi(selected, 0, pal_files.size() - 1)]
+	if land_ghost == null or ghost_asset != want:
+		if land_ghost:
+			land_ghost.queue_free()
+		land_ghost = _make_block(want)
+		ghost_asset = want
+		if land_ghost == null:
+			return
+		add_child(land_ghost)
+		_make_ghost(land_ghost)
+	var ok := floor_map.has(c) and (land_set.has(c) or _claimable(c))
+	land_ghost.visible = ok
+	land_ghost.position = Vector3(c.x, FLOOR_TOP - 1.0 + 0.12, c.y)
+	land_ghost.scale = Vector3.ONE * 1.03
+
+
+## 반투명 유령 모양: 재질마다 복사해서 반투명 + 민트빛 (블록 재질이 투명도를 무시해서 직접 바꿔요)
+func _make_ghost(root_n: Node) -> void:
+	for mi in root_n.find_children("*", "MeshInstance3D", true, false):
+		var m3 := mi as MeshInstance3D
+		m3.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if m3.mesh == null:
+			continue
+		for i in m3.mesh.get_surface_count():
+			var mat: Material = m3.get_active_material(i)
+			var g: StandardMaterial3D
+			if mat is StandardMaterial3D:
+				g = (mat as StandardMaterial3D).duplicate() as StandardMaterial3D
+			else:
+				g = StandardMaterial3D.new()
+			g.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			g.albedo_color = Color(g.albedo_color.lerp(Color(0.6, 1.0, 0.85), 0.35), 0.5)
+			g.emission_enabled = true
+			g.emission = Color(0.2, 0.5, 0.42)
+			m3.set_surface_override_material(i, g)
+
+
+func _ghost_hide() -> void:
+	if land_ghost:
+		land_ghost.visible = false
+
+
 func _process(delta: float) -> void:
+	_hold_tick(delta)
 	if input_guard > 0:
 		input_guard -= delta
 	var now := Time.get_ticks_msec() / 1000.0
@@ -1601,6 +1682,11 @@ func _unhandled_input(e: InputEvent) -> void:
 			if touches.size() == 1:
 				tap_travel = 0.0
 				tap_multi = false
+				hold_t = 0.0
+				hold_pos = e.position
+				hold_mode = ""
+				if edit_mode:
+					_ghost_at(e.position)       # 땅 편집: 누르는 순간 놓일 블록을 반투명하게
 			else:
 				tap_multi = true
 				_start_gesture()
@@ -1608,6 +1694,18 @@ func _unhandled_input(e: InputEvent) -> void:
 			if not touches.has(e.index):
 				return
 			touches.erase(e.index)
+			var was_hold := hold_mode
+			hold_mode = ""
+			hold_t = -1.0
+			if was_hold == "obj":
+				extra.drop_drag(e.position)
+				return
+			if was_hold == "land":
+				_ghost_hide()
+				if not tap_multi:
+					_on_tap(e.position)
+				return
+			_ghost_hide()
 			if touches.size() == 0 and not tap_multi and tap_travel < 14.0:
 				_on_tap(e.position)
 			if touches.size() >= 2:
@@ -1620,7 +1718,15 @@ func _unhandled_input(e: InputEvent) -> void:
 		if sitting or cam_busy:
 			return
 		if touches.size() == 1:
+			if hold_mode == "obj":
+				extra.drag_to(e.position)      # 꾹 누른 물건: 손가락을 따라와요
+				return
+			if hold_mode == "land":
+				_ghost_at(e.position)          # 꾹 누른 블록: 놓일 칸이 따라와요
+				return
 			if tap_travel >= 14.0:
+				_ghost_hide()
+				hold_t = -1.0
 				_pan_by(e.position - prev)
 		elif touches.size() >= 2:
 			_do_gesture()
@@ -2060,10 +2166,34 @@ func _build_hud() -> void:
 	for k in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
 		flip.add_theme_color_override(k, txt)
 	flip.custom_minimum_size = Vector2(0, 60)
-	flip.size_flags_horizontal = Control.SIZE_SHRINK_END
 	Mol.press(flip, "icon")
 	flip.pressed.connect(func(): _turn(180))
-	tr.add_child(flip)
+	# 자연 소리(ASMR) 크기: 누를 때마다 꺼짐 → 작게 → 보통 → 크게
+	var arow := HBoxContainer.new()
+	arow.alignment = BoxContainer.ALIGNMENT_END
+	arow.add_theme_constant_override("separation", 10)
+	tr.add_child(arow)
+	var ab := Button.new()
+	ab.focus_mode = Control.FOCUS_NONE
+	ab.add_theme_font_override("font", Mol.font("m"))
+	ab.add_theme_font_size_override("font_size", 22)
+	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
+		ab.add_theme_stylebox_override(k, chip_sb)
+	for k in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+		ab.add_theme_color_override(k, txt)
+	ab.custom_minimum_size = Vector2(0, 60)
+	ab.text = "자연 소리 · " + ASMR_LEVELS[int(Save.d.get("asmr", 2)) % 4]
+	Mol.press(ab, "icon")
+	ab.pressed.connect(func():
+		var lv: int = (int(Save.d.get("asmr", 2)) + 1) % 4
+		Save.d["asmr"] = lv
+		Save.save()
+		ab.text = "자연 소리 · " + ASMR_LEVELS[lv]
+		_toast("모닥불·풀벌레·물소리 " + ASMR_LEVELS[lv]))
+	arow.add_child(ab)
+	hud_blocks.append(ab)
+	asmr_btn = ab
+	arow.add_child(flip)
 	hud_blocks.append(flip)
 
 	# ── 프로필 아래 왼쪽: 공방 · 플레이 시간 · 오너먼트 · 펫 (작은 알약, 왼쪽 정렬) + 집 안이면 「밖으로」
@@ -2277,6 +2407,9 @@ func _layout_hud() -> void:
 func _num_text(t: int) -> String:
 	var n := 1 << t
 	return _comma(n) if n < 100000 else "%dK" % (n / 1000)
+
+
+const ASMR_LEVELS := ["꺼짐", "작게", "보통", "크게"]
 
 
 ## 보석 아이콘 (하늘색 마름모)
@@ -2547,6 +2680,28 @@ func _land_marks() -> void:
 	pm.size = Vector2(0.98, 0.98)
 	var pm2 := PlaneMesh.new()
 	pm2.size = Vector2(0.8, 0.8)
+	# 내 땅: 칸마다 민트 테두리 → 어디까지가 내 땅인지 한눈에
+	var edge := StandardMaterial3D.new()
+	edge.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	edge.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	edge.albedo_color = Color(0.49, 0.94, 0.78, 0.75)
+	edge.no_depth_test = true
+	var bar_x := BoxMesh.new()
+	bar_x.size = Vector3(1.0, 0.01, 0.05)
+	var bar_z := BoxMesh.new()
+	bar_z.size = Vector3(0.05, 0.01, 1.0)
+	for c in land_set:
+		var cell: Vector2i = c
+		# 바깥 둘레만 굵게 (옆 칸도 내 땅이면 그쪽 변은 생략)
+		for d in [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]:
+			if land_set.has(cell + d):
+				continue
+			var mi := MeshInstance3D.new()
+			mi.mesh = bar_x if d.x == 0 else bar_z
+			mi.material_override = edge
+			mi.position = Vector3(cell.x + d.x * 0.48, FLOOR_TOP + 0.07, cell.y + d.y * 0.48)
+			add_child(mi)
+			land_marks.append(mi)
 	for c in floor_map:
 		var cell: Vector2i = c
 		if land_set.has(cell) or not _claimable(cell):

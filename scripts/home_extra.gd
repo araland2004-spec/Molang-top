@@ -103,6 +103,7 @@ func rebuild_yard() -> void:
 					n.visible = is_put(id) and not NATURE.has(id)
 	# 심어 둔 자연 장식 (나무·버섯·바위): 칸마다 하나
 	var props: Dictionary = H()["props"]
+	prop_nodes.clear()
 	for key in props:
 		var xz: PackedStringArray = str(key).split(",")
 		var n: Node3D = main._spawn(_prop_asset(props[key]))
@@ -126,6 +127,7 @@ func rebuild_yard() -> void:
 			n.position.y -= hgt * 0.3
 			n.rotation.x = (float((h / 13) % 9) - 4.0) * 0.03     # 살짝 기울여서 자연스럽게
 		yard_root.add_child(n)
+		prop_nodes[key] = n
 	# 상자 모델 장식 (우체통·벤치·가로등)
 	for id in ["mailbox", "bench", "streetlamp"]:
 		if is_put(id) and M["items"]["out"].has(id):
@@ -2258,7 +2260,7 @@ func open_dev() -> void:
 func open_music() -> void:
 	var v := _sheet("음악", 600)
 	var open: int = Bgm.tracks_open()
-	v.add_child(_wrap("잔잔한 곡 4개는 처음부터 들을 수 있고, 플레이 시간이 %d분 쌓일 때마다 새 곡이 열려요. 지금 %d/%d곡." % [Bgm.TRACK_MIN, open, Bgm.NAMES.size()], 21))
+	v.add_child(_wrap("잔잔한 곡 %d개 · 자연 소리(ASMR)는 위 오른쪽 버튼으로 조절해요." % Bgm.NAMES.size(), 21))
 	var au: Button = main._px_btn(("✓ " if Bgm.auto() else "") + "시간대에 맞춰 듣기 (아침·낮·저녁·밤)", main.C_YELLOW if Bgm.auto() else main.C_CREAM, 20)
 	au.pressed.connect(func():
 		Bgm.set_auto(not Bgm.auto())
@@ -2697,6 +2699,7 @@ func _placed(id: String, boxes: Array, off: Vector3) -> Node3D:
 	piv.rotation.y = int(pz[2]) * PI / 2
 	mi.position = Vector3(-c.x, 0, -c.y)
 	piv.add_child(mi)
+	item_nodes[id] = piv
 	if id == move_id:
 		piv.scale = Vector3.ONE * 1.12
 		piv.create_tween().tween_property(piv, "scale", Vector3.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
@@ -3073,7 +3076,7 @@ func quest_intro(i: int) -> void:
 		"endless1":
 			say(["이제 무한 모드를 알려 줄게요!",
 				"던지기 제한 없이, 양쪽 반원이 다 눌리기 전까지 계속 점수를 쌓는 놀이예요.",
-				"점수 목표를 넘을 때마다 아이템이 생기고, 판이 끝나면 점수만큼 젤리를 받아요.",
+				"판이 끝나면 점수만큼 젤리를 받아요.",
 				"스테이지에서 모은 아이템을 무한 모드에서 쓰면 점수가 훨씬 잘 나와요. 한 판 해 볼까요?"], func(): main._go_game("endless"))
 		"stage20":
 			say(["다음 퀘스트: 스테이지 20단계까지!",
@@ -3366,3 +3369,79 @@ func _refresh_nature_put() -> void:
 				if c[0] == _prop_asset(props[k]):
 					any = true
 		H()["put"][id] = any
+
+
+# ───────────────────────── 꾹 눌러 끌어 옮기기 ─────────────────────────
+## 놓인 물건을 꾹 누르면(꾸미기 창이 없어도) 집어서 손가락을 따라오게 → 떼면 그 자리에 놓기 (돌리기·치우기 막대도 같이)
+var prop_nodes := {}       # 자연 장식 키 → 노드
+var item_nodes := {}       # 가구 id → 노드(위치를 가진 것)
+var drag_kind := ""        # "item" | "prop" | ""
+var drag_node: Node3D
+var drag_from := Vector3.ZERO
+
+
+func begin_drag(pos: Vector2) -> bool:
+	if house_placing or floor_edit != "":
+		return false
+	var hit := _pick(pos)
+	if hit == "":
+		return false
+	if hit.begins_with("prop:"):
+		var key := hit.substr(5)
+		start_prop_edit(key)
+		drag_kind = "prop"
+		drag_node = prop_nodes.get(sel_prop)
+	else:
+		if pos_of(hit) == null:
+			var c := _box_center(_boxes_of(hit))
+			_set_pos(hit, c.x, c.y, 0)      # 원래 자리에 있던 가구도 옮길 수 있게 자리를 정해 둠
+			after_deco()
+		start_moving(hit)
+		drag_kind = "item"
+		drag_node = item_nodes.get(hit)
+	if drag_node == null or not is_instance_valid(drag_node):
+		drag_kind = ""
+		return true
+	drag_from = drag_node.position
+	drag_node.position.y = drag_from.y + 0.18       # 살짝 들어 올린 느낌
+	return true
+
+
+func drag_to(pos: Vector2) -> void:
+	if drag_kind == "" or drag_node == null or not is_instance_valid(drag_node):
+		return
+	var p = main._floor_point(pos)
+	if p == null:
+		return
+	var q := Vector3(p.x, 0, p.z)
+	if inside:
+		q.x = clampf(p.x, -room.x + 0.35, room.x - 0.35)
+		q.z = clampf(p.z, -room.y + 0.35, room.y - 0.35)
+	drag_node.position.x = q.x
+	drag_node.position.z = q.z
+	if sel_ring and is_instance_valid(sel_ring):
+		sel_ring.global_position = Vector3(q.x, main.FLOOR_TOP + 0.05, q.z)
+	# 놓을 수 없는 곳이면 반투명
+	var ok := true
+	if not inside:
+		ok = main.land_set.has(Vector2i(roundi(q.x), roundi(q.z))) and not main._in_house(Vector3(q.x, main.FLOOR_TOP, q.z), 0.25)
+	for mi in drag_node.find_children("*", "GeometryInstance3D", true, false):
+		(mi as GeometryInstance3D).transparency = 0.0 if ok else 0.55
+	for gi in ([drag_node] if drag_node is GeometryInstance3D else []):
+		(gi as GeometryInstance3D).transparency = 0.0 if ok else 0.55
+
+
+func drop_drag(pos: Vector2) -> void:
+	var kind := drag_kind
+	drag_kind = ""
+	drag_node = null
+	if kind == "item" and move_id != "":
+		_move_at(pos)
+	elif kind == "prop" and sel_prop != "":
+		_move_prop(pos)
+	else:
+		return
+	rebuild_yard()
+	if inside:
+		after_deco()
+	_sel_ring_update()

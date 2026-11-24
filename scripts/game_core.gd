@@ -30,7 +30,11 @@ const SENSOR_Y := 150.0
 const MEM_A := 21.0
 const MEM_B := 32.0
 const MEM_TRAVEL := 21.0
-const PRESS_FULL := 7.0
+const PRESS_FULL := 5.5          # 반원이 「꽉 눌림」으로 보는 깊이 (작을수록 예민)
+const REST_SPD := 12.0           # 평균 속도가 이보다 느리면 쉬기 시작 (px/s)
+const REST_AFTER := 0.4          # 그만큼 계속 느리면 쉼 (초)
+const WAKE_SPD := 45.0           # 이보다 빠른 숫자가 닿으면 깨움
+var heavy_blobs := 22          # 숫자가 이보다 많으면 가벼운 계산 (겹침 정리 1번)
 const CHAMFER := 80.0
 const MERGE_SUBSTEPS := 10
 const GRAV := 1100.0
@@ -91,6 +95,7 @@ var shake_ang := 0.0
 var shake_safe := 0.0
 
 var chamfer := CHAMFER
+var rest_count := -1
 var run_id := 0          # 판마다 새 번호: 같은 판 보상을 두 번 받지 않게
 var got_items := 0       # 무한 모드: 이번 판에 목표 게이지로 받은 아이템 수
 var thrown := 0          # 무한 모드: 이번 판에 던진 수 (던지기 제한 없음, 보여 주기만)
@@ -146,6 +151,10 @@ var synth = null    # 소리 (game_screen 이 넣어 줌)
 
 
 class Blob:
+	var rest := false        # 멈춰서 쉬는 중: 움직임 계산을 건너뜀 (반원 누름은 계속 셈)
+	var still := 0.0
+	var spd := 0.0
+	var spd_avg := 100.0
 	var id := 0
 	var t := 0
 	var r := 0.0
@@ -731,6 +740,14 @@ func collide() -> void:
 			var b: Blob = blobs[j]
 			if b.flag or a.x1 < b.x0 or b.x1 < a.x0 or a.y1 < b.y0 or b.y1 < a.y0:
 				continue
+			if a.rest and b.rest:
+				continue      # 둘 다 쉬는 중이면 이미 자리를 잡은 사이
+			if a.rest != b.rest:
+				var mover: Blob = b if a.rest else a
+				if mover.spd > WAKE_SPD or mover.launch or mover.row:
+					var sl: Blob = a if a.rest else b
+					sl.rest = false
+					sl.still = 0.0
 			var wild_pair := (a.wild or b.wild) and not (a.wild and b.wild) and not (a.wild and a.row) and not (b.wild and b.row)
 			var same := not a.rock and not b.rock and ((a.t == b.t and not a.wild and not b.wild) or wild_pair) and maxi(0 if a.wild else a.t, 0 if b.wild else b.t) < TIER_MAX and not (a.sleep and b.sleep)
 			var h1 := points_into(a, b, true)
@@ -972,6 +989,15 @@ func substep(h: float) -> void:
 	var VISC := 0.14
 	var CONTACT := 0.975
 	var VMAX := 1400.0
+	# 쉬는 숫자 깨우기: 숫자가 늘거나 줄면(합치기·던지기·뿅망치) · 흔들기·기울이기 중엔 모두 깨움
+	# (새로 던진 숫자는 부딪힐 때 깨우니, 줄어들 때만 — 받치던 숫자가 사라지면 위가 떨어져야 해요)
+	var shrunk := blobs.size() < rest_count
+	rest_count = blobs.size()
+	if shrunk or shake_ax != 0.0 or shake_ay != 0.0 or tilt_g != 0.0 or warps.size() > 0:
+		for b: Blob in blobs:
+			if b.rest:
+				b.rest = false
+				b.still = 0.0
 	for b: Blob in blobs:
 		if b.s < 1:
 			b.s += (1 - b.s) * minf(1, h * 5)
@@ -979,6 +1005,9 @@ func substep(h: float) -> void:
 				b.s = 1
 		if b.wob > 0:
 			b.wob -= h
+		if b.rest:
+			_rest_walls(b)
+			continue
 		var n: int = b.n
 		var g := 0.0 if (b.row or b.lane) else GRAV * (1 + minf(0.8, b.load / (b.r * b.r) * 0.06) + maxf(0, (b.r - 40) / 60.0) * 0.7)
 		if b.row:
@@ -1002,15 +1031,20 @@ func substep(h: float) -> void:
 		internal_constraints(b)
 		walls(b)
 	collide()
-	for b: Blob in blobs:
-		walls(b)
-	collide()
+	# 겹침 정리 두 번째: 숫자가 많을 땐 한 번만 (꽉 찬 판에서 프레임이 뚝뚝 끊기던 가장 큰 원인 중 하나)
+	if blobs.size() <= heavy_blobs:
+		for b: Blob in blobs:
+			if not b.rest:
+				walls(b)
+		collide()
 	for b: Blob in blobs:
 		b.load = b.load * 0.92 + b.load_next * 0.08
 		b.load_next = 0
 	if warps.size():
 		warp_blobs(h)
 	for b: Blob in blobs:
+		if b.rest:
+			continue
 		walls(b)
 		var n: int = b.n
 		var x: PackedFloat64Array = b.x
@@ -1037,6 +1071,13 @@ func substep(h: float) -> void:
 			vx[i] = ox[i] + v * ((ox[k] + ox[j]) / 2 - ox[i])
 			vy[i] = oy[i] + v * ((oy[k] + oy[j]) / 2 - oy[i])
 		var spd := sqrt(mx * mx + my * my)
+		b.spd = spd
+		b.spd_avg += (spd - b.spd_avg) * 0.04
+		# 거의 안 움직이면 잠깐 뒤 쉬게 (대기줄·날아가는 중·막 생긴 숫자는 빼고). 말랑한 몸은 쌓여 있어도 조금씩 떨려서 평균으로 봐요
+		if b.spd_avg < REST_SPD and spd < REST_SPD * 2.5 and not b.row and not b.lane and not b.launch and b.age > 1.0 and b.wob <= 0:
+			b.still += h
+		else:
+			b.still = 0.0
 		var ms := 1.0
 		if b.hit and not b.row and spd > 520:
 			ms = 520 / spd
@@ -1057,6 +1098,10 @@ func substep(h: float) -> void:
 				wx *= f; wy *= f
 			vx[i] = wx; vy[i] = wy
 		b.x = x; b.y = y; b.vx = vx; b.vy = vy
+		if b.still > REST_AFTER:
+			b.rest = true
+			vx.fill(0.0); vy.fill(0.0)
+			b.vx = vx; b.vy = vy
 	if pending.size():
 		resolve_merges()
 
@@ -1660,6 +1705,16 @@ func move_sensors(dt: float) -> void:
 	sensor_y = float(mv[0]) + (float(mv[1]) - float(mv[0])) * (0.5 - 0.5 * cos(sensor_clock * TAU / float(mv[2])))
 
 
+## 쉬는 숫자: 벽·반원과의 관계만 계속 (반원 누름 계산). 반원이 밀어서 자리가 바뀌면 깨움.
+func _rest_walls(b: Blob) -> void:
+	var x0 := b.x[0] + b.x[b.n / 2]
+	var y0 := b.y[0] + b.y[b.n / 2]
+	walls(b)
+	if absf(b.x[0] + b.x[b.n / 2] - x0) + absf(b.y[0] + b.y[b.n / 2] - y0) > 0.05:
+		b.rest = false
+		b.still = 0.0
+
+
 func update_stuck(b: Blob, dt: float) -> void:
 	if b.row:
 		return
@@ -1740,7 +1795,7 @@ func sim_step(dt: float) -> void:
 		for i in 2:
 			var amt := minf(1, press[i] / PRESS_FULL)
 			press[i] = 0.0
-			gauge[i] = minf(1, gauge[i] + dt * 0.38 * amt) if (amt > 0.02 and shake_safe <= 0) else maxf(0, gauge[i] - dt * 0.7)
+			gauge[i] = minf(1, gauge[i] + dt * 0.5 * amt) if (amt > 0.02 and shake_safe <= 0) else maxf(0, gauge[i] - dt * 0.55)
 	if not over and shake_safe <= 0 and gauge[0] >= 1 and gauge[1] >= 1:
 		end_game()
 	if not over:
