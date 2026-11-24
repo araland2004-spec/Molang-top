@@ -335,6 +335,8 @@ func _load_flows() -> void:
 func _flow_register(n: Node3D, asset: String) -> void:
 	if not flow_frames.has(asset):
 		return
+	if asset.begins_with("Block_Water"):
+		n.rotation.y = PI / 2      # 물결이 가로로 흘러서 세로(화면 안쪽)로 흐르게 90도
 	var ms: Array = n.find_children("*", "MeshInstance3D", true, false)
 	if n is MeshInstance3D:
 		ms.append(n)
@@ -473,7 +475,7 @@ func _tint_walk(n: Node, look: Dictionary) -> void:
 				continue
 			var hit := ""
 			for key in PARTS:
-				if (PARTS[key]["mats"] as Array).has(m.resource_name):
+				if (PARTS[key]["mats"] as Array).has(m.resource_name.get_slice(".", 0)):   # 블렌더가 붙이는 .001 같은 꼬리는 떼고
 					hit = key
 			if hit == "":
 				continue
@@ -844,7 +846,7 @@ func _build_house_model() -> void:
 		smoke_mat.emission_enabled = false
 	_setup_smoke()
 	apply_house_look()
-	_add_lights()
+	# 처마 끝 크리스마스 전구는 뺌 (크리스마스 집에서만 쓸 예정)
 	house_root.position = keep_at
 
 
