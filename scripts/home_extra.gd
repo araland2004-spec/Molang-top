@@ -248,7 +248,6 @@ func _build_interior() -> void:
 			interior.add_child(_placed(it["id"], L[it["id"]], Vector3.ZERO))
 	if orn_on():
 		interior.add_child(Boxes.build(L["__tree"]))
-	interior.add_child(Boxes.build(L["__desk"]))
 	var sx := rx / 2
 	var sz := rz / 2
 	tree_pos = Vector3(M["TREE_AT"][0] * sx, 0, M["TREE_AT"][1] * sz)
@@ -262,16 +261,8 @@ func _build_interior() -> void:
 	light.light_energy = 0.25
 	light.position = Vector3(0, 2.4, 0)
 	interior.add_child(light)
-	# 책상 의자에 앉기
-	var seat := (load("res://scenes/seat.tscn") as PackedScene).instantiate() as Node3D
-	seat.set("seat_label", "책상")
-	var dx: float = M["DESK_AT"][0] * sx - 0.52
-	var dz: float = M["DESK_AT"][1] * sz
-	seat.position = Vector3(dx, 0, dz)
-	seat.rotation.y = -PI / 2
-	interior.add_child(seat)
-	(seat.get_node("Chair") as Node3D).visible = false
-	desk_seat = seat
+	# 책상·책상 의자는 뺐어요
+	desk_seat = null
 	interior.visible = inside
 
 
@@ -1468,9 +1459,10 @@ func render_thumbs() -> void:
 				boxes = [{"b": [-0.3, 0, -0.25, 0.3, 0.32, 0.25], "t": "stone", "tile": 1}]
 			else:
 				continue
-		var mi := Boxes.build(boxes)
+		var fm := furn_model(id)
+		var mi: Node3D = Boxes.build(boxes) if fm == null else fm
 		vp.add_child(mi)
-		var ab := mi.get_aabb()
+		var ab: AABB = (mi as MeshInstance3D).get_aabb() if mi is MeshInstance3D else _node_aabb(mi)
 		var ctr := ab.get_center()
 		var rad := ab.size.length() * 0.5
 		c.position = ctr + Vector3(1, 0.8, 1).normalized() * rad * 3.2
@@ -2781,6 +2773,13 @@ func pos_of(id: String):
 	return P.get(_pos_key(id))
 
 
+func inside_zone(id: String) -> bool:
+	for it in items:
+		if it["id"] == id:
+			return it["zone"] == "in"
+	return false
+
+
 func _boxes_of(id: String) -> Array:
 	for it in items:
 		if it["id"] == id:
@@ -2800,8 +2799,62 @@ func _box_center(boxes: Array) -> Vector2:
 	return Vector2((x0 + x1) / 2, (z0 + z1) / 2)
 
 
+## 집 안 가구 모델 (1단계 집, inside_stage01.glb): 꾸미기 아이템 → 모델 안 노드 이름
+const FURN_GLB := "res://assets/house/inside_stage01.glb"
+const FURN_OF := {"sofa": ["armrest"], "shelf": ["chest"], "table": ["table", "stool1"], "plant": ["plant_grp"],
+	"lamp": ["disp_grp"], "rug": ["rug.001"]}
+var _furn_scene: Node3D
+
+
+## 가구 모델 하나: 바닥 가운데가 (0,0,0) 이 되게 맞춰서 돌려줘요 (없으면 null)
+func furn_model(id: String) -> Node3D:
+	if not FURN_OF.has(id):
+		return null
+	if _furn_scene == null:
+		var ps := load(FURN_GLB) as PackedScene
+		if ps == null:
+			return null
+		_furn_scene = ps.instantiate() as Node3D
+	var grp := Node3D.new()
+	var first: Node3D = null
+	for nm in FURN_OF[id]:
+		var src := _furn_scene.find_child(nm, true, false) as Node3D
+		if src == null:
+			continue
+		var d := src.duplicate() as Node3D
+		d.transform = src.transform
+		grp.add_child(d)
+		if first == null:
+			first = d
+	if first == null:
+		return null
+	# 묶음 기준을 첫 조각 자리로 (탁자 + 의자처럼 같이 놓인 건 서로 거리 그대로)
+	var base := first.position
+	for c in grp.get_children():
+		(c as Node3D).position -= Vector3(base.x, 0, base.z)
+	# 바닥 가운데로 맞추기
+	var box := AABB()
+	var f := true
+	for mi in grp.find_children("*", "MeshInstance3D", true, false):
+		var m := mi as MeshInstance3D
+		var t := Transform3D.IDENTITY
+		var n: Node = m
+		while n != grp:
+			t = (n as Node3D).transform * t
+			n = n.get_parent()
+		var a: AABB = t * m.get_aabb()
+		box = a if f else box.merge(a)
+		f = false
+	var c := box.get_center()
+	for ch in grp.get_children():
+		(ch as Node3D).position -= Vector3(c.x, box.position.y, c.z)
+	main._pixel(grp)
+	return grp
+
+
 func _placed(id: String, boxes: Array, off: Vector3) -> Node3D:
-	var mi := Boxes.build(boxes, off)
+	var fm: Node3D = furn_model(id) if (inside_zone(id) and _lvl_key() == "in1") else null
+	var mi: Node3D = Boxes.build(boxes, off) if fm == null else fm
 	var pz = pos_of(id)
 	if not MOVABLE.has(id):
 		return mi
@@ -2811,7 +2864,7 @@ func _placed(id: String, boxes: Array, off: Vector3) -> Node3D:
 	var piv := Node3D.new()
 	piv.position = Vector3(float(pz[0]), 0, float(pz[1]))
 	piv.rotation.y = int(pz[2]) * PI / 2
-	mi.position = Vector3(-c.x, 0, -c.y)
+	mi.position = Vector3(-c.x, 0, -c.y) if fm == null else Vector3(0, off.y, 0)
 	piv.add_child(mi)
 	item_nodes[id] = piv
 	if id == "bench":
@@ -3685,3 +3738,14 @@ func _add_bench_seat(piv: Node3D, y: float) -> void:
 	var ch := seat.get_node_or_null("Chair") as Node3D
 	if ch:
 		ch.visible = false
+
+
+func _node_aabb(root: Node3D) -> AABB:
+	var box := AABB()
+	var f := true
+	for mi in root.find_children("*", "MeshInstance3D", true, false):
+		var m := mi as MeshInstance3D
+		var a: AABB = root.global_transform.affine_inverse() * m.global_transform * m.get_aabb()
+		box = a if f else box.merge(a)
+		f = false
+	return box
