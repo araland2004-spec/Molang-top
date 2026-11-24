@@ -356,6 +356,10 @@ func home() -> Dictionary:
 	if not h.has("no"): h["no"] = 1
 	if not (h.get("past") is Dictionary): h["past"] = {}
 	# 예전엔 도감을 다 채워 새 집으로 넘어가면 장식을 비웠어요 → 그때 모은·놓은 장식을 되돌려 줘요 (한 번만)
+	# 집은 늘 1번 집(1단계) — 예전에 새 집(2번)으로 넘어간 저장도 1번 집으로 되돌려요. 2번 집 모델은 공방이 써요
+	if int(h["no"]) > 1:
+		h["no"] = 1
+		h["lvl"] = 1
 	if not h.get("past_merged", false):
 		h["past_merged"] = true
 		for k in h["past"]:
