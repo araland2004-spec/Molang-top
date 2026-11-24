@@ -610,10 +610,42 @@ func _build_world() -> void:
 	cam.far = 200.0
 	add_child(cam)
 	cam.make_current()
+	_setup_pixel_art()
 
 	land_root = Node3D.new()
 	land_root.name = "Land"
 	add_child(land_root)
+
+
+## 픽셀아트 렌더: 화면 전체를 큰 픽셀로 찍고 검은 아웃라인 (shaders/pixel_art.gdshader). Save.d["pixel_art"] 로 켜고 끔.
+var pixel_fx: MeshInstance3D
+var pixel_mat: ShaderMaterial
+
+
+func _setup_pixel_art() -> void:
+	pixel_mat = ShaderMaterial.new()
+	pixel_mat.shader = load("res://shaders/pixel_art.gdshader")
+	pixel_mat.render_priority = 127           # 다른 반투명(구름·빛기둥)까지 다 그린 뒤에
+	var q := QuadMesh.new()
+	q.size = Vector2(1, 1)
+	pixel_fx = MeshInstance3D.new()
+	pixel_fx.mesh = q
+	pixel_fx.material_override = pixel_mat
+	pixel_fx.extra_cull_margin = 16384.0
+	pixel_fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	pixel_fx.position = Vector3(0, 0, -1)
+	cam.add_child(pixel_fx)
+	apply_pixel_art()
+
+
+func apply_pixel_art() -> void:
+	var on := bool(Save.d.get("pixel_art", true))
+	pixel_fx.visible = on
+	var vs := get_viewport().get_visible_rect().size
+	pixel_mat.set_shader_parameter("px", maxf(2.0, roundf(minf(vs.x, vs.y) / PIXEL_ROWS)))
+
+
+const PIXEL_ROWS := 180.0     # 화면 짧은 쪽이 큰 픽셀 몇 칸인지 (작을수록 더 굵은 도트)
 
 
 ## 바닥 섞기: 잔디 두 가지를 얼룩지게, 집 앞 마당과 굽은 흙길, 가장자리 어두운 흙, 한쪽에 시냇물과 돌
