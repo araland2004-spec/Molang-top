@@ -355,6 +355,20 @@ func home() -> Dictionary:
 	if not h.has("name"): h["name"] = "몰랑이네"
 	if not h.has("no"): h["no"] = 1
 	if not (h.get("past") is Dictionary): h["past"] = {}
+	# 예전엔 도감을 다 채워 새 집으로 넘어가면 장식을 비웠어요 → 그때 모은·놓은 장식을 되돌려 줘요 (한 번만)
+	if not h.get("past_merged", false):
+		h["past_merged"] = true
+		for k in h["past"]:
+			var pv = h["past"][k]
+			if not (pv is Dictionary):
+				continue
+			if pv.get("own") is Dictionary:
+				for id in pv["own"]:
+					h["own"][id] = int(h["own"].get(id, 0)) + int(pv["own"][id])
+			if pv.get("put") is Dictionary:
+				for id in pv["put"]:
+					if not h["put"].has(id):
+						h["put"][id] = pv["put"][id]
 	return h
 
 

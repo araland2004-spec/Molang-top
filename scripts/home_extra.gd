@@ -1548,15 +1548,11 @@ func open_book(tab := "in") -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
 	v.add_child(row)
-	if vol_done():
-		var mvb: Button = main._px_btn("새 집 짓기", main.C_YELLOW, 22)
-		mvb.pressed.connect(ask_move)
-		row.add_child(mvb)
-	else:
-		var ob: Button = main._px_btn("상자 열기 · %d" % BOX_PRICE, main.C_YELLOW, 22)
-		ob.disabled = int(Save.d["jelly"]) < BOX_PRICE
-		ob.pressed.connect(open_box)
-		row.add_child(ob)
+	# 도감을 다 채워도 장식은 그대로 두고 계속 써요 (새 집으로 넘어가며 비우지 않아요). 상자는 계속 열 수 있어요(중복 → 교환)
+	var ob: Button = main._px_btn("상자 열기 · %d" % BOX_PRICE, main.C_YELLOW, 22)
+	ob.disabled = int(Save.d["jelly"]) < BOX_PRICE
+	ob.pressed.connect(open_box)
+	row.add_child(ob)
 	var cb: Button = main._px_btn("닫기", main.C_CREAM, 22)
 	cb.pressed.connect(_close_sheet)
 	row.add_child(cb)
@@ -2025,9 +2021,7 @@ func move_house() -> void:
 	h["past"][str(no)] = {"own": h["own"], "put": h["put"], "orn": h["orn"], "lvl": h["lvl"]}
 	h["no"] = no + 1
 	h["lvl"] = 2
-	h["own"] = {}
-	h["put"] = {}
-	h["orn"] = 0
+	h["orn"] = 0          # 모은 장식(own)·놓은 장식(put)은 그대로 남겨요
 	if not h["events"].has("grew"):
 		h["events"].append("grew")
 	Save.save()

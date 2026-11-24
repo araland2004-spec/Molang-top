@@ -831,44 +831,71 @@ func _setup_smoke() -> void:
 		outside_nodes.append(m)
 
 
-## 배경 구름: 자연 에셋 구름 모델을 섬 뒤쪽 공중에 띄우고 옆으로 천천히 흘려보내요
-## 카메라를 돌려도 늘 섬 건너편(집 뒤)에 떠 있게, 카메라 방향 기준으로 다시 놓아요.
-var clouds: Array = []      # [Node3D, 속도, 높이 씨앗, 화면 위 띠 안 높이 0~1, 옆 위치 -1~1, 크기]
+## 배경 구름 (자연 에셋 구름 모델)
+## · 위 구름: 카메라에서 볼 때 섬 건너편(집 뒤) 공중에 떠서 옆으로 흘러가요. 카메라를 돌려도 늘 집 뒤에 있고,
+##   집 바로 뒤(가운데)를 지날 땐 옅어져서 집과 겹쳐 보이지 않아요.
+## · 아래 구름: 섬 아래 둘레에 낮게 깔려 천천히 흘러가요 (섬을 가리지 않음).
+var clouds: Array = []      # 위 구름 [Node3D, 속도, 거리 씨앗, 높이 0~1, 옆 위치 -1~1, 크기, 재질들]
+var clouds_low: Array = []  # 아래 구름 [Node3D, 속도]
 var cloud_mats: Array = []
 var _cloud_t := 0.0
 var _isl_c := Vector2.ZERO
 var _isl_r := 4.0
+const CLOUD_SPAN := 30.0
+
+
+func _cloud_node(kind: String, rng: RandomNumberGenerator) -> Array:
+	var n := _spawn(kind)
+	if n == null:
+		return []
+	n.rotation.y = rng.randf() * TAU
+	var mats: Array = []
+	for mi in n.find_children("*", "MeshInstance3D", true, false):
+		var m3 := mi as MeshInstance3D
+		m3.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var cm := StandardMaterial3D.new()
+		cm.albedo_color = Color(0.97, 0.98, 1.0, 0.75)
+		cm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		cm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED     # 면 음영이 없어야 각진 결이 덜 보여요
+		cm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		m3.material_override = cm
+		mats.append(cm)
+	add_child(n)
+	outside_nodes.append(n)
+	return [n, mats]
 
 
 func _build_clouds() -> void:
-	for c in clouds:
+	for c in clouds + clouds_low:
 		if is_instance_valid(c[0]):
 			outside_nodes.erase(c[0])
 			c[0].queue_free()
 	clouds.clear()
+	clouds_low.clear()
 	cloud_mats.clear()
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 7
 	var kinds := ["Cloud_Small_01", "Cloud_Medium_01", "Cloud_Large_01"]
-	for i in 8:
-		var n := _spawn(kinds[i % 3])
-		if n == null:
+	for i in 7:
+		var k: String = kinds[i % 3]
+		var r := _cloud_node(k, rng)
+		if r.is_empty():
 			continue
-		var sc := rng.randf_range(0.7, 1.1) * (0.6 if kinds[i % 3] == "Cloud_Large_01" else 1.0)
-		n.rotation.y = rng.randf() * TAU
-		for mi in n.find_children("*", "MeshInstance3D", true, false):
-			var m3 := mi as MeshInstance3D
-			m3.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			var cm := StandardMaterial3D.new()
-			cm.albedo_color = Color(0.97, 0.98, 1.0, 0.75)
-			cm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			cm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED     # 면 음영이 없어야 각진 결이 덜 보여요
-			cm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-			m3.material_override = cm
-			cloud_mats.append(cm)
-		add_child(n)
-		outside_nodes.append(n)
-		clouds.append([n, rng.randf_range(0.03, 0.07), rng.randf_range(34.0, 48.0), rng.randf_range(0.08, 0.75), float(i) / 8.0 * 2.0 - 1.0 + rng.randf_range(-0.08, 0.08), n.scale.x * sc])
+		var n: Node3D = r[0]
+		var sc := rng.randf_range(0.7, 1.1) * (0.6 if k == "Cloud_Large_01" else 1.0)
+		clouds.append([n, rng.randf_range(0.03, 0.07), rng.randf(), rng.randf(), float(i) / 7.0 * 2.0 - 1.0 + rng.randf_range(-0.08, 0.08), n.scale.x * sc, r[1]])
+	for i in 7:
+		var k: String = kinds[i % 3]
+		var r := _cloud_node(k, rng)
+		if r.is_empty():
+			continue
+		var n: Node3D = r[0]
+		n.scale *= rng.randf_range(0.28, 0.5) * (0.6 if k == "Cloud_Large_01" else 1.0)
+		var ang := rng.randf() * TAU
+		var rad := rng.randf_range(5.0, 13.0)
+		n.position = Vector3(cos(ang) * rad, rng.randf_range(-8.0, -4.5), sin(ang) * rad)
+		cloud_mats.append_array(r[1])
+		clouds_low.append([n, rng.randf_range(0.12, 0.3)])
 
 
 func _tick_clouds(dt: float) -> void:
@@ -876,6 +903,11 @@ func _tick_clouds(dt: float) -> void:
 	var col := Color(0.42, 0.46, 0.58, 0.45) if night else Color(0.97, 0.98, 1.0, 0.75)
 	for m in cloud_mats:
 		(m as StandardMaterial3D).albedo_color = col
+	for c in clouds_low:
+		var ln: Node3D = c[0]
+		ln.position.x += float(c[1]) * dt
+		if ln.position.x > CLOUD_SPAN:
+			ln.position.x = -CLOUD_SPAN
 	if cam == null or clouds.is_empty():
 		return
 	var fwd := -cam.global_transform.basis.z
@@ -895,17 +927,33 @@ func _tick_clouds(dt: float) -> void:
 		for k in land_set:
 			_isl_r = maxf(_isl_r, (Vector2(k) - _isl_c).length())
 	var ctr := Vector3(_isl_c.x + 0.5, 0.0, _isl_c.y + 0.5)
+	var co := cam.global_position
+	var to_ctr := (Vector3(ctr.x, 0.0, ctr.z) - Vector3(co.x, 0.0, co.z)).dot(fwd)     # 카메라→섬 중심 (앞쪽 거리)
+	var vfov := deg_to_rad(cam.fov)
+	var top := pitch + vfov * 0.5            # 화면 맨 윗줄이 내려다보는 각도
 	for c in clouds:
 		var n: Node3D = c[0]
 		c[4] = float(c[4]) + float(c[1]) * dt / 4.0
 		if c[4] > 1.0:
 			c[4] = -1.0
-		# 카메라에서 볼 때 섬 건너편(집 뒤쪽) 가장자리 바로 바깥, 땅보다 위 공중에 떠서 옆으로 흘러가요
-		var back := _isl_r + 1.5 + (float(c[2]) - 34.0) * 0.45        # 섬 끝에서 1.5~8칸 뒤
-		var p := ctr + fwd * back + right * (float(c[4]) * (_isl_r + 7.0))
-		p.y = FLOOR_TOP + 0.4 + float(c[3]) * 2.0                      # 땅 위 0.5~2칸 높이(공중)
+		var side := float(c[4])
+		# 화면 위쪽 띠(맨 위에서 4~22%)에 보이도록: 높이는 땅 위 공중으로 두고, 그 각도가 되는 만큼 집 뒤로 멀리.
+		# 단 섬 건너편 가장자리보다는 늘 뒤에 있게.
+		var ang := minf(top - vfov * (0.04 + 0.18 * float(c[3])), -0.02)
+		var h := FLOOR_TOP + 1.6 + float(c[2]) * 1.6                  # 땅 위 1.6~3.2칸
+		var d_min := to_ctr + _isl_r + 2.0
+		var d := maxf((co.y - h) / tan(-ang), d_min)
+		d = minf(d, d_min + 60.0)
+		var p := co + fwd * d + right * (side * d * tan(deg_to_rad(cam.fov)) * 0.9)
+		p.y = maxf(co.y - tan(-ang) * d, FLOOR_TOP + 1.0)
 		n.global_position = p
-		n.scale = Vector3.ONE * float(c[5])
+		n.scale = Vector3.ONE * float(c[5]) * clampf(d / 30.0, 0.8, 2.2)
+		# 집 바로 뒤(화면 가운데)를 지날 땐 옅게 → 집과 겹쳐 보이지 않게
+		var fade := clampf((absf(side) - 0.12) / 0.25, 0.0, 1.0)
+		var cc := Color(col.r, col.g, col.b, col.a * fade)
+		for m in c[6]:
+			(m as StandardMaterial3D).albedo_color = cc
+		n.visible = fade > 0.01 and not (extra and extra.inside)
 
 
 ## 길가 등불 + 문 앞 불빛 + 반딧불이: 해 질 녘부터 켜짐
