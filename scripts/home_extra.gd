@@ -3849,8 +3849,6 @@ func _build_window_fx(m: Node3D) -> void:
 		# 스포트라이트: 창 뒤 멀리서 거의 평행하게 → 빛기둥과 같은 각도·창 크기만큼만 비춰요 (한가운데로 몰리지 않게)
 		var spot := SpotLight3D.new()
 		spot.shadow_enabled = false
-		spot.spot_attenuation = 0.0
-		spot.spot_angle_attenuation = 0.35
 		interior.add_child(spot)
 		# 빛 속을 떠다니는 먼지
 		var dust := CPUParticles3D.new()
@@ -3881,9 +3879,6 @@ func _build_window_fx(m: Node3D) -> void:
 			"glass": glass, "shaft": smat, "patch": pmat, "spot": spot, "dust": dm})
 
 
-const SUN_FROM := Vector3(1.0, 0.0, 0.85)     # 집 안 기준 해가 있는 쪽(수평)
-
-
 ## 창 빛 모양: slope = 내려가는 기울기 (한낮 0.85 → 노을 0.4, 해가 낮을수록 방 깊숙이 길게)
 func _shape_window(wf: Dictionary, slope: float) -> void:
 	if absf(float(wf["slope"]) - slope) < 0.03:
@@ -3895,11 +3890,13 @@ func _shape_window(wf: Dictionary, slope: float) -> void:
 	var u: Vector3 = tan_v * float(wf["hw"])
 	var v := Vector3.UP * float(wf["hh"])
 	var fy := interior.global_position.y + 0.015
-	# 해는 하나: 모든 창에 같은 방향(바깥 앞-오른쪽 대각선 하늘)에서 평행하게 들어와요 → 창마다 제자리에서 비스듬히, 한가운데로 모이지 않게
-	var sun_h := SUN_FROM.normalized()
-	if sun_h.dot(dir) < 0.2:
-		sun_h = (sun_h + dir).normalized()          # 해 반대쪽 창: 하늘빛만 약하게 곧장
-	var d := (-sun_h * 1.0 + Vector3(0, -slope, 0)).normalized()
+	# 창마다 방 안쪽으로 비스듬히 (처음 느낌 그대로) — 단 방 가운데 쪽이 아니라 창이 치우친 쪽(벽 끝 쪽)으로 살짝 기울여서
+	# 두 창의 빛이 한가운데서 겹치지 않게
+	var lc := interior.to_local(wc)
+	var lean := signf(tan_v.dot(Vector3(lc.x, 0, lc.z)))
+	if lean == 0.0:
+		lean = 1.0
+	var d := (-dir + Vector3(0, -slope, 0) + tan_v * lean * 0.35).normalized()
 	var lim := maxf(room.x, room.y) * 2.0 - 0.1          # 너무 낮은 해: 반대편 벽 너머로 안 나가게 길이 제한
 	var top := [wc - u + v, wc + u + v, wc + u - v, wc - u - v]
 	var bot: Array = []
@@ -3928,12 +3925,12 @@ func _shape_window(wf: Dictionary, slope: float) -> void:
 		st2.set_uv(q[1])
 		st2.add_vertex(q[0])
 	(wf["patch_mi"] as MeshInstance3D).mesh = st2.commit()
-	var spot := wf["spot"] as SpotLight3D
-	var back := 7.0
-	spot.global_position = wc - d * back
+	var spot := wf["spot"] as SpotLight3D       # 처음처럼 창 바로 밖에서 안으로 은은하게
+	spot.global_position = wc - d * 0.6
 	spot.look_at(wc + d, Vector3.UP)
-	spot.spot_range = back + 4.0
-	spot.spot_angle = rad_to_deg(atan(maxf(float(wf["hw"]), float(wf["hh"])) * 1.15 / back))
+	spot.spot_range = 4.5
+	spot.spot_angle = 30.0
+	spot.spot_attenuation = 0.8
 	var dust := wf["dust_n"] as CPUParticles3D
 	var mid: Vector3 = (wc + ((bot[0] + bot[1] + bot[2] + bot[3]) as Vector3) / 4.0) * 0.5
 	dust.global_position = mid
@@ -3959,7 +3956,7 @@ func interior_mood(s: Dictionary) -> void:
 	var outside := sky.lerp(Color(0.6, 0.82, 1.0), 0.35 * (1.0 - night) * (1.0 - dusk)).lerp(Color(0.18, 0.34, 0.78), night * 0.8)
 	var beam := Color(1.0, 0.93, 0.78).lerp(Color(1.0, 0.55, 0.28), dusk).lerp(Color(0.38, 0.58, 1.0), night)    # 햇빛 → 노을 → 달빛
 	var bs := lerpf(0.2, 0.5, night) + 0.22 * dusk
-	var slope := lerpf(lerpf(0.85, 0.42, dusk), 0.7, night)        # 노을엔 해가 낮아 빛이 방 깊숙이
+	var slope := lerpf(lerpf(1.2, 0.8, dusk), 1.2, night)         # 노을엔 해가 낮아 조금 더 길게 (겹치지 않을 만큼만)
 	for wf in win_fx:
 		_shape_window(wf, slope)
 		for g in wf["glass"]:
@@ -3970,8 +3967,8 @@ func interior_mood(s: Dictionary) -> void:
 		(wf["shaft"] as ShaderMaterial).set_shader_parameter("col", Vector3(beam.r, beam.g, beam.b))
 		(wf["shaft"] as ShaderMaterial).set_shader_parameter("strength", bs)
 		(wf["patch"] as ShaderMaterial).set_shader_parameter("col", Vector3(beam.r, beam.g, beam.b))
-		(wf["patch"] as ShaderMaterial).set_shader_parameter("strength", bs * lerpf(1.3, 0.75, night))
+		(wf["patch"] as ShaderMaterial).set_shader_parameter("strength", bs * lerpf(1.2, 0.7, night))
 		var sp := wf["spot"] as SpotLight3D
 		sp.light_color = beam
-		sp.light_energy = lerpf(0.7, 1.0, night) + 0.5 * dusk
+		sp.light_energy = lerpf(0.5, 0.9, night) + 0.3 * dusk
 		(wf["dust"] as StandardMaterial3D).albedo_color = Color(beam.r, beam.g, beam.b, lerpf(0.35, 0.6, night))
