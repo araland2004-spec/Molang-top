@@ -150,7 +150,7 @@ func enter() -> void:
 	main.pivot = Vector3(0, main.FLOOR_TOP, 0)
 	main.follow = false
 	main.yaw = deg_to_rad(45.0)
-	main.pitch = deg_to_rad(-35.26)
+	main.pitch = deg_to_rad(-20.0)       # 아이소(35°)보다 15° 낮게 → 안쪽 천장(지붕 안면)이 보이게
 	main.zoom = 13.0
 	main._update_camera()
 	main.path.clear()
