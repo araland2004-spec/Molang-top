@@ -437,10 +437,6 @@ func _process(_dt: float) -> void:
 				(w[0] as MeshInstance3D).visible = on
 		for pp in posts:
 			(pp[0] as Node3D).visible = vis.get(pp[1], true) or vis.get(pp[2], true)
-		for wf in win_fx:       # 공중 빛기둥·먼지는 창 벽이 보일 때만, 바닥에 맺힌 빛·스포트라이트는 어느 쪽에서 봐도 보여요
-			var won: bool = vis.get(wf["dir"], true)
-			for nd in wf["nodes"]:
-				(nd as Node3D).visible = won or nd is SpotLight3D or nd == wf["nodes"][1]
 		for rp in roof_parts:
 			# 지붕: 카메라 쪽 경사면·서까래는 숨기고 반대쪽만 남김 (가운데 용마루는 위에서 가리니까 숨김)
 			var d: Vector3 = rp[1]
@@ -3781,7 +3777,7 @@ func _node_aabb(root: Node3D) -> AABB:
 var lamp_light: OmniLight3D
 var lamp_mat: BaseMaterial3D
 var room_light: OmniLight3D
-var win_fx: Array = []      # {dir, nodes:[...], glass:[mats], shaft:mat, patch:mat, spot, dust}
+var win_fx: Array = []      # {dir, nodes:[...], glass:[mats], shaft:mat, patch:mat, spot, dust} — 빛기둥은 어느 쪽에서 봐도 보여요
 
 const SHAFT_SHADER := """
 shader_type spatial;
