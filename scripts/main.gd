@@ -1137,11 +1137,13 @@ func _add_lamps() -> void:
 ## 시간에 따라: 낮엔 밝고, 해 질 녘·밤엔 어둑한 숲빛 + 등불이 따뜻하게
 func _update_mood() -> void:
 	if extra and extra.inside:
-		# 집 안: 따뜻한 실내 불빛
-		sun.light_energy = 0.2
+		# 집 안: 낮엔 따뜻하고 은은하게, 밤엔 등 주변만 밝고 나머지는 푸르스름하게 어둡게
+		var si := _sky_now()
+		var ni: float = si["night"]
+		sun.light_energy = lerpf(0.16, 0.03, ni)
 		sun.light_color = Color(1.0, 0.94, 0.84)
-		env.ambient_light_color = Color(1.0, 0.96, 0.92)
-		env.ambient_light_energy = 0.9
+		env.ambient_light_color = Color(1.0, 0.95, 0.88).lerp(Color(0.5, 0.58, 0.78), ni)
+		env.ambient_light_energy = lerpf(0.45, 0.18, ni)
 		env.adjustment_brightness = 1.0
 		env.adjustment_saturation = 1.08
 		env.adjustment_contrast = 1.05
@@ -1155,7 +1157,14 @@ func _update_mood() -> void:
 		sky_mat.sky_horizon_color = Color(0.9, 0.78, 0.6)
 		sky_mat.ground_bottom_color = Color(0.35, 0.25, 0.18)
 		sky_mat.ground_horizon_color = Color(0.6, 0.45, 0.3)
-		env.glow_intensity = 0.4
+		fill.light_energy = lerpf(0.14, 0.04, ni)
+		rim.light_energy = lerpf(0.2, 0.06, ni)
+		env.glow_intensity = lerpf(0.4, 0.95, ni)
+		env.glow_strength = lerpf(1.0, 1.25, ni)
+		env.set_glow_level(4, 0.8 * ni)
+		env.set_glow_level(5, 0.5 * ni)
+		env.set_glow_level(6, 0.0)
+		extra.interior_mood(si)
 		return
 	var s := _sky_now()
 	var night: float = s["night"]
