@@ -192,7 +192,9 @@ func _build_interior() -> void:
 	var rz := room.y
 	var wh := 1.6
 	var t := 0.14
-	interior.add_child(Boxes.one(Vector3(-rx - t, -0.4, -rz - t), Vector3(rx + t, -0.01, rz + t), {"top": "wood", "side": "wood"}))
+	var model := _build_room_model(rx, rz)
+	if model == null:
+		interior.add_child(Boxes.one(Vector3(-rx - t, -0.4, -rz - t), Vector3(rx + t, -0.01, rz + t), {"top": "wood", "side": "wood"}))
 	# 바닥 칸 (웹: 0.8 크기 격자, 집마다 칠한 블록)
 	var gr := _floor_grid()
 	var nx: int = gr[0]
@@ -208,21 +210,16 @@ func _build_interior() -> void:
 		for j in nz:
 			var x0 := -rx + i * cx
 			var z0 := -rz + j * cz
-			var tex: String = bl.get(fl.get("%d,%d" % [i, j], "plank"), "plank")
-			fboxes.append({"b": [x0, -0.01, z0, x0 + cx, 0, z0 + cz], "t": tex, "tile": maxf(cx, cz), "only": ["top"]})
+			var fid: String = fl.get("%d,%d" % [i, j], "plank")
+			if model and fid == "plank":
+				continue      # 기본 마루는 모델 바닥 그대로, 칠한 칸만 위에 깔아요
+			var tex: String = bl.get(fid, "plank")
+			var fy := 0.012 if model else 0.0
+			fboxes.append({"b": [x0, fy - 0.01, z0, x0 + cx, fy, z0 + cz], "t": tex, "tile": maxf(cx, cz), "only": ["top"]})
 	interior.add_child(Boxes.build(fboxes))
 	var wp := "wallpaperL" if int(H()["lvl"]) >= 2 else "wallpaper"
-	walls.clear()
-	var wdefs := [
-		[Vector3(-rx - t, 0, -rz - t), Vector3(rx + t, wh, -rz), {"side": wp, "back": "plaster", "top": "wallTop"}, Vector3.FORWARD],
-		[Vector3(-rx - t, 0, rz), Vector3(rx + t, wh, rz + t), {"side": wp, "front": "plaster", "top": "wallTop"}, Vector3.BACK],
-		[Vector3(-rx - t, 0, -rz), Vector3(-rx, wh, rz), {"side": wp, "left": "plaster", "top": "wallTop"}, Vector3.LEFT],
-		[Vector3(rx, 0, -rz), Vector3(rx + t, wh, rz), {"side": wp, "right": "plaster", "top": "wallTop"}, Vector3.RIGHT],
-	]
-	for w in wdefs:
-		var mi := Boxes.one(w[0], w[1], w[2], 0.5)
-		interior.add_child(mi)
-		walls.append([mi, w[3]])
+	if model == null:
+		_box_walls(rx, rz, wh, t, wp)
 	var L: Dictionary = M["items"][_lvl_key()]
 	for it in zone_items("in"):
 		if is_put(it["id"]) and L.has(it["id"]):
@@ -254,6 +251,80 @@ func _build_interior() -> void:
 	(seat.get_node("Chair") as Node3D).visible = false
 	desk_seat = seat
 	interior.visible = inside
+
+
+## 예전 상자 벽 (모델이 없을 때만)
+func _box_walls(rx: float, rz: float, wh: float, t: float, wp: String) -> void:
+	walls.clear()
+	var wdefs := [
+		[Vector3(-rx - t, 0, -rz - t), Vector3(rx + t, wh, -rz), {"side": wp, "back": "plaster", "top": "wallTop"}, Vector3.FORWARD],
+		[Vector3(-rx - t, 0, rz), Vector3(rx + t, wh, rz + t), {"side": wp, "front": "plaster", "top": "wallTop"}, Vector3.BACK],
+		[Vector3(-rx - t, 0, -rz), Vector3(-rx, wh, rz), {"side": wp, "left": "plaster", "top": "wallTop"}, Vector3.LEFT],
+		[Vector3(rx, 0, -rz), Vector3(rx + t, wh, rz), {"side": wp, "right": "plaster", "top": "wallTop"}, Vector3.RIGHT],
+	]
+	for w in wdefs:
+		var mi := Boxes.one(w[0], w[1], w[2], 0.5)
+		interior.add_child(mi)
+		walls.append([mi, w[3]])
+
+
+## 집 안 모델 (inside01.glb): 안쪽 벽면이 방 크기(rx, rz)에 딱 맞게 키워서 깔고,
+## 벽·기둥·지붕 조각을 방향별로 나눠 둠 → 카메라 쪽은 숨겨서 안이 보이게 (인형집처럼)
+const ROOM_GLB := "res://assets/house/inside01.glb"
+const ROOM_IN := 1.5          # 모델에서 벽 안쪽 면까지 거리
+var roof_parts: Array = []    # [노드, 바깥쪽 방향(수평)]
+var posts: Array = []         # [노드, 옆 벽 방향 1, 옆 벽 방향 2]
+
+
+func _build_room_model(rx: float, rz: float) -> Node3D:
+	var ps := load(ROOM_GLB) as PackedScene
+	if ps == null:
+		return null
+	var m := ps.instantiate() as Node3D
+	var sx := rx / ROOM_IN
+	var sz := rz / ROOM_IN
+	m.scale = Vector3(sx, minf(sx, sz), sz)
+	m.position = Vector3(0, -0.125 * minf(sx, sz), 0)     # 모델 바닥 윗면(0.125)을 방 바닥(0)에
+	interior.add_child(m)
+	main._pixel(m)
+	walls.clear()
+	roof_parts.clear()
+	posts.clear()
+	var side := {Vector3.FORWARD: [], Vector3.BACK: [], Vector3.LEFT: [], Vector3.RIGHT: []}
+	var inv := m.global_transform.affine_inverse()
+	for n in m.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		var c: Vector3 = inv * (mi.global_transform * mi.get_aabb().get_center())
+		var in_roof := false
+		var p: Node = mi.get_parent()
+		while p and p != m:
+			if String(p.name).begins_with("roof"):
+				in_roof = true
+			p = p.get_parent()
+		var nm := String(mi.name)
+		if in_roof or nm.begins_with("roof") or nm.begins_with("ridge") or nm.begins_with("rafter"):
+			var d := Vector3(c.x, 0, c.z)
+			roof_parts.append([mi, d.normalized() if d.length() > 0.2 else Vector3.ZERO])
+		elif nm.begins_with("floor") or nm.begins_with("lamp"):
+			pass
+		elif absf(c.x) > 1.3 and absf(c.z) > 1.3:
+			posts.append([mi, Vector3.LEFT if c.x < 0 else Vector3.RIGHT, Vector3.FORWARD if c.z < 0 else Vector3.BACK])
+		elif absf(c.z) > 1.3:
+			side[Vector3.FORWARD if c.z < 0 else Vector3.BACK].append(mi)
+		elif absf(c.x) > 1.3:
+			side[Vector3.LEFT if c.x < 0 else Vector3.RIGHT].append(mi)
+	for k in side:
+		walls.append([side[k], k])
+	# 천장 등: 따뜻한 빛
+	var shade := m.find_child("lamp_shade", true, false) as Node3D
+	if shade:
+		var ol := OmniLight3D.new()
+		ol.light_color = Color(1.0, 0.82, 0.55)
+		ol.light_energy = 1.2
+		ol.omni_range = maxf(rx, rz) * 2.0
+		ol.position = interior.to_local(shade.global_position) + Vector3(0, -0.25, 0)
+		interior.add_child(ol)
+	return m
 
 
 func _add_ornaments() -> void:
@@ -327,8 +398,21 @@ func _process(_dt: float) -> void:
 		var f: Vector3 = -main.cam.global_transform.basis.z
 		f.y = 0
 		f = f.normalized()
+		var vis := {}
 		for w in walls:
-			(w[0] as MeshInstance3D).visible = floor_edit == "" and f.dot(w[1]) > -0.15   # 바닥 칠할 땐 벽도 숨김
+			var on: bool = floor_edit == "" and f.dot(w[1]) > -0.15   # 바닥 칠할 땐 벽도 숨김
+			vis[w[1]] = on
+			if w[0] is Array:
+				for mi in w[0]:
+					(mi as Node3D).visible = on
+			else:
+				(w[0] as MeshInstance3D).visible = on
+		for pp in posts:
+			(pp[0] as Node3D).visible = vis.get(pp[1], true) or vis.get(pp[2], true)
+		for rp in roof_parts:
+			# 지붕: 카메라 쪽 경사면·서까래는 숨기고 반대쪽만 남김 (가운데 용마루는 위에서 가리니까 숨김)
+			var d: Vector3 = rp[1]
+			(rp[0] as Node3D).visible = floor_edit == "" and d != Vector3.ZERO and f.dot(d) > 0.25
 	_step_pets(_dt)
 	_pet_fx(_dt)
 	_gift_tick(_dt)
