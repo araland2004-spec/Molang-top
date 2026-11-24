@@ -831,10 +831,13 @@ func _setup_smoke() -> void:
 		outside_nodes.append(m)
 
 
-## 배경 구름: 자연 에셋 구름 모델을 섬 둘레·아래에 깔고 천천히 흘려보내요 (끝까지 가면 반대편에서 다시)
-var clouds: Array = []      # [Node3D, 속도]
+## 배경 구름: 자연 에셋 구름 모델을 섬 뒤쪽 공중에 띄우고 옆으로 천천히 흘려보내요
+## 카메라를 돌려도 늘 섬 건너편(집 뒤)에 떠 있게, 카메라 방향 기준으로 다시 놓아요.
+var clouds: Array = []      # [Node3D, 속도, 높이 씨앗, 화면 위 띠 안 높이 0~1, 옆 위치 -1~1, 크기]
 var cloud_mats: Array = []
-const CLOUD_SPAN := 30.0
+var _cloud_t := 0.0
+var _isl_c := Vector2.ZERO
+var _isl_r := 4.0
 
 
 func _build_clouds() -> void:
@@ -843,26 +846,21 @@ func _build_clouds() -> void:
 			outside_nodes.erase(c[0])
 			c[0].queue_free()
 	clouds.clear()
+	cloud_mats.clear()
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 7
 	var kinds := ["Cloud_Small_01", "Cloud_Medium_01", "Cloud_Large_01"]
-	for i in 9:
+	for i in 8:
 		var n := _spawn(kinds[i % 3])
 		if n == null:
 			continue
-		var sc := rng.randf_range(0.28, 0.5) * (0.6 if kinds[i % 3] == "Cloud_Large_01" else 1.0)
-		n.scale *= sc
-		var ang := rng.randf() * TAU
-		var below := i % 3 != 0
-		# 대부분은 섬 아래로 낮게(어느 쪽에서 봐도 섬을 안 가림), 몇 개는 아주 멀리 섬 높이에(카메라 뒤쪽 것은 안 보임)
-		var r := rng.randf_range(5.0, 13.0) if below else rng.randf_range(21.0, 27.0)
-		n.position = Vector3(cos(ang) * r, rng.randf_range(-8.0, -4.5) if below else rng.randf_range(-1.0, 3.0), sin(ang) * r)
+		var sc := rng.randf_range(0.7, 1.1) * (0.6 if kinds[i % 3] == "Cloud_Large_01" else 1.0)
 		n.rotation.y = rng.randf() * TAU
 		for mi in n.find_children("*", "MeshInstance3D", true, false):
 			var m3 := mi as MeshInstance3D
 			m3.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			var cm := StandardMaterial3D.new()
-			cm.albedo_color = Color(0.95, 0.97, 1.0, 0.5)
+			cm.albedo_color = Color(0.97, 0.98, 1.0, 0.75)
 			cm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 			cm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED     # 면 음영이 없어야 각진 결이 덜 보여요
 			cm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
@@ -870,19 +868,44 @@ func _build_clouds() -> void:
 			cloud_mats.append(cm)
 		add_child(n)
 		outside_nodes.append(n)
-		clouds.append([n, rng.randf_range(0.12, 0.3)])
+		clouds.append([n, rng.randf_range(0.03, 0.07), rng.randf_range(34.0, 48.0), rng.randf_range(0.08, 0.75), float(i) / 8.0 * 2.0 - 1.0 + rng.randf_range(-0.08, 0.08), n.scale.x * sc])
 
 
 func _tick_clouds(dt: float) -> void:
 	var night := not Mol.is_day()
-	var col := Color(0.42, 0.46, 0.58, 0.32) if night else Color(0.95, 0.97, 1.0, 0.5)
+	var col := Color(0.42, 0.46, 0.58, 0.45) if night else Color(0.97, 0.98, 1.0, 0.75)
 	for m in cloud_mats:
 		(m as StandardMaterial3D).albedo_color = col
+	if cam == null or clouds.is_empty():
+		return
+	var fwd := -cam.global_transform.basis.z
+	fwd.y = 0.0
+	if fwd.length() < 0.01:
+		return
+	fwd = fwd.normalized()
+	var right := Vector3(-fwd.z, 0.0, fwd.x)
+	_cloud_t -= dt
+	if _cloud_t <= 0.0:          # 섬 중심·반지름은 가끔만 다시 재요 (땅이 늘어날 수 있으니)
+		_cloud_t = 2.0
+		var sum := Vector2.ZERO
+		for k in land_set:
+			sum += Vector2(k)
+		_isl_c = sum / maxf(1.0, land_set.size())
+		_isl_r = 2.0
+		for k in land_set:
+			_isl_r = maxf(_isl_r, (Vector2(k) - _isl_c).length())
+	var ctr := Vector3(_isl_c.x + 0.5, 0.0, _isl_c.y + 0.5)
 	for c in clouds:
 		var n: Node3D = c[0]
-		n.position.x += float(c[1]) * dt
-		if n.position.x > CLOUD_SPAN:
-			n.position.x = -CLOUD_SPAN
+		c[4] = float(c[4]) + float(c[1]) * dt / 4.0
+		if c[4] > 1.0:
+			c[4] = -1.0
+		# 카메라에서 볼 때 섬 건너편(집 뒤쪽) 가장자리 바로 바깥, 땅보다 위 공중에 떠서 옆으로 흘러가요
+		var back := _isl_r + 1.5 + (float(c[2]) - 34.0) * 0.45        # 섬 끝에서 1.5~8칸 뒤
+		var p := ctr + fwd * back + right * (float(c[4]) * (_isl_r + 7.0))
+		p.y = FLOOR_TOP + 0.4 + float(c[3]) * 2.0                      # 땅 위 0.5~2칸 높이(공중)
+		n.global_position = p
+		n.scale = Vector3.ONE * float(c[5])
 
 
 ## 길가 등불 + 문 앞 불빛 + 반딧불이: 해 질 녘부터 켜짐
