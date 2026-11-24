@@ -422,6 +422,7 @@ func _blockers() -> Array:
 
 
 func _process(_dt: float) -> void:
+	_tick_sprites()
 	if inside and interior and main.cam:
 		# 인형집처럼: 카메라 쪽 벽은 숨김
 		var f: Vector3 = -main.cam.global_transform.basis.z
@@ -3790,8 +3791,8 @@ func _add_bench_seat(piv: Node3D, y: float) -> void:
 func _node_aabb(root: Node3D) -> AABB:
 	var box := AABB()
 	var f := true
-	for mi in root.find_children("*", "MeshInstance3D", true, false):
-		var m := mi as MeshInstance3D
+	for mi in root.find_children("*", "GeometryInstance3D", true, false):
+		var m := mi as GeometryInstance3D
 		var a: AABB = root.global_transform.affine_inverse() * m.global_transform * m.get_aabb()
 		box = a if f else box.merge(a)
 		f = false
@@ -4112,6 +4113,10 @@ var _out_scenes := {}
 
 
 func _out_model(id: String) -> Node3D:
+	if OUT_SPRITE.has(id):
+		var sp := _sprite_model(id)
+		if sp:
+			return sp
 	var path: String = OUT_GLB[id][0]
 	if not _out_scenes.has(path):
 		_out_scenes[path] = load(path)
@@ -4183,3 +4188,53 @@ func rebuild_fence() -> void:
 	fence_node.mesh = am
 	main._pixel(fence_node)
 	yard_root.add_child(fence_node)
+
+
+
+# ───────────────────────── 8방향 스프라이트 장식 ─────────────────────────
+## 3D 모델 대신 8방향 픽셀아트 시트(가로 8칸, 0 = 정면, 시계 방향 45°씩)를 세워요.
+## 카메라가 물건을 보는 각도에 맞춰 칸을 바꿔요 (물건을 90° 돌리면 2칸씩 넘어감). 세로축만 카메라를 봐요.
+## [시트, 칸 크기, 도트 하나 크기(칸 단위), 발바닥 y(칸 안 픽셀)]
+const OUT_SPRITE := {"bench": ["res://assets/sprites/bench_8dir.png", 128, 0.0145, 112]}
+var sprite_nodes: Array = []      # [Sprite3D, 기준 Node3D(돌아가는 받침)]
+
+
+func _sprite_model(id: String) -> Node3D:
+	var d: Array = OUT_SPRITE[id]
+	var tex := load(d[0]) as Texture2D
+	if tex == null:
+		return null
+	var sp := Sprite3D.new()
+	sp.texture = tex
+	sp.hframes = 8
+	sp.frame = 7
+	sp.pixel_size = float(d[2])
+	sp.offset = Vector2(0, float(d[3]) - float(d[1]) / 2.0)      # 발바닥(위에서 d[3] 픽셀)이 바닥에 닿게
+	sp.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
+	sp.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	sp.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD               # 깊이를 써서 앞뒤 가림·아웃라인이 맞게
+	sp.shaded = true                                             # 낮·밤 조명을 받아요
+	sp.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	var grp := Node3D.new()
+	grp.add_child(sp)
+	sprite_nodes.append([sp, grp])
+	return grp
+
+
+func _tick_sprites() -> void:
+	if sprite_nodes.is_empty() or main == null or main.cam == null:
+		return
+	var cp: Vector3 = main.cam.global_position
+	var keep: Array = []
+	for e in sprite_nodes:
+		var sp = e[0]
+		if not is_instance_valid(sp) or not sp.is_inside_tree():
+			if is_instance_valid(sp):
+				keep.append(e)      # 아직 트리에 안 들어간 것(도감 그림 등)은 그대로 두기
+			continue
+		keep.append(e)
+		var base: Node3D = e[1]
+		var v: Vector3 = base.global_transform.affine_inverse() * cp      # 물건 기준 카메라 위치
+		var ang := atan2(v.x, v.z)                                       # 0 = 정면(+Z)에서 봄
+		(sp as Sprite3D).frame = posmod(-roundi(ang / (PI / 4.0)), 8)
+	sprite_nodes = keep
