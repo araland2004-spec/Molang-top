@@ -198,6 +198,7 @@ func _ready() -> void:
 	# 맵 둘레 나무·풀·버섯 자동 배치는 끔 → 자연 장식은 상자 보상으로 모아서 직접 심어요 (home_extra NATURE)
 	_land_init()
 	_build_cottage()
+	_build_clouds()       # 배경 구름은 집과 상관없이
 	_make_player()
 	_make_hamster()
 	_build_sky()
@@ -341,13 +342,35 @@ func _flow_register(n: Node3D, asset: String) -> void:
 	if not flow_frames.has(asset):
 		return
 	if asset.begins_with("Block_Water"):
-		n.rotation.y = PI / 2      # 물결이 가로로 흘러서 세로(화면 안쪽)로 흐르게 90도
+		n.rotation.y = -PI / 2     # 물결 방향: 예전 90도가 거꾸로 흘러서 반대로(-90도)
 	var ms: Array = n.find_children("*", "MeshInstance3D", true, false)
 	if n is MeshInstance3D:
 		ms.append(n)
 	if ms.size() > 0:
 		flow_cells[asset].append(ms[0])
 		ms[0].mesh = flow_frames[asset][maxi(flow_idx[asset], 0)]
+		if asset.begins_with("Block_Water"):
+			_water_look(ms[0])
+
+
+## 물: 살짝 비치고(투명도) 하늘이 반사되게. 원래 재질을 한 번만 복사해서 모든 물 칸이 같이 써요
+var _water_mats := {}
+func _water_look(mi: MeshInstance3D) -> void:
+	if mi.mesh == null:
+		return
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	for i in mi.mesh.get_surface_count():
+		var src: Material = mi.get_active_material(i)
+		if not _water_mats.has(src):
+			var w: StandardMaterial3D = (src.duplicate() as StandardMaterial3D) if src is StandardMaterial3D else StandardMaterial3D.new()
+			w.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			w.albedo_color = Color(w.albedo_color, 0.72)
+			w.metallic = 0.15
+			w.metallic_specular = 0.9
+			w.roughness = 0.08
+			w.emission_enabled = false
+			_water_mats[src] = w
+		mi.set_surface_override_material(i, _water_mats[src])
 
 
 func _tick_flows(now: float) -> void:
@@ -754,10 +777,28 @@ func _build_cottage() -> void:
 var smoke_mesh: Mesh
 var smoke_mat: BaseMaterial3D
 var smoke_size := 0.1
-const SMOKE_N := 5
 
 
-## 굴뚝 연기: 집 모델의 연기 구름 메쉬를 몇 개 띄워 올리며 커졌다가 사라지게
+## 굴뚝 연기: 가장자리가 흐린 둥근 연기(화면을 향하는 그림)를 여러 개 띄워, 올라가며 부풀고 부드럽게 나타났다 사라지게
+## (예전 집 모델의 도트 연기 조각은 각져 보여서 안 씀)
+const SMOKE_N := 8
+var _puff_tex: Texture2D
+
+
+func _puff_texture() -> Texture2D:
+	if _puff_tex:
+		return _puff_tex
+	var S := 64
+	var img := Image.create(S, S, false, Image.FORMAT_RGBA8)
+	for y in S:
+		for x in S:
+			var d := Vector2(x - S / 2.0 + 0.5, y - S / 2.0 + 0.5).length() / (S / 2.0)
+			var a := 1.0 - smoothstep(0.35, 1.0, d)
+			img.set_pixel(x, y, Color(1, 1, 1, a * a))
+	_puff_tex = ImageTexture.create_from_image(img)
+	return _puff_tex
+
+
 func _setup_smoke() -> void:
 	for m in smoke:
 		if is_instance_valid(m):
@@ -766,21 +807,75 @@ func _setup_smoke() -> void:
 	smoke.clear()
 	for i in SMOKE_N:
 		var m := MeshInstance3D.new()
-		if smoke_mesh:
-			m.mesh = smoke_mesh
-			m.material_override = smoke_mat.duplicate()      # 하나씩 따로 흐려지게
-		else:
-			var bm := BoxMesh.new()
-			m.mesh = bm
-			var sm := StandardMaterial3D.new()
-			sm.albedo_color = Color(0.97, 0.97, 1.0, 0.9)
-			sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			m.material_override = sm
+		var q := QuadMesh.new()
+		q.size = Vector2.ONE
+		m.mesh = q
+		var sm := StandardMaterial3D.new()
+		sm.albedo_texture = _puff_texture()
+		sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		sm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		sm.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		sm.billboard_keep_scale = true
+		sm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		m.material_override = sm
 		m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		m.rotation.y = randf() * TAU
 		add_child(m)
 		smoke.append(m)
 		outside_nodes.append(m)
+
+
+## 배경 구름: 자연 에셋 구름 모델을 섬 둘레·아래에 깔고 천천히 흘려보내요 (끝까지 가면 반대편에서 다시)
+var clouds: Array = []      # [Node3D, 속도]
+var cloud_mats: Array = []
+const CLOUD_SPAN := 30.0
+
+
+func _build_clouds() -> void:
+	for c in clouds:
+		if is_instance_valid(c[0]):
+			outside_nodes.erase(c[0])
+			c[0].queue_free()
+	clouds.clear()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	var kinds := ["Cloud_Small_01", "Cloud_Medium_01", "Cloud_Large_01"]
+	for i in 9:
+		var n := _spawn(kinds[i % 3])
+		if n == null:
+			continue
+		var sc := rng.randf_range(0.28, 0.5) * (0.6 if kinds[i % 3] == "Cloud_Large_01" else 1.0)
+		n.scale *= sc
+		var ang := rng.randf() * TAU
+		var below := i % 3 != 0
+		# 대부분은 섬 아래로 낮게(어느 쪽에서 봐도 섬을 안 가림), 몇 개는 아주 멀리 섬 높이에(카메라 뒤쪽 것은 안 보임)
+		var r := rng.randf_range(5.0, 13.0) if below else rng.randf_range(21.0, 27.0)
+		n.position = Vector3(cos(ang) * r, rng.randf_range(-8.0, -4.5) if below else rng.randf_range(-1.0, 3.0), sin(ang) * r)
+		n.rotation.y = rng.randf() * TAU
+		for mi in n.find_children("*", "MeshInstance3D", true, false):
+			var m3 := mi as MeshInstance3D
+			m3.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			var cm := StandardMaterial3D.new()
+			cm.albedo_color = Color(0.95, 0.97, 1.0, 0.5)
+			cm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			cm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED     # 면 음영이 없어야 각진 결이 덜 보여요
+			cm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+			m3.material_override = cm
+			cloud_mats.append(cm)
+		add_child(n)
+		outside_nodes.append(n)
+		clouds.append([n, rng.randf_range(0.12, 0.3)])
+
+
+func _tick_clouds(dt: float) -> void:
+	var night := not Mol.is_day()
+	var col := Color(0.42, 0.46, 0.58, 0.32) if night else Color(0.95, 0.97, 1.0, 0.5)
+	for m in cloud_mats:
+		(m as StandardMaterial3D).albedo_color = col
+	for c in clouds:
+		var n: Node3D = c[0]
+		n.position.x += float(c[1]) * dt
+		if n.position.x > CLOUD_SPAN:
+			n.position.x = -CLOUD_SPAN
 
 
 ## 길가 등불 + 문 앞 불빛 + 반딧불이: 해 질 녘부터 켜짐
@@ -1578,16 +1673,19 @@ func _process(delta: float) -> void:
 	for i in lights.size():
 		lights[i].material_override = light_mats[(i + ph) % light_mats.size()]
 	_tick_flows(now)
+	_tick_clouds(delta)
 	# 굴뚝 연기
+	var day := Mol.is_day()
+	var tint := Color(0.96, 0.96, 0.98) if day else Color(0.62, 0.65, 0.72)
 	for i in smoke.size():
-		var f := fmod(now * 0.22 + float(i) / smoke.size(), 1.0)
-		var sz := smoke_size if smoke_mesh else 0.18
-		smoke[i].scale = Vector3.ONE * sz * (0.45 + f * 1.25)          # 올라갈수록 부풀어
-		smoke[i].position = chimney_top + Vector3(sin(now * 0.8 + i * 1.7) * 0.05 + f * 0.35, f * 1.2, -f * 0.1)
-		smoke[i].rotation.y += delta * 0.3
+		var f := fmod(now * 0.16 + float(i) / smoke.size(), 1.0)
+		var e := f * f * (3.0 - 2.0 * f)                                  # 부드럽게 가속·감속
+		smoke[i].scale = Vector3.ONE * (0.28 + e * 0.75)                  # 올라갈수록 부풀어
+		smoke[i].position = chimney_top + Vector3(sin(now * 0.6 + i * 1.7) * 0.06 + e * 0.45, 0.05 + e * 1.5, -e * 0.12)
 		var mo := smoke[i].material_override as BaseMaterial3D
 		if mo:
-			mo.albedo_color.a = clampf(sin(f * PI) * 1.4, 0.0, 0.9)      # 나올 때·사라질 때 흐리게
+			var a := smoothstep(0.0, 0.18, f) * (1.0 - smoothstep(0.45, 1.0, f)) * 0.7   # 나올 때·사라질 때 스르르
+			mo.albedo_color = Color(tint, a)
 	hud_t -= delta
 	if hud_t <= 0 and jelly_btn:
 		hud_t = 1.0
