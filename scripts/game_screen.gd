@@ -419,13 +419,15 @@ func _layout() -> void:
 	goal.position = Vector2(x0 + mx, 190)
 	goal.size = Vector2(vs.x - mx * 2, 60)
 	# 판을 크게: 좌우 여백은 작게(12), 위는 정보 줄 바로 아래, 아래는 아이템 줄 바로 위에 붙여요 (남는 칸은 위로)
-	var top_h := 262.0 if goal_row.visible else 184.0
-	var bottom_h := 188.0 if items_box.visible else 28.0
-	var avail := Vector2(vs.x - 24, vs.y - top_h - bottom_h)
+	# 판은 글자 기둥(COL_W)에 묶지 않고 화면 폭·높이 안에서 최대로 (폴드처럼 넓은 화면에서도 크게)
+	# 위는 목표 막대 바로 아래(+12), 아래 버튼과는 32 띄움. 남는 칸은 위 1/3 · 아래 2/3
+	var top_h := (262.0 if goal_row.visible else 184.0) + 12.0
+	var bottom_h := (188.0 if items_box.visible else 28.0) + 32.0
+	var avail := Vector2(full.x - 8, full.y - top_h - bottom_h)
 	board_scale = minf(avail.x / GameCore.W, avail.y / GameCore.H)
 	var bw := GameCore.W * board_scale
 	var bh := GameCore.H * board_scale
-	board_area.position = Vector2(x0 + (vs.x - bw) / 2, top_h + maxf(0, avail.y - bh))
+	board_area.position = Vector2((full.x - bw) / 2, top_h + maxf(0, avail.y - bh) * 0.33)
 	board_area.size = Vector2(bw, bh)
 	core.scale = Vector2.ONE * board_scale
 	items_box.position = Vector2(x0 + mx, vs.y - 180)
