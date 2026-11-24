@@ -3229,7 +3229,7 @@ func _refresh_ui() -> void:
 		deco_btn.text = "집 안 꾸미기" if ins else "집 밖 꾸미기"
 		edit_btn.text = "바닥 꾸미기" if ins else "땅 편집"
 	if hint:
-		hint.text = ("트리를 누르면 닦아요 · 의자를 누르면 앉아요" if ins else "바닥을 누르면 걸어가요 · 문 앞에서 집을 누르면 들어가요")
+		hint.text = ("트리를 누르면 닦아요 · 의자를 누르면 앉아요" if ins else ("바닥을 누르면 걸어가요 · 문 앞에서 집을 누르면 들어가요" if extra == null or extra.unlocked("in") else "바닥을 누르면 걸어가요 · 섬을 다 꾸미면 집 문이 열려요"))
 	if pet_label and extra:
 		pet_label.text = extra.pet_line()
 		pet_label.visible = pet_label.text != "" and not (sitting != null or edit_mode)

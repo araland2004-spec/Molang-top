@@ -686,6 +686,10 @@ func tap(pos: Vector2) -> bool:
 		if wbox.intersects_ray(from, dir) != null and (box.intersects_ray(from, dir) == null or from.distance_to(Vector3(wb.get_center().x, 1, wb.get_center().y)) < from.distance_to(Vector3(hb.get_center().x, 1, hb.get_center().y))):
 			open_workshop()
 			return true
+	if box.intersects_ray(from, dir) != null and not unlocked("in"):
+		var dn := zone_count("out")
+		main.toast("섬 장식을 다 놓으면 집 문이 열려요 (%d/%d)" % [dn, zone_items("out").size()])
+		return true
 	if box.intersects_ray(from, dir) != null:
 		# 집 앞(문 앞 칸)에 와 있을 때만 들어가요. 멀리서 누르면 문 앞까지 걸어가기만 (잘못 눌러 들어가지 않게)
 		if near_door():
@@ -1004,6 +1008,7 @@ func _close_sheet() -> void:
 		sheet = null
 		if was_deco:
 			main.refresh_ui()
+			_check_unlocks.call_deferred()
 
 
 func _sheet(title: String, width := 640) -> VBoxContainer:
@@ -1612,7 +1617,8 @@ func open_box(n := 1, tut_done := Callable()) -> void:
 			else:
 				break
 			Save.bump("box")
-			var it: Dictionary = items[randi() % items.size()]
+			var pool := items.filter(func(x): return x["zone"] == "out" or unlocked("in"))    # 섬을 다 꾸미기 전엔 섬 장식만
+			var it: Dictionary = pool[randi() % pool.size()]
 			var forced := false
 			if force_next != "":
 				for it2 in items:
@@ -1631,6 +1637,7 @@ func open_box(n := 1, tut_done := Callable()) -> void:
 			if c == 1:
 				nf += 1      # 새 장식은 자동으로 놓지 않고 꾸미기에 보관 (원하는 곳에 직접 놓기)
 			got.append({"tex": thumb(id), "title": str(it["name"]), "fresh": c == 1, "zone": it["zone"], "dup": c - 1})
+			_box_got.append({"id": id, "fresh": c == 1})
 		Save.save()
 		main.refresh_ui()
 		var r := {"items": got, "more": (int(Save.d["jelly"]) >= BOX_PRICE or int(H()["keys"]) > 0) and not vol_done(), "more10": int(Save.d["jelly"]) >= BOX_PRICE * 10 and not vol_done()}
@@ -1641,10 +1648,14 @@ func open_box(n := 1, tut_done := Callable()) -> void:
 			r["title"] = "상자 %d개! 새 장식 %d개" % [got.size(), nf]
 			r["sub"] = ("새 장식은 꾸미기에서 놓아요 · " if nf else "") + "중복 %d개는 도감에서 3개씩 바꿀 수 있어요" % (got.size() - nf)
 		return r
+	_box_got.clear()
 	_show_gift("상자를 잡고 옆으로 스와이프해 보세요", pop, func():
+		_said = false
 		after_deco()
 		if tut_done.is_valid():
 			tut_done.call()
+		elif _said or _box_tips():
+			pass          # 해금·처음 나온 것 안내를 먼저 (안내가 끝나면 꾸미기로)
 		elif not quest_greet():
 			open_book("in" if inside else "out"), open_box)
 	_preset_x10(n)
@@ -1784,6 +1795,17 @@ func open_deco() -> void:
 					deco_scroll = sc.scroll_horizontal
 					open_deco())
 				prow.add_child(pb)
+	# 단계 안내: 섬 → 집 안 → 블록
+	if not unlocked("block"):
+		var zz := "in" if inside else "out"
+		var lk := Mol.lbl(("섬 꾸미기 %d/%d · 다 놓으면 집 문이 열려요" if zz == "out" else "집 안 꾸미기 %d/%d · 다 놓으면 블록 꾸미기가 열려요") % [zone_count(zz), zone_items(zz).size()]
+			if (zz == "in" or not unlocked("in")) else "섬은 다 꾸몄어요! 집 안을 다 꾸미면 블록 꾸미기가 열려요", 20, Mol.AMBER, "m")
+		lk.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		v.add_child(lk)
+		await main.get_tree().process_frame
+		if is_instance_valid(sc):
+			sc.scroll_horizontal = keep
+		return
 	# 바닥·땅
 	var er := HBoxContainer.new()
 	er.add_theme_constant_override("separation", 12)
@@ -1989,6 +2011,7 @@ func after_deco() -> void:
 	if inside:
 		_build_interior()
 		main.set_walk_area(Vector2(-room.x + 0.3, -room.y + 0.3), Vector2(room.x - 0.3, room.y - 0.3), _blockers())
+	_check_unlocks()
 	# 도감을 다 채우면 집마다 한 번 새 집 짓기를 권해요
 	if vol_done() and int(H().get("asked_vol", 0)) != int(H()["no"]):
 		H()["asked_vol"] = int(H()["no"])
@@ -2464,7 +2487,7 @@ func _onb_name() -> void:
 					H()["events"].append("howto")
 				Save.save()
 				say(["「%s」, 마음에 쏙 들어요!" % H()["name"],
-					"바닥을 누르면 내가 걸어가요. 문 앞에서 집을 누르면 집에 들어가요."], func(): quest_intro(0)))))
+					"바닥을 누르면 내가 걸어가요.", "집 안은 아직 정리 중이라, 섬을 다 꾸미면 들어갈 수 있어요."], func(): quest_intro(0)))))
 
 
 ## 안내 중 무한 모드에서 (판이 끝나기 전에) 돌아왔을 때: 다시 보내지 않고 맛보기 선물을 주고 다음으로
@@ -3313,11 +3336,14 @@ func quest_intro(i: int) -> void:
 				"스테이지는 하루 %d번 들어갈 수 있어요. 깰수록 무한 모드 아이템이 쌓여요." % Save.STAGE_DAILY], func(): pass)
 		"deco1":
 			say(["상자에서 장식이 꽤 모였네요!",
-				"이제 방이나 섬을 꾸며 볼까요?",
+				"이제 섬을 꾸며 볼까요? 섬 장식을 다 놓으면 집 문이 열려요.",
 				"꾸미기에서 장식 카드를 누르고, 놓고 싶은 바닥을 눌러요."], func(): open_deco())
 		"stage30":
 			say(["다음은 스테이지 30단계까지!", "깨면 새 바닥 블록을 선물로 줄게요."], func(): pass)
 		"floor1":
+			if not unlocked("block"):
+				say(["다음은 바닥 블록 꾸미기예요.", "섬과 집 안을 다 꾸미면 열려요. 조금만 더 꾸며 볼까요?"], func(): pass)
+				return
 			# 블록 선물은 한 번만 (「하러 가기」를 누를 때마다 블록·땅 칸이 또 생기던 문제)
 			var pick: String = str(Save.d.get("floor1_block", ""))
 			if pick == "":
@@ -3963,3 +3989,111 @@ func interior_mood(s: Dictionary) -> void:
 		sp.light_color = beam
 		sp.light_energy = lerpf(0.5, 0.9, night)
 		(wf["dust"] as StandardMaterial3D).albedo_color = Color(beam.r, beam.g, beam.b, lerpf(0.35, 0.6, night))
+
+
+
+# ───────────────────────── 하나씩 열기 (섬 → 집 안 → 블록) ─────────────────────────
+## 처음엔 섬(밖) 꾸미기만. 섬 장식을 다 놓으면 집 문이 열리고(상자에서 집 안 가구도 나오기 시작),
+## 집 안 장식을 다 놓으면 블록 꾸미기(땅 편집·바닥 꾸미기·블록 뽑기·집 옮기기)가 열려요.
+## 새로 얻은 것마다 처음 한 번 짧은 안내(H()["tips"]).
+const UNLOCK_ORDER := ["out", "in", "block"]
+var _box_got: Array = []     # 이번 상자에서 나온 것 [{id, fresh}]
+var _said := false           # 이번에 해금 안내를 했는지
+
+
+func unlocked(k: String) -> bool:
+	var u := str(H().get("unlock", ""))
+	if u == "":
+		u = _derive_unlock()
+		H()["unlock"] = u
+		Save.save()
+	return UNLOCK_ORDER.find(u) >= UNLOCK_ORDER.find(k)
+
+
+## 예전 저장: 이미 쓰던 기능은 잠그지 않아요
+func _derive_unlock() -> String:
+	var used_block: bool = main.land_set.size() > 42 or int(Save.d.get("cnt", {}).get("floor", 0)) > 0 or not (H().get("floors_in", {}) as Dictionary).is_empty()
+	if used_block or zone_done("in"):
+		return "block"
+	for it in zone_items("in"):
+		if is_put(it["id"]):
+			return "in"
+	return "in" if zone_done("out") else "out"
+
+
+func zone_count(z: String) -> int:
+	_refresh_nature_put()
+	var n := 0
+	for it in zone_items(z):
+		if is_put(it["id"]):
+			n += 1
+	return n
+
+
+func zone_done(z: String) -> bool:
+	return zone_count(z) >= zone_items(z).size()
+
+
+func _check_unlocks() -> void:
+	if sheet and not sheet.has_meta("deco"):
+		return       # 다른 창(상자 등)이 떠 있으면 닫힌 뒤에
+	if not unlocked("in") and zone_done("out"):
+		H()["unlock"] = "in"
+		Save.save()
+		_said = true
+		main.refresh_ui()
+		say(["와, 섬을 다 꾸몄어요!", "이제 집 문이 열렸어요. 문 앞에서 집을 누르면 들어가요.",
+			"이제부터 상자에서 집 안 가구도 나와요."], func():
+			main.going_seat = null
+			main._walk_to(door()))
+	elif unlocked("in") and not unlocked("block") and zone_done("in"):
+		H()["unlock"] = "block"
+		var pick: String = main.grant_block()
+		Save.save()
+		_said = true
+		main.refresh_ui()
+		say(["집 안까지 다 꾸몄어요! 정말 포근해요.", "선물로 바닥 블록 「%s」%s 받았어요." % [main._bname(pick), "을" if _josa(main._bname(pick), "을", "를").ends_with("을") else "를"],
+			"이제 블록 꾸미기가 열렸어요. 꾸미기 아래 「땅 편집」에서 섬 바닥을 바꾸고 땅을 넓힐 수 있어요.",
+			"집 안에선 「바닥 꾸미기」로 방바닥을 칠해요. 「블록 뽑기」로 새 블록도 모아요."], func():
+			if inside:
+				open_deco()
+			else:
+				main._set_edit(true))
+
+
+## 처음 한 번 안내 (이미 봤으면 false)
+func tip(key: String, lines: Array, done := Callable()) -> bool:
+	if not (H().get("tips") is Array):
+		H()["tips"] = []
+	if (H()["tips"] as Array).has(key):
+		return false
+	H()["tips"].append(key)
+	Save.save()
+	say(lines, func():
+		if done.is_valid():
+			done.call())
+	return true
+
+
+## 상자에서 처음 나온 종류에 맞춰 한 번씩 안내
+func _box_tips() -> bool:
+	for g in _box_got:
+		var id: String = g["id"]
+		var zone := ""
+		for it in items:
+			if it["id"] == id:
+				zone = it["zone"]
+		if bool(g["fresh"]) and zone == "in":
+			if tip("first_in", ["집 안 가구가 나왔어요: %s!" % item_name(id), "집에 들어가서 꾸미기를 열면 놓을 수 있어요."], func(): open_deco()):
+				return true
+		elif bool(g["fresh"]) and NATURE.has(id):
+			if tip("first_nature", ["%s 나왔어요!" % _josa(item_name(id), "이", "가"), "나무·버섯·바위는 꾸미기에서 색을 골라 땅에 심어요.", "같은 걸 또 뽑으면 새 색이 하나씩 열려요."], func(): open_deco()):
+				return true
+		elif bool(g["fresh"]):
+			if tip("first_furn", ["새 장식 %s 나왔어요!" % _josa(item_name(id), "이", "가"), "꾸미기에서 카드를 누르고, 놓고 싶은 땅을 눌러요.", "놓은 장식은 꾹 누르면 들어서 옮길 수 있어요."], func(): open_deco()):
+				return true
+	for g in _box_got:
+		if not bool(g["fresh"]):
+			if tip("first_dup", ["같은 장식이 또 나왔어요.", "중복 3개를 모으면 도감에서 아직 없는 장식으로 바꿀 수 있어요."], func(): open_book("in" if inside else "out")):
+				return true
+	return false
