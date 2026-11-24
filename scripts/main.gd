@@ -294,9 +294,56 @@ func _load_blocks() -> void:
 		info[n] = {"n": n, "k": "block", "d": [1, 1, 1]}
 		block_files.append(n)
 	selected = maxi(block_files.find(FLOOR_OF["grass"]), 0)
+	_load_flows()
 
 
 var pix_lib := Node3D.new()
+
+## 흐르는 물·용암: 애니메이션 glb 안의 프레임 메쉬를 차례로 바꿔 끼움 (블렌더에서 프레임마다 켰다 끈 방식이라 직접 넘김)
+const FLOW := {
+	"Block_Water_Base_01": ["res://assets/blocks/anim/Water_Flow_01_Animated.glb", 0.4],
+	"Block_Water_Base_02": ["res://assets/blocks/anim/Water_Flow_02_Animated.glb", 0.2],
+	"Block_Lava_Base_01": ["res://assets/blocks/anim/Lava_Flow_01_Animated.glb", 0.4],
+}
+var flow_frames := {}      # 블록 이름 → [메쉬...]
+var flow_cells := {}       # 블록 이름 → [MeshInstance3D...]
+var flow_idx := {}
+
+
+func _load_flows() -> void:
+	for k in FLOW:
+		var ps := load(FLOW[k][0]) as PackedScene
+		if ps == null:
+			continue
+		var r := ps.instantiate()
+		var fr: Array = []
+		for mi in r.find_children("*_Frame_*", "MeshInstance3D", true, false):
+			fr.append(mi)
+		fr.sort_custom(func(a, b): return String(a.name) < String(b.name))
+		var meshes: Array = []
+		for mi in fr:
+			_pixel(mi)
+			meshes.append((mi as MeshInstance3D).mesh)
+		if meshes.size() > 1:
+			flow_frames[k] = meshes
+			flow_cells[k] = []
+			flow_idx[k] = -1
+		r.free()
+
+
+func _tick_flows(now: float) -> void:
+	for k in flow_frames:
+		var fr: Array = flow_frames[k]
+		var i := int(now / float(FLOW[k][1])) % fr.size()
+		if i == flow_idx[k]:
+			continue
+		flow_idx[k] = i
+		var live: Array = []
+		for mi in flow_cells[k]:
+			if is_instance_valid(mi):
+				(mi as MeshInstance3D).mesh = fr[i]
+				live.append(mi)
+		flow_cells[k] = live
 
 
 ## 예전(자연 에셋) 블록 이름 → 도트 블록 이름 (저장된 바닥·가진 블록 옮기기)
@@ -583,6 +630,13 @@ func _set_floor(c: Vector2i, asset: String, save := true) -> void:
 		floor_nodes[c].queue_free()
 	n.position = Vector3(c.x, FLOOR_TOP - 1.0, c.y)   # 블록 glb 는 바닥이 기준점(0~1)
 	land_root.add_child(n)
+	if flow_frames.has(asset):
+		var ms: Array = n.find_children("*", "MeshInstance3D", true, false)
+		if n is MeshInstance3D:
+			ms.append(n)
+		if ms.size() > 0:
+			flow_cells[asset].append(ms[0])
+			ms[0].mesh = flow_frames[asset][maxi(flow_idx[asset], 0)]
 	floor_map[c] = asset
 	floor_nodes[c] = n
 	if save:
@@ -1427,6 +1481,7 @@ func _process(delta: float) -> void:
 	var ph := int(now * 2.0)
 	for i in lights.size():
 		lights[i].material_override = light_mats[(i + ph) % light_mats.size()]
+	_tick_flows(now)
 	# 굴뚝 연기
 	for i in smoke.size():
 		var f := fmod(now * 0.22 + float(i) / smoke.size(), 1.0)
