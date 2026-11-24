@@ -1517,7 +1517,7 @@ func _process(delta: float) -> void:
 		var left := 30 - int(ps / 60.0) % 30
 		var rdy: int = Save.orn_ready()
 		var hm := "%d시간 %d분" % [int(ps / 3600.0), int(ps / 60.0) % 60] if ps >= 3600 else "%d분" % int(ps / 60.0)
-		play_label.text = "플레이 %s · " % hm + ("오너먼트 %d개 받을 수 있어요" % rdy if rdy > 0 else "오너먼트까지 %d분" % left)
+		play_label.text = ("플레이 %s · " % hm + ("오너먼트 %d개 받을 수 있어요" % rdy if rdy > 0 else "오너먼트까지 %d분" % left)) if extra.orn_on() else "플레이 %s" % hm
 		if lofi_root and lofi_root.visible:
 			_lofi_paint()
 	if toast_t > 0:
@@ -2449,7 +2449,7 @@ func _lofi_paint() -> void:
 	var ps := int(float(Save.d.get("play_sec", 0.0)))
 	lofi_time.text = "%d:%02d:%02d" % [ps / 3600, (ps / 60) % 60, ps % 60]
 	lofi_work.text = "공방  +%d" % (int(Save.d.get("work_total", 0)) - lofi_start_jelly)
-	lofi_orn.text = "오너먼트까지  %d분" % (30 - (ps / 60) % 30)
+	lofi_orn.text = ("오너먼트까지  %d분" % (30 - (ps / 60) % 30)) if extra.orn_on() else ""
 
 
 ## 땅 편집 팔레트: 가진 블록만 + 맨 앞에 「블록 뽑기」

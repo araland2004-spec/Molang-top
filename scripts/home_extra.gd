@@ -5,6 +5,12 @@ extends Node
 const Boxes := preload("res://scripts/boxes.gd")
 const BOX_PRICE := 100
 const ORN_N := 10
+## 트리·오너먼트: 지금 집에선 끔 (나중에 크리스마스 집에서 이벤트로 켬 — H()["xmas"] = true 인 집)
+const ORN_ON := false
+
+
+func orn_on() -> bool:
+	return ORN_ON or bool(H().get("xmas", false))
 
 var main: Node3D
 var M: Dictionary          # home_models.json
@@ -146,7 +152,7 @@ func enter() -> void:
 	if not H()["events"].has("howto_in"):
 		H()["events"].append("howto_in")
 		Save.save()
-		say(["집 안이에요!", "트리를 누르면 오너먼트를 달고, 의자를 누르면 앉아요.", "「← 밖으로」를 누르면 다시 나가요."], func(): pass)
+		say(["집 안이에요!", "의자를 누르면 앉아요.", "「← 밖으로」를 누르면 다시 나가요."], func(): pass)
 
 
 func leave() -> void:
@@ -219,14 +225,16 @@ func _build_interior() -> void:
 	for it in zone_items("in"):
 		if is_put(it["id"]) and L.has(it["id"]):
 			interior.add_child(_placed(it["id"], L[it["id"]], Vector3.ZERO))
-	interior.add_child(Boxes.build(L["__tree"]))
+	if orn_on():
+		interior.add_child(Boxes.build(L["__tree"]))
 	interior.add_child(Boxes.build(L["__desk"]))
 	var sx := rx / 2
 	var sz := rz / 2
 	tree_pos = Vector3(M["TREE_AT"][0] * sx, 0, M["TREE_AT"][1] * sz)
-	_add_ornaments()
 	pile_pos = Vector3(M["DESK_AT"][0] * sx - 0.05, 0, M["DESK_AT"][1] * sz + 1.2)
-	_add_pile()
+	if orn_on():
+		_add_ornaments()
+		_add_pile()
 	var light := OmniLight3D.new()
 	light.light_color = Color(1.0, 0.85, 0.65)
 	light.omni_range = maxf(rx, rz) * 2.2
@@ -542,7 +550,7 @@ func tap(pos: Vector2) -> bool:
 		return true
 	if _tap_pet(pos):
 		return true
-	if inside:
+	if inside and orn_on():
 		for target in [[tree_pos + Vector3(0, main.FLOOR_TOP + 0.6, 0), "tree"], [pile_pos + Vector3(0, main.FLOOR_TOP + 0.2, 0), "pile"]]:
 			var w: Vector3 = target[0]
 			if not cam.is_position_behind(w) and cam.unproject_position(w).distance_to(pos) < 70:
@@ -1175,7 +1183,7 @@ func tutorial_pages() -> Array:
 		{"ic": "list", "t": "스테이지를 깨면", "b": "• 젤리: 처음 깰 때 40~150개 (5단계마다 더 많이), 다시 깨면 10개\n• 무한 모드에서 쓸 아이템을 가방에 받아요 (스테이지는 하루 " + str(Save.STAGE_DAILY) + "번)\n• 무한 모드 아이템이 열려요: " + ", ".join(unl) + "\n• 공방 수입 +0.1/분, 집 지붕·벽 색, 20단계엔 햄스터 친구"},
 		{"ic": "item_shake", "t": "무한 모드를 하면", "b": "• 판이 끝날 때 점수만큼 젤리 (하루 %d판까지): 1만 점 %d개 · 3만 점 %d개 · 10만 점 %d개 · 30만 점 %d개\n• 아이템은 종류마다 하루 3번 무료, 더 쓰려면 상점에서\n• 던진 숫자가 계속 합쳐지면 「연속」 배율(최대 ×5), 512·1024… 처음 만들 때마다 「기세」 +10%%\n  → 막 던지기보다 노려서 이어 가는 게 점수가 훨씬 커요" % [Save.ENDLESS_PAID, Save.endless_jelly(10000), Save.endless_jelly(30000), Save.endless_jelly(100000), Save.endless_jelly(300000)]},
 		{"ic": "shop", "t": "젤리는 여기에 써요", "b": "• 선물 상자 (100개): 가구가 나와요. 도감 16칸을 다 채우면 새 집을 지을 수 있어요\n• 블록 상자 (100개): 바닥 블록 + 땅을 넓힐 칸\n• 상점: 무한 모드 아이템\n• 상자는 옆으로 스와이프해서 열고, 「×10」으로 한 번에 10개도 돼요"},
-		{"ic": "decorate", "t": "꾸미고 오래 있으면", "b": "• 공방: 앱이 켜져 있으면 1분마다 젤리 (지금 %s개/분)\n• 편안함: 가구를 놓고 땅을 넓히고 펫과 살수록 올라가서 공방 수입이 최대 2배 (지금 %d/100)\n• 오너먼트: 30분마다 하나(하루 6개). 닦아 달면 젤리·무한 아이템·상자 열쇠 중 하나! 10개면 트리 완성 → 공방 +10%%\n• 펫 선물: 집에 있으면 20분마다 펫이 선물을 물어 와요 (하루 3번)\n\n이 안내는 설정 → 도움말에서 다시 볼 수 있어요." % [str(snappedf(Save.work_rate(), 0.1)), Save.comfort()]},
+		{"ic": "decorate", "t": "꾸미고 오래 있으면", "b": "• 공방: 앱이 켜져 있으면 1분마다 젤리 (지금 %s개/분)\n• 편안함: 가구를 놓고 땅을 넓히고 펫과 살수록 올라가서 공방 수입이 최대 2배 (지금 %d/100)\n• 펫 선물: 집에 있으면 20분마다 펫이 선물을 물어 와요 (하루 3번)\n\n이 안내는 설정 → 도움말에서 다시 볼 수 있어요." % [str(snappedf(Save.work_rate(), 0.1)), Save.comfort()]},
 	]
 
 
@@ -1373,7 +1381,10 @@ func open_book(tab := "in") -> void:
 	var tabs := HBoxContainer.new()
 	tabs.add_theme_constant_override("separation", 8)
 	v.add_child(tabs)
-	for tdef in [["in", "실내 장식"], ["out", "실외 장식"], ["tree", "트리 %d/10" % mini(int(H()["orn"]), ORN_N)]]:
+	var tdefs := [["in", "실내 장식"], ["out", "실외 장식"]]
+	if orn_on():
+		tdefs.append(["tree", "트리 %d/10" % mini(int(H()["orn"]), ORN_N)])
+	for tdef in tdefs:
 		var tb: Button = main._px_btn(tdef[1], main.C_YELLOW if tab == tdef[0] else main.C_CREAM, 20)
 		var tk: String = tdef[0]
 		tb.pressed.connect(func(): open_book(tk))
@@ -1937,60 +1948,53 @@ func open_tree() -> void:
 	_polish(int(H()["orn"]))
 
 
-## 오너먼트 닦기: 먼지 낀 오너먼트를 빙글빙글 문질러 닦으면 반짝! 하고 트리에 달림
+## 오너먼트 닦아 걸기: 3D 오너먼트를 문질러 닦고(바깥을 끌면 회전) 트리의 반짝이는 자리로 끌어다 걸어요
+## (올데이 인 크리스마스와 같은 방식 — scripts/orn3d.gd)
+const Orn3D := preload("res://scripts/orn3d.gd")
+
+
+func _orn_cols(o: Dictionary) -> Array:
+	var r = M["atlas"]["rects"].get(o["tex"], [0, 0, 8, 8, 0])
+	var img := (Boxes.atlas as Texture2D).get_image()
+	return [img.get_pixel(int(r[0]) + 2, int(r[1]) + 2), img.get_pixel(int(r[0]) + 5, int(r[1]) + 5)]
+
+
 func _polish(idx: int) -> void:
 	_close_sheet()
-	var o: Dictionary = M["ORN"][idx]
-	var ov := ColorRect.new()
-	ov.color = Color(0.06, 0.05, 0.1, 0.85)
-	ov.set_anchors_preset(Control.PRESET_FULL_RECT)
+	var ORN: Array = M["ORN"]
+	var o: Dictionary = ORN[idx]
+	var cols := _orn_cols(o)
+	var hung_cols: Array = []
+	for i in idx:
+		hung_cols.append(_orn_cols(ORN[i])[0])
+	var ov = Orn3D.new({
+		"n": o["n"], "a": cols[0], "b": cols[1], "pattern": idx % 4, "idx": idx,
+		"hung": idx, "hung_cols": hung_cols, "synth": main.synth_tone,
+		"quit": func(): main.hud_blocks.erase(sheet); sheet = null,
+		"done": func(grade: String, _sec: float): _orn_hung(o, grade),
+	})
 	ui.add_child(ov)
 	main.hud_blocks.append(ov)
 	sheet = ov
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	ov.add_child(center)
-	var v := VBoxContainer.new()
-	v.alignment = BoxContainer.ALIGNMENT_CENTER
-	v.add_theme_constant_override("separation", 16)
-	center.add_child(v)
-	var title: Label = main._label("%s 닦기 · 빙글빙글 문질러요" % o["n"], 28, Color.WHITE, true)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	v.add_child(title)
-	var canvas := PolishCanvas.new()
-	canvas.custom_minimum_size = Vector2(420, 420)
-	var r = M["atlas"]["rects"].get(o["tex"], [0, 0, 8, 8, 0])
-	var img := (Boxes.atlas as Texture2D).get_image()
-	canvas.col = img.get_pixel(int(r[0]) + 2, int(r[1]) + 2)
-	canvas.col2 = img.get_pixel(int(r[0]) + 5, int(r[1]) + 5)
-	canvas.level = mini(3, idx / 5 + 1)
-	v.add_child(canvas)
-	var prog: Label = main._label("0%", 24, Color.WHITE, true)
-	prog.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	v.add_child(prog)
-	var later: Button = main._px_btn("나중에", main.C_CREAM, 20)
-	later.pressed.connect(_close_sheet)
-	v.add_child(later)
-	canvas.progressed.connect(func(f: float): prog.text = "%d%%" % int(f * 100))
-	canvas.done.connect(func():
-		main.synth_tone(880, 1760, 0.3, 0.12)
-		title.text = "반짝! 트리에 달아요"
-		await get_tree().create_timer(0.8).timeout
-		H()["orn"] = int(H()["orn"]) + 1
-		Save.orn_hung()
-		var fairies: Array = H()["fairies"]
-		var fname: String = str(o.get("f", "요정")) + ("" if int(H()["trees"]) == 0 else " %d세" % (int(H()["trees"]) + 1))
-		fairies.append({"name": fname})
-		var done_tree := int(H()["orn"]) >= ORN_N
-		if done_tree:
-			H()["trees"] = int(H()["trees"]) + 1
-		Save.save()
-		_close_sheet()
-		spawn_pets()
-		if inside:
-			after_deco()
-		main.toast("요정 「%s」%s 태어났어요!" % [fname, _josa(fname, "이", "가").substr(fname.length())])
-		_orn_reward(done_tree))
+
+
+func _orn_hung(o: Dictionary, grade: String) -> void:
+	main.hud_blocks.erase(sheet)
+	sheet = null
+	H()["orn"] = int(H()["orn"]) + 1
+	Save.orn_hung()
+	var fairies: Array = H()["fairies"]
+	var fname: String = str(o.get("f", "요정")) + ("" if int(H()["trees"]) == 0 else " %d세" % (int(H()["trees"]) + 1))
+	fairies.append({"name": fname})
+	var done_tree := int(H()["orn"]) >= ORN_N
+	if done_tree:
+		H()["trees"] = int(H()["trees"]) + 1
+	Save.save()
+	spawn_pets()
+	if inside:
+		after_deco()
+	main.toast("닦기 %s · 요정 「%s」%s 태어났어요!" % [grade, fname, _josa(fname, "이", "가").substr(fname.length())])
+	_orn_reward(done_tree)
 
 
 ## 오너먼트를 달면 보상 하나 고르기 (젤리 50 · 무한 아이템 1개 · 선물 상자 열쇠)
