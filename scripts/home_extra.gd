@@ -2804,6 +2804,11 @@ const FURN_GLB := "res://assets/house/inside_stage01.glb"
 const FURN_OF := {"sofa": ["armrest"], "shelf": ["chest"], "table": ["table", "stool1"], "plant": ["plant_grp"],
 	"lamp": ["disp_grp"], "rug": ["rug.001"]}
 var _furn_scene: Node3D
+## 1단계 집 기본 배치 [x, z, 회전(90°단위)] — 문(앞벽 왼쪽, x≈-1.6) 앞은 비워 둠
+const FURN_AT := {
+	"bed": [-2.2, -2.2, 0], "shelf": [-0.4, -2.8, 0], "plant": [2.65, -2.65, 0], "lamp": [2.8, 0.9, 3],
+	"sofa": [-2.55, 0.3, 1], "table": [0.7, 0.3, 0], "rug": [0.6, 0.4, 0],
+}
 
 
 ## 가구 모델 하나: 바닥 가운데가 (0,0,0) 이 되게 맞춰서 돌려줘요 (없으면 null)
@@ -2861,6 +2866,8 @@ func _placed(id: String, boxes: Array, off: Vector3) -> Node3D:
 	var c := _box_center(boxes)
 	if not (pz is Array):
 		pz = [c.x, c.y, 0]      # 아직 안 옮긴 가구도 받침을 둬요 (벤치 앉는 자리·끌기)
+		if fm != null and FURN_AT.has(id):
+			pz = FURN_AT[id]
 	var piv := Node3D.new()
 	piv.position = Vector3(float(pz[0]), 0, float(pz[1]))
 	piv.rotation.y = int(pz[2]) * PI / 2
@@ -2890,7 +2897,9 @@ func start_moving(id: String) -> void:
 		H()["put"][id] = true
 		# 처음 놓는 건 원래 정해진 자리가 아니라 몰랑이 앞(집 안이면 방 가운데 쪽)에 → 바닥을 눌러 옮겨요
 		var pp: Vector3 = main.player.position
-		if inside:
+		if inside and _lvl_key() == "in1" and FURN_AT.has(id):
+			_set_pos(id, FURN_AT[id][0], FURN_AT[id][1], FURN_AT[id][2])      # 기본 자리 (문 앞은 피해서)
+		elif inside:
 			_set_pos(id, clampf(snappedf(pp.x, 0.2), -room.x + 0.5, room.x - 0.5), clampf(snappedf(pp.z - 0.8, 0.2), -room.y + 0.5, room.y - 0.5), 0)
 		else:
 			_set_pos(id, snappedf(pp.x + 0.75, 0.25), snappedf(pp.z + 0.5, 0.25), 0)
