@@ -437,18 +437,10 @@ func _process(_dt: float) -> void:
 				(w[0] as MeshInstance3D).visible = on
 		for pp in posts:
 			(pp[0] as Node3D).visible = vis.get(pp[1], true) or vis.get(pp[2], true)
-		# 창 빛: 창이 있는 벽이 보일 때(반대편 뷰)만 빛기둥·먼지, 벽이 숨은 기본 뷰에선 바닥에 떨어진 빛만 은은하게 (공중에 뜬 빛기둥 없이 깔끔하게)
-		var to_cam: Vector3 = main.cam.global_transform.basis.z
-		for wf in win_fx:
+		for wf in win_fx:       # 창문 빛줄기는 그 창문이 있는 벽이 보일 때만 (반대편으로 돌렸을 때)
 			var won: bool = vis.get(wf["dir"], true)
-			(wf["shaft_mi"] as Node3D).visible = won
-			(wf["dust_n"] as Node3D).visible = won
-			if won and wf.has("axis"):
-				var ax: Vector3 = wf["axis"]
-				var zz := (to_cam - ax * to_cam.dot(ax))
-				if zz.length() > 0.01:
-					zz = zz.normalized()
-					(wf["shaft_mi"] as Node3D).basis = Basis(ax.cross(zz), ax, zz)
+			for nd in wf["nodes"]:
+				(nd as Node3D).visible = won
 		for rp in roof_parts:
 			# 지붕: 카메라 쪽 경사면·서까래는 숨기고 반대쪽만 남김 (가운데 용마루는 위에서 가리니까 숨김)
 			var d: Vector3 = rp[1]
@@ -3789,7 +3781,7 @@ func _node_aabb(root: Node3D) -> AABB:
 var lamp_light: OmniLight3D
 var lamp_mat: BaseMaterial3D
 var room_light: OmniLight3D
-var win_fx: Array = []      # 창마다 {dir, wc, tan, hw, hh, slope, shaft_mi, patch_mi, dust_n, glass, shaft, patch, spot, dust} — 창이 있는 벽이 숨어도(기본 뷰) 빛은 보여요
+var win_fx: Array = []      # {dir, nodes:[...], glass:[mats], shaft:mat, patch:mat, spot, dust}
 
 const SHAFT_SHADER := """
 shader_type spatial;
@@ -3799,10 +3791,11 @@ uniform float strength = 0.3;
 varying vec3 wp;
 void vertex() { wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz; }
 void fragment() {
-	float edge = smoothstep(0.0, 0.35, UV.x) * smoothstep(1.0, 0.65, UV.x);
-	float along = mix(1.0, 0.3, UV.y) * smoothstep(0.0, 0.08, UV.y) * smoothstep(1.0, 0.85, UV.y);
-	float dust = 0.9 + 0.1 * sin(wp.x * 5.0 + TIME * 0.5) * sin(wp.y * 6.0 - TIME * 0.4);
-	ALBEDO = col * strength * 1.6 * edge * along * dust;
+	float edge = smoothstep(0.0, 0.3, UV.x) * smoothstep(1.0, 0.7, UV.x);
+	float along = mix(1.0, 0.35, UV.y) * smoothstep(0.0, 0.06, UV.y);
+	float face = pow(abs(dot(NORMAL, VIEW)), 1.4);
+	float dust = 0.82 + 0.18 * sin(wp.x * 7.0 + TIME * 0.6) * sin(wp.y * 9.0 - TIME * 0.45) * sin(wp.z * 6.0 + TIME * 0.3);
+	ALBEDO = col * strength * edge * along * face * dust;
 }
 """
 const PATCH_SHADER := """
@@ -3819,6 +3812,7 @@ void fragment() {
 
 func _build_window_fx(m: Node3D) -> void:
 	var inv := m.global_transform.affine_inverse()
+	var fy := interior.global_position.y + 0.015
 	var sh := Shader.new()
 	sh.code = SHAFT_SHADER
 	var ph := Shader.new()
@@ -3845,28 +3839,78 @@ func _build_window_fx(m: Node3D) -> void:
 		var tan_v := Vector3(-dir.z, 0, dir.x)
 		var hw := absf(ext.dot(tan_v.abs())) * 0.5 * 0.8
 		var hh := ext.y * 0.5 * 0.8
+		var u := tan_v * hw
+		var v := Vector3.UP * hh
+		# 빛 방향: 창에서 방 안쪽으로, 비스듬히 아래로 (조금 옆으로)
+		# 두 창 빛이 방 한가운데서 겹치지 않게: 창이 치우친 벽 끝 쪽으로 기울이고, 조금 더 가파르게(짧게)
+		var wl := interior.to_local(wc)
+		var lean := signf(tan_v.dot(Vector3(wl.x, 0, wl.z)))
+		if lean == 0.0:
+			lean = 1.0
+		var d := (-dir + Vector3(0, -1.0, 0) + tan_v * lean * 0.3).normalized()
+		var top := [wc - u + v, wc + u + v, wc + u - v, wc - u - v]   # 창 네 모서리 (시계 방향)
+		var bot: Array = []
+		for p in top:
+			bot.append(p + d * (((p as Vector3).y - fy) / -d.y))
+		var nodes: Array = []
+		# 빛기둥: 네 옆면 (UV.x 가로, UV.y 창→바닥)
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		for k in 4:
+			var a: Vector3 = interior.to_local(top[k])
+			var b: Vector3 = interior.to_local(top[(k + 1) % 4])
+			var c: Vector3 = interior.to_local(bot[(k + 1) % 4])
+			var e: Vector3 = interior.to_local(bot[k])
+			var nrm := (b - a).cross(e - a).normalized()
+			for q in [[a, Vector2(0, 0)], [b, Vector2(1, 0)], [c, Vector2(1, 1)], [a, Vector2(0, 0)], [c, Vector2(1, 1)], [e, Vector2(0, 1)]]:
+				st.set_normal(nrm)
+				st.set_uv(q[1])
+				st.add_vertex(q[0])
 		var shaft := MeshInstance3D.new()
+		shaft.mesh = st.commit()
 		shaft.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		var smat := ShaderMaterial.new()
 		smat.shader = sh
 		shaft.material_override = smat
 		interior.add_child(shaft)
+		nodes.append(shaft)
+		# 바닥에 떨어진 창문 모양 빛
+		var st2 := SurfaceTool.new()
+		st2.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var f0: Vector3 = interior.to_local(bot[0])
+		var f1: Vector3 = interior.to_local(bot[1])
+		var f2: Vector3 = interior.to_local(bot[2])
+		var f3: Vector3 = interior.to_local(bot[3])
+		for q in [[f0, Vector2(0, 0)], [f1, Vector2(1, 0)], [f2, Vector2(1, 1)], [f0, Vector2(0, 0)], [f2, Vector2(1, 1)], [f3, Vector2(0, 1)]]:
+			st2.set_normal(Vector3.UP)
+			st2.set_uv(q[1])
+			st2.add_vertex(q[0])
 		var patch := MeshInstance3D.new()
+		patch.mesh = st2.commit()
 		patch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		var pmat := ShaderMaterial.new()
 		pmat.shader = ph
 		patch.material_override = pmat
 		interior.add_child(patch)
-		# 스포트라이트: 창 뒤 멀리서 거의 평행하게 → 빛기둥과 같은 각도·창 크기만큼만 비춰요 (한가운데로 몰리지 않게)
+		nodes.append(patch)
+		# 약한 스포트라이트: 창 밖에서 안으로 (벽·가구에도 빛이 묻게)
 		var spot := SpotLight3D.new()
 		spot.shadow_enabled = false
+		spot.spot_angle = 32.0
+		spot.spot_range = 4.5
+		spot.spot_attenuation = 0.8
 		interior.add_child(spot)
+		spot.global_position = wc - d * 0.6
+		spot.look_at(wc + d, Vector3.UP if absf(d.dot(Vector3.UP)) < 0.98 else Vector3.FORWARD)
+		nodes.append(spot)
 		# 빛 속을 떠다니는 먼지
 		var dust := CPUParticles3D.new()
 		dust.amount = 16
 		dust.lifetime = 7.0
 		dust.preprocess = 7.0
 		dust.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+		var mid: Vector3 = (wc + ((bot[0] + bot[1] + bot[2] + bot[3]) as Vector3) / 4.0) * 0.5
+		dust.emission_box_extents = Vector3(hw * 0.8, hh * 0.9 + 0.3, 0.45)
 		dust.direction = Vector3.UP
 		dust.spread = 180.0
 		dust.gravity = Vector3(0, 0.004, 0)
@@ -3885,74 +3929,10 @@ func _build_window_fx(m: Node3D) -> void:
 		dq.material = dm
 		dust.mesh = dq
 		interior.add_child(dust)
-		win_fx.append({"dir": dir, "wc": wc, "tan": tan_v, "hw": hw, "hh": hh, "slope": -1.0,
-			"shaft_mi": shaft, "patch_mi": patch, "dust_n": dust,
-			"glass": glass, "shaft": smat, "patch": pmat, "spot": spot, "dust": dm})
-
-
-## 창 빛 모양: slope = 내려가는 기울기 (한낮 0.85 → 노을 0.4, 해가 낮을수록 방 깊숙이 길게)
-func _shape_window(wf: Dictionary, slope: float) -> void:
-	if absf(float(wf["slope"]) - slope) < 0.03:
-		return
-	wf["slope"] = slope
-	var dir: Vector3 = wf["dir"]
-	var tan_v: Vector3 = wf["tan"]
-	var wc: Vector3 = wf["wc"]
-	var u: Vector3 = tan_v * float(wf["hw"])
-	var v := Vector3.UP * float(wf["hh"])
-	var fy := interior.global_position.y + 0.015
-	# 창마다 방 안쪽으로 비스듬히 (처음 느낌 그대로) — 단 방 가운데 쪽이 아니라 창이 치우친 쪽(벽 끝 쪽)으로 살짝 기울여서
-	# 두 창의 빛이 한가운데서 겹치지 않게
-	var lc := interior.to_local(wc)
-	var lean := signf(tan_v.dot(Vector3(lc.x, 0, lc.z)))
-	if lean == 0.0:
-		lean = 1.0
-	var d := (-dir + Vector3(0, -slope, 0) + tan_v * lean * 0.35).normalized()
-	var lim := maxf(room.x, room.y) * 2.0 - 0.1          # 너무 낮은 해: 반대편 벽 너머로 안 나가게 길이 제한
-	var top := [wc - u + v, wc + u + v, wc + u - v, wc - u - v]
-	var bot: Array = []
-	for p in top:
-		bot.append(p + d * minf(((p as Vector3).y - fy) / -d.y, lim))
-	# 빛기둥: 창 하나에 한 줄기 — 빛 방향 축을 따라 놓인 판 하나를 카메라 쪽으로 돌려서(_process) 깔끔하게 한 갈래로
-	var fc: Vector3 = ((bot[0] + bot[1] + bot[2] + bot[3]) as Vector3) / 4.0
-	var length := wc.distance_to(fc)
-	var w0 := float(wf["hw"])
-	var w1 := w0 * 1.15
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var q0 := Vector3(-w0, 0, 0)
-	var q1 := Vector3(w0, 0, 0)
-	var q2 := Vector3(w1, -length, 0)
-	var q3 := Vector3(-w1, -length, 0)
-	for q in [[q0, Vector2(0, 0)], [q1, Vector2(1, 0)], [q2, Vector2(1, 1)], [q0, Vector2(0, 0)], [q2, Vector2(1, 1)], [q3, Vector2(0, 1)]]:
-		st.set_normal(Vector3.BACK)
-		st.set_uv(q[1])
-		st.add_vertex(q[0])
-	var smi := wf["shaft_mi"] as MeshInstance3D
-	smi.mesh = st.commit()
-	smi.position = interior.to_local(wc)
-	wf["axis"] = -d             # 판의 +Y (창 쪽) — 바닥 쪽이 -Y
-	var st2 := SurfaceTool.new()
-	st2.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var f: Array = []
-	for p in bot:
-		f.append(interior.to_local(p) + Vector3(0, 0, 0))
-	for q in [[f[0], Vector2(0, 0)], [f[1], Vector2(1, 0)], [f[2], Vector2(1, 1)], [f[0], Vector2(0, 0)], [f[2], Vector2(1, 1)], [f[3], Vector2(0, 1)]]:
-		st2.set_normal(Vector3.UP)
-		st2.set_uv(q[1])
-		st2.add_vertex(q[0])
-	(wf["patch_mi"] as MeshInstance3D).mesh = st2.commit()
-	var spot := wf["spot"] as SpotLight3D       # 처음처럼 창 바로 밖에서 안으로 은은하게
-	spot.global_position = wc - d * 0.6
-	spot.look_at(wc + d, Vector3.UP)
-	spot.spot_range = 4.5
-	spot.spot_angle = 30.0
-	spot.spot_attenuation = 0.8
-	var dust := wf["dust_n"] as CPUParticles3D
-	var mid: Vector3 = (wc + ((bot[0] + bot[1] + bot[2] + bot[3]) as Vector3) / 4.0) * 0.5
-	dust.global_position = mid
-	dust.emission_box_extents = Vector3(float(wf["hw"]) * 0.8, float(wf["hh"]) * 0.9 + 0.3, 0.45)
-	dust.look_at(mid + Vector3(d.x, 0, d.z), Vector3.UP)
+		dust.global_position = mid
+		dust.look_at(mid + Vector3(d.x, 0, d.z), Vector3.UP)
+		nodes.append(dust)
+		win_fx.append({"dir": dir, "nodes": nodes, "glass": glass, "shaft": smat, "patch": pmat, "spot": spot, "dust": dm})
 
 
 ## 집 안 시간별 빛: main._update_mood() 가 집 안일 때 불러요 (s = 지금 하늘)
@@ -3967,15 +3947,13 @@ func interior_mood(s: Dictionary) -> void:
 		lamp_mat.emission_energy_multiplier = lerpf(0.5, 1.4, night)
 	if room_light:
 		room_light.light_energy = lerpf(0.15, 0.0, night)
-	# 바깥 하늘: 낮엔 하늘빛, 노을엔 노을빛, 밤엔 푸른빛
-	var dusk: float = s.get("dusk", 0.0) * (1.0 - night * 0.7)
+	# 바깥 하늘: 낮엔 하늘빛, 밤엔 푸른빛
 	var sky: Color = (s["bot"] as Color).lerp(s["top"], 0.4)
-	var outside := sky.lerp(Color(0.6, 0.82, 1.0), 0.35 * (1.0 - night) * (1.0 - dusk)).lerp(Color(0.18, 0.34, 0.78), night * 0.8)
-	var beam := Color(1.0, 0.93, 0.78).lerp(Color(1.0, 0.55, 0.28), dusk).lerp(Color(0.38, 0.58, 1.0), night)    # 햇빛 → 노을 → 달빛
-	var bs := lerpf(0.3, 0.5, night) + 0.2 * dusk
-	var slope := lerpf(lerpf(1.0, 0.7, dusk), 1.0, night)         # 노을엔 해가 낮아 조금 더 길게 (겹치지 않을 만큼만)
+	var outside := sky.lerp(Color(0.6, 0.82, 1.0), 0.35 * (1.0 - night)).lerp(Color(0.18, 0.34, 0.78), night * 0.8)
+	var dusk: float = s.get("dusk", 0.0) * (1.0 - night * 0.7)
+	var beam := Color(1.0, 0.93, 0.78).lerp(Color(1.0, 0.58, 0.3), dusk).lerp(Color(0.38, 0.58, 1.0), night)    # 햇빛 → 노을 → 달빛
+	var bs := lerpf(0.2, 0.5, night) + 0.15 * dusk
 	for wf in win_fx:
-		_shape_window(wf, slope)
 		for g in wf["glass"]:
 			var gm := g as BaseMaterial3D
 			gm.emission = outside
@@ -3984,8 +3962,8 @@ func interior_mood(s: Dictionary) -> void:
 		(wf["shaft"] as ShaderMaterial).set_shader_parameter("col", Vector3(beam.r, beam.g, beam.b))
 		(wf["shaft"] as ShaderMaterial).set_shader_parameter("strength", bs)
 		(wf["patch"] as ShaderMaterial).set_shader_parameter("col", Vector3(beam.r, beam.g, beam.b))
-		(wf["patch"] as ShaderMaterial).set_shader_parameter("strength", bs * lerpf(1.2, 0.7, night))
+		(wf["patch"] as ShaderMaterial).set_shader_parameter("strength", bs * 1.3)
 		var sp := wf["spot"] as SpotLight3D
 		sp.light_color = beam
-		sp.light_energy = lerpf(0.5, 0.9, night) + 0.3 * dusk
+		sp.light_energy = lerpf(0.5, 0.9, night)
 		(wf["dust"] as StandardMaterial3D).albedo_color = Color(beam.r, beam.g, beam.b, lerpf(0.35, 0.6, night))
