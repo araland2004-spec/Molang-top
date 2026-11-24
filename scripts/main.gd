@@ -7,7 +7,8 @@ extends Node3D
 const NATURE_GLB := "res://assets/nature/Nature_Assets.glb"
 const NATURE_LIST := "res://data/nature_assets.json"
 const PROP_SCALE := 2.13   # 자연 에셋 블록(약 0.47)이 한 칸을 채우는 배율 — 장식도 같은 배율
-const COTTAGE := "res://assets/house/cottage.glb"
+const COTTAGE := "res://assets/house/cottage.glb"   # 예전 꼬마집 (안 씀)
+const HOUSE_GLBS := ["res://assets/house/house1.glb", "res://assets/house/house2.glb"]   # 1번째 집 · 2번째 집부터
 const PLAYER_SCENE := "res://scenes/player.tscn"
 const DATA_PATH := "res://data/mollang_data.json"
 const SAVE_PATH := "user://home3.json"   # ground_test 자연 에셋 바닥부터 새로
@@ -17,9 +18,12 @@ const X1 := 7
 const Z0 := -6
 const Z1 := 8
 const HOUSE_S := 1.3                       # 웹 버전 꼬마집 크기
-const HOUSE_BOX0 := Rect2(-1.45, -1.35, 2.9, 2.75)   # 몰랑이·햄스터가 못 들어가는 집 자리 (x, z), 집이 (0,0) 칸일 때
+var HOUSE_BOX0 := Rect2(-1.45, -1.35, 2.9, 2.75)   # 몰랑이·햄스터가 못 들어가는 집 자리 (x, z), 집이 (0,0) 칸일 때
 var HOUSE_BOX := HOUSE_BOX0                        # 지금 집 자리 (집을 옮기면 같이 옮겨짐)
 var house_cell := Vector2i.ZERO                     # 집 가운데 칸 (Save.home()["house_at"])
+var house_door := Vector3(0.45, 0, 1.95)            # 집 (0,0) 기준 문 앞 자리 (모델마다 다름)
+var house_emit: Array = []                          # 집 모델의 빛나는 재질
+var house_lights: Array = []                        # 모델 안 등불 [OmniLight3D, 원래 세기]
 var house_root: Node3D                              # 집 + 처마 전구 + 문 앞 등불을 한꺼번에 옮기는 뿌리
 var street_lamps: Array = []                        # [칸, [노드들]] — 내 땅이 아니면 숨김
 const HomeExtra := preload("res://scripts/home_extra.gd")
@@ -327,8 +331,8 @@ func _spawn(asset: String) -> Node3D:
 ## 도트가 뭉개지지 않게 최근접 필터
 ## 집 모양 고르기(웹 PARTS와 같게): 단계를 깰수록 지붕·벽 색이 열려요. [이름, 필요 단계, 색(없으면 원래 색)]
 const PARTS := {
-	"roof": {"name": "지붕", "mats": ["roof_tiles", "roof_edge"], "list": [["빨간 기와", 0, ""], ["숲속 초록", 6, "#4f9a5a"], ["나무 너와", 14, "#9a6a43"], ["바다 파랑", 26, "#4a78c8"]]},
-	"wall": {"name": "벽", "mats": ["wall_front", "wall_back", "wall_side", "wall_plain", "gable"], "list": [["반목조", 0, ""], ["빨간 벽돌", 10, "#c9624e"], ["통나무", 18, "#a87a52"], ["민트 회벽", 30, "#8fd6c0"]]},
+	"roof": {"name": "지붕", "mats": ["roof_tiles", "roof_edge", "roof_shingle", "roof_ridge"], "list": [["빨간 기와", 0, ""], ["숲속 초록", 6, "#4f9a5a"], ["나무 너와", 14, "#9a6a43"], ["바다 파랑", 26, "#4a78c8"]]},
+	"wall": {"name": "벽", "mats": ["wall_front", "wall_back", "wall_side", "wall_plain", "gable", "wood_wall", "cream_siding", "cream_wall"], "list": [["반목조", 0, ""], ["빨간 벽돌", 10, "#c9624e"], ["통나무", 18, "#a87a52"], ["민트 회벽", 30, "#8fd6c0"]]},
 }
 const TINT_SHADER := preload("res://shaders/tint.gdshader")
 
@@ -603,25 +607,7 @@ func _swap_floor(c: Vector2i, asset: String) -> void:
 
 
 func _build_cottage() -> void:
-	var ps := load(COTTAGE) as PackedScene
-	if ps == null:
-		return
-	cottage = ps.instantiate() as Node3D
-	house_root = Node3D.new()
-	add_child(house_root)
-	# 웹 버전처럼: 모델 (-.25, .25, -.25) 을 바닥 가운데로, 1.3배
-	cottage.scale = Vector3.ONE * HOUSE_S
-	cottage.position = Vector3(0.25 * HOUSE_S, FLOOR_TOP - 0.25 * HOUSE_S, 0.25 * HOUSE_S)
-	house_root.add_child(cottage)
-	_pixel(cottage)
-	# 받침 섬·마당 장식(나무·울타리·바위·꽃)·연기 모델은 숨김 — 웹 버전 새 집과 같게
-	for nm in ["base", "tree_fr", "tree_bl", "tree_pine", "fence", "rock", "flower_f1", "flower_f2", "flower_l1", "flower_l2",
-			"fx_smoke_1", "fx_smoke_2", "fx_smoke_3", "fx_smoke_4"]:
-		var n := cottage.find_child(nm, true, false)
-		if n is Node3D:
-			n.visible = false
-	apply_house_look()
-	_add_lights()
+	_build_house_model()
 	_add_lamps()
 	var ha = Save.home().get("house_at")
 	if ha is Array and ha.size() == 2:
@@ -642,6 +628,83 @@ func _build_cottage() -> void:
 
 
 ## 길가 등불 + 문 앞 불빛 + 반딧불이: 해 질 녘부터 켜짐
+## 집 모델: 1번째 집은 house1, 새 집(2번째~)은 house2. 받침 땅·연기는 숨기고 3칸 폭에 맞춰 내 땅 위에 세워요.
+func _build_house_model() -> void:
+	var no := int(Save.home().get("no", 1))
+	var ps := load(HOUSE_GLBS[clampi(no - 1, 0, HOUSE_GLBS.size() - 1)]) as PackedScene
+	if ps == null:
+		return
+	cottage = ps.instantiate() as Node3D
+	if house_root == null:
+		house_root = Node3D.new()
+		add_child(house_root)
+	var keep_at := house_root.position
+	house_root.position = Vector3.ZERO
+	house_root.add_child(cottage)
+	_pixel(cottage)
+	for n in cottage.find_children("*", "Node3D", true, false):
+		var nm := String(n.name)
+		if nm.begins_with("base") or nm.begins_with("smoke"):
+			(n as Node3D).visible = false
+	# 크기·자리 맞추기
+	var box := _vis_aabb(cottage)
+	var s := 3.0 / maxf(box.size.x, box.size.z)
+	cottage.scale = Vector3.ONE * s
+	box = _vis_aabb(cottage)
+	var c := box.get_center()
+	cottage.position += Vector3(-c.x, FLOOR_TOP - box.position.y - 0.01, -c.z)
+	box = _vis_aabb(cottage)
+	HOUSE_BOX0 = Rect2(box.position.x + 0.05, box.position.z + 0.05, box.size.x - 0.1, box.size.z - 0.1)
+	var door := cottage.find_child("door_panel", true, false) as Node3D
+	if door == null:
+		door = cottage.find_child("door", true, false) as Node3D
+	house_door = Vector3(door.global_position.x if door else 0.0, 0, box.end.z + 0.4)
+	# 창문·문·등불 빛나는 재질: 낮엔 은은하게, 밤엔 환하게 (낮에 벽이 하얗게 뜨지 않게)
+	house_emit.clear()
+	for mi in cottage.find_children("*", "MeshInstance3D", true, false):
+		var m3 := mi as MeshInstance3D
+		for k in m3.mesh.get_surface_count():
+			var m = m3.mesh.surface_get_material(k)
+			if m is BaseMaterial3D and (m as BaseMaterial3D).emission_enabled and not house_emit.has(m):
+				house_emit.append(m)
+	# 모델 안 등불 (밤에만 켜지게)
+	house_lights.clear()
+	for l in cottage.find_children("*", "Light3D", true, false):
+		var lt := l as Light3D
+		house_lights.append([lt, lt.light_energy])
+		lt.shadow_enabled = false
+	apply_house_look()
+	_add_lights()
+	house_root.position = keep_at
+
+
+func _vis_aabb(root: Node3D) -> AABB:
+	var box := AABB()
+	var first := true
+	for mi in root.find_children("*", "MeshInstance3D", true, false):
+		var m := mi as MeshInstance3D
+		if not m.is_visible_in_tree():
+			continue
+		var a: AABB = house_root.global_transform.affine_inverse() * m.global_transform * m.get_aabb()
+		box = a if first else box.merge(a)
+		first = false
+	return box
+
+
+## 새 집으로 바뀌면 모델만 갈아 끼움 (집 자리는 그대로)
+func rebuild_house() -> void:
+	if cottage:
+		cottage.free()
+	for m in lights:
+		if is_instance_valid(m):
+			m.queue_free()
+	lights.clear()
+	light_mats.clear()
+	_build_house_model()
+	place_house(house_cell, false)
+	_update_mood()
+
+
 func _add_lamps() -> void:
 	var wood := StandardMaterial3D.new()
 	wood.albedo_color = Color("#4a3426")
@@ -650,7 +713,7 @@ func _add_lamps() -> void:
 	post.material = wood
 	var head := BoxMesh.new()
 	head.size = Vector3(0.16, 0.16, 0.16)
-	for p in [Vector3(-1.1, 0, 4.2), Vector3(1.8, 0, 5.6), Vector3(-0.6, 0, 7.3), Vector3(1.6, 0, 2.2), Vector3(0.75, 0, 1.75)]:
+	for p in [Vector3(-1.1, 0, 4.2), Vector3(1.8, 0, 5.6), Vector3(-0.6, 0, 7.3), Vector3(1.6, 0, 2.2)]:   # 문 앞 등불은 집 모델에 있음
 		var at: Vector3 = p + Vector3(0, FLOOR_TOP, 0)
 		var door: bool = p == Vector3(0.75, 0, 1.75)
 		var par: Node3D = house_root if door and house_root else self
@@ -752,6 +815,11 @@ func _update_mood() -> void:
 	env.adjustment_contrast = lerpf(1.08, 1.1, night)
 	env.fog_light_color = (s["bot"] as Color).lerp(Color(0.06, 0.14, 0.16), 0.55 + 0.35 * night)
 	env.fog_density = lerpf(0.0, 0.018, night)
+	for em in house_emit:
+		(em as BaseMaterial3D).emission_energy_multiplier = lerpf(0.12, 1.3, night)
+	for hl in house_lights:
+		if is_instance_valid(hl[0]):
+			(hl[0] as Light3D).light_energy = minf(float(hl[1]), 1.5) * night
 	for l in lamps:
 		(l[0] as OmniLight3D).light_energy = lerpf(0.1, 1.1, night)
 		(l[1] as StandardMaterial3D).emission_energy_multiplier = lerpf(0.3, 3.2, night)
@@ -774,15 +842,16 @@ func _update_mood() -> void:
 
 ## 처마 끝 깜빡이는 크리스마스 전구
 func _add_lights() -> void:
-	var roof := cottage.find_child("roof", true, false) as Node3D
-	if roof == null:
-		return
 	var box := AABB()
 	var first := true
-	for mi in roof.find_children("*", "MeshInstance3D", true, false):
-		var a: AABB = (mi as MeshInstance3D).global_transform * (mi as MeshInstance3D).get_aabb()
-		box = a if first else box.merge(a)
-		first = false
+	for r in cottage.find_children("roof*", "Node3D", true, false):
+		var ms: Array = r.find_children("*", "MeshInstance3D", true, false)
+		if r is MeshInstance3D:
+			ms.append(r)
+		for mi in ms:
+			var a: AABB = house_root.global_transform.affine_inverse() * (mi as MeshInstance3D).global_transform * (mi as MeshInstance3D).get_aabb()
+			box = a if first else box.merge(a)
+			first = false
 	if first:
 		return
 	var cols := [Color("#ff5a5a"), Color("#ffd23a"), Color("#5fd36a"), Color("#5aa8ff"), Color("#ff8fd0")]
@@ -842,7 +911,7 @@ func add_blob_shadow(n: Node3D, radius: float, y_off := 0.035) -> MeshInstance3D
 
 func _make_player() -> void:
 	player = (load(PLAYER_SCENE) as PackedScene).instantiate() as Node3D
-	player.position = Vector3(0.6 + house_cell.x, FLOOR_TOP, 2.6 + house_cell.y)
+	player.position = Vector3(house_door.x + 0.5 + house_cell.x, FLOOR_TOP, house_door.z + 0.5 + house_cell.y)
 	add_child(player)
 	player_body = player.get_node_or_null("Body")
 	pivot = player.position

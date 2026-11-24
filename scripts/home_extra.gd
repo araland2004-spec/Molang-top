@@ -159,7 +159,7 @@ func leave() -> void:
 		interior.visible = false
 	main.set_outside_visible(true)
 	main.reset_walk_area()
-	main.player.position = Vector3(0.4 + main.house_cell.x, main.FLOOR_TOP, 2.1 + main.house_cell.y)
+	main.player.position = door() + Vector3(0, main.FLOOR_TOP, 0.15)
 	main.pivot = main.player.position
 	main.zoom = 15.0
 	main.path.clear()
@@ -574,7 +574,7 @@ const DOOR := Vector3(0.45, 0.0, 1.95)     # 문 앞 칸, 집이 (0,0) 칸일 �
 
 
 func door() -> Vector3:
-	return DOOR + Vector3(main.house_cell.x, 0, main.house_cell.y)
+	return main.house_door + Vector3(main.house_cell.x, 0, main.house_cell.y)
 
 
 func near_door() -> bool:
@@ -1909,6 +1909,7 @@ func move_house() -> void:
 	if inside:
 		leave()
 	after_deco()
+	main.rebuild_house()
 	main.refresh_names()
 	spawn_pets()
 	notice("새 집을 지었어요!", "%d번째 집이에요. 도감 %d권을 채우면 또 새 집을 지을 수 있어요." % [no + 1, no + 1], "좋아요", func(): start_move_flow())
