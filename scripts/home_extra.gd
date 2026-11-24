@@ -100,7 +100,7 @@ func rebuild_yard() -> void:
 				var n := cot.find_child(nm, true, false)
 				if n is Node3D:
 					# 예전 도트 나무·전나무·바위·꽃덤불은 안 씀 → 자연 에셋 모델로 직접 심어요 (NATURE)
-					n.visible = is_put(id) and not NATURE.has(id)
+					n.visible = is_put(id) and not NATURE.has(id) and id != "fence"     # 울타리는 새 모델로 섬 둘레에 (rebuild_fence)
 	# 심어 둔 자연 장식 (나무·버섯·바위): 칸마다 하나
 	var props: Dictionary = H()["props"]
 	prop_nodes.clear()
@@ -128,7 +128,8 @@ func rebuild_yard() -> void:
 			n.rotation.x = (float((h / 13) % 9) - 4.0) * 0.03     # 살짝 기울여서 자연스럽게
 		yard_root.add_child(n)
 		prop_nodes[key] = n
-	# 상자 모델 장식 (우체통·벤치·가로등)
+	rebuild_fence()
+	# 상자 모델 장식 (우체통·벤치·가로등) — 벤치는 새 모델(OUT_GLB)
 	for id in ["mailbox", "bench", "streetlamp"]:
 		if is_put(id) and M["items"]["out"].has(id):
 			yard_root.add_child(_placed(id, M["items"]["out"][id], Vector3(0, main.FLOOR_TOP, 0)))
@@ -2845,6 +2846,8 @@ const FURN_AT := {
 
 ## 가구 모델 하나: 바닥 가운데가 (0,0,0) 이 되게 맞춰서 돌려줘요 (없으면 null)
 func furn_model(id: String) -> Node3D:
+	if OUT_GLB.has(id):
+		return _out_model(id)
 	if not FURN_OF.has(id):
 		return null
 	if _furn_scene == null:
@@ -2890,7 +2893,7 @@ func furn_model(id: String) -> Node3D:
 
 
 func _placed(id: String, boxes: Array, off: Vector3) -> Node3D:
-	var fm: Node3D = furn_model(id) if (inside_zone(id) and _lvl_key() == "in1") else null
+	var fm: Node3D = furn_model(id) if ((inside_zone(id) and _lvl_key() == "in1") or OUT_GLB.has(id)) else null
 	var mi: Node3D = Boxes.build(boxes, off) if fm == null else fm
 	var pz = pos_of(id)
 	if not MOVABLE.has(id):
@@ -2907,7 +2910,7 @@ func _placed(id: String, boxes: Array, off: Vector3) -> Node3D:
 	piv.add_child(mi)
 	item_nodes[id] = piv
 	if id == "bench":
-		_add_bench_seat(piv, off.y)
+		_add_bench_seat(piv, off.y + (BENCH_SEAT_Y - 0.42 if fm != null else 0.0))
 	if id == move_id:
 		piv.scale = Vector3.ONE * 1.12
 		piv.create_tween().tween_property(piv, "scale", Vector3.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
@@ -4097,3 +4100,86 @@ func _box_tips() -> bool:
 			if tip("first_dup", ["같은 장식이 또 나왔어요.", "중복 3개를 모으면 도감에서 아직 없는 장식으로 바꿀 수 있어요."], func(): open_book("in" if inside else "out")):
 				return true
 	return false
+
+
+
+# ───────────────────────── 밖 장식 새 모델 (PixMesh glb) ─────────────────────────
+## 꾸미기 아이템 → [glb, 크기]. 바닥 가운데가 (0,0,0) 이 되게 맞춰 써요 (도감 그림·놓기 모두).
+const OUT_GLB := {"bench": ["res://assets/yard/bench.glb", 0.7], "fence": ["res://assets/yard/fence.glb", 0.5334]}
+const FENCE_H := 0.4              # 울타리 높이·두께 배율 (모델 1.875 × 0.4 ≈ 0.75칸)
+const BENCH_SEAT_Y := 0.44          # 새 벤치 앉는 판 윗면 높이 (모델 0.625 × 0.7)
+var _out_scenes := {}
+
+
+func _out_model(id: String) -> Node3D:
+	var path: String = OUT_GLB[id][0]
+	if not _out_scenes.has(path):
+		_out_scenes[path] = load(path)
+	var ps := _out_scenes[path] as PackedScene
+	if ps == null:
+		return null
+	var m := ps.instantiate() as Node3D
+	m.scale = Vector3.ONE * float(OUT_GLB[id][1])
+	var grp := Node3D.new()
+	grp.add_child(m)
+	main._pixel(grp)
+	return grp
+
+
+## 나무 울타리: 놓으면 섬 바깥 테두리 칸마다 한 칸짜리 울타리. 조각이 많아도 재질별로 한 덩어리로 합쳐서 그려요(가벼움).
+var fence_node: MeshInstance3D
+
+
+func rebuild_fence() -> void:
+	if is_instance_valid(fence_node):
+		fence_node.queue_free()
+	fence_node = null
+	if not is_put("fence"):
+		return
+	var ps := load(OUT_GLB["fence"][0]) as PackedScene
+	if ps == null:
+		return
+	var src := ps.instantiate() as Node3D
+	var parts: Array = []        # [Mesh, surface, Transform3D(모델 기준), Material]
+	for n in src.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		var t := Transform3D.IDENTITY
+		var p: Node = mi
+		while p != src and p != null:
+			t = (p as Node3D).transform * t
+			p = p.get_parent()
+		for i in mi.mesh.get_surface_count():
+			parts.append([mi.mesh, i, t, mi.get_active_material(i)])
+	var sc: float = OUT_GLB["fence"][1]
+	var tools := {}           # 재질 → SurfaceTool
+	var mats := {}
+	var y: float = main.FLOOR_TOP
+	for c in main.land_set:
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			if main.land_set.has(c + d):
+				continue
+			var out := Vector3(d.x, 0, d.y)
+			var pos := Vector3(c.x, y, c.y) + out * 0.42           # 칸 가장자리 바로 안쪽
+			# 한 칸 폭(가로)에 맞추고 높이는 0.75칸쯤으로 (가로만 살짝 늘려서 섬을 덜 가리게)
+			var b := Basis(Vector3.UP, atan2(float(d.x), float(d.y))) * Basis.from_scale(Vector3(sc, FENCE_H, FENCE_H))
+			var e := Transform3D(b, pos)
+			for pt in parts:
+				var key: Material = pt[3]
+				if not tools.has(key):
+					var st := SurfaceTool.new()
+					st.begin(Mesh.PRIMITIVE_TRIANGLES)
+					tools[key] = st
+					mats[key] = key
+				(tools[key] as SurfaceTool).append_from(pt[0], pt[1], e * (pt[2] as Transform3D))
+	src.free()
+	if tools.is_empty():
+		return
+	var am := ArrayMesh.new()
+	for k in tools:
+		var st := tools[k] as SurfaceTool
+		am = st.commit(am)
+		am.surface_set_material(am.get_surface_count() - 1, mats[k])
+	fence_node = MeshInstance3D.new()
+	fence_node.mesh = am
+	main._pixel(fence_node)
+	yard_root.add_child(fence_node)

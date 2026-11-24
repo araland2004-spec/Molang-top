@@ -2117,6 +2117,8 @@ func _on_tap(pos: Vector2) -> void:
 				Save.save()
 				_swap_floor(c, want)
 				Save.bump("floor")
+				if extra:
+					extra.rebuild_fence()      # 땅을 넓히면 울타리도 새 테두리로
 				_land_marks()
 				land_vis()
 				reset_walk_area()
