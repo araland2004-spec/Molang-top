@@ -1172,7 +1172,7 @@ func _update_mood() -> void:
 	env.fog_light_color = (s["bot"] as Color).lerp(Color(0.06, 0.14, 0.16), 0.55 + 0.35 * night)
 	env.fog_density = lerpf(0.0, 0.018, night)
 	for em in house_emit:
-		(em as BaseMaterial3D).emission_energy_multiplier = lerpf(0.35, 1.9, night * night)   # 낮엔 은은하게, 밤엔 창문이 환하게 빛나요
+		(em as BaseMaterial3D).emission_energy_multiplier = lerpf(0.35, 2.8, night * night)   # 낮엔 은은하게, 밤엔 창문이 환하게 빛나요
 	for hl in house_lights:
 		if is_instance_valid(hl[0]):
 			(hl[0] as Light3D).light_energy = minf(float(hl[1]), 0.7) * night
@@ -1191,7 +1191,12 @@ func _update_mood() -> void:
 	sky_mat.sky_horizon_color = s["bot"]
 	sky_mat.ground_horizon_color = (s["bot"] as Color).darkened(0.3)
 	sky_mat.ground_bottom_color = Color(0.12, 0.2, 0.14).lerp(Color(0.03, 0.07, 0.08), night)
-	env.glow_intensity = lerpf(0.0, 0.8, night)
+	env.glow_intensity = lerpf(0.0, 1.3, night)
+	env.glow_strength = lerpf(1.0, 1.35, night)
+	# 밤엔 큰 단계(4·5·6) 블룸도 켜서 창문 빛이 주변 벽·땅으로 넓게 번져요 (낮엔 꺼서 뿌옇지 않게)
+	env.set_glow_level(4, 1.0 * night)
+	env.set_glow_level(5, 0.85 * night)
+	env.set_glow_level(6, 0.5 * night)
 	for nm in nature_mats:
 		(nm as BaseMaterial3D).emission_energy_multiplier = lerpf(0.05, 0.9, night * night)   # 낮엔 블룸 끔 (밝은 바닥이 번져서 뿌옇게 됨)
 
