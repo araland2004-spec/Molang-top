@@ -418,13 +418,14 @@ func _layout() -> void:
 	var goal: Control = get_node("Goal")
 	goal.position = Vector2(x0 + mx, 190)
 	goal.size = Vector2(vs.x - mx * 2, 60)
-	var top_h := 270.0 if goal_row.visible else 200.0
-	var bottom_h := 200.0 if items_box.visible else 40.0
-	var avail := Vector2(vs.x - mx * 2 - 24, vs.y - top_h - bottom_h - 24)
+	# 판을 크게: 좌우 여백은 작게(12), 위는 정보 줄 바로 아래, 아래는 아이템 줄 바로 위에 붙여요 (남는 칸은 위로)
+	var top_h := 262.0 if goal_row.visible else 184.0
+	var bottom_h := 188.0 if items_box.visible else 28.0
+	var avail := Vector2(vs.x - 24, vs.y - top_h - bottom_h)
 	board_scale = minf(avail.x / GameCore.W, avail.y / GameCore.H)
 	var bw := GameCore.W * board_scale
 	var bh := GameCore.H * board_scale
-	board_area.position = Vector2(x0 + (vs.x - bw) / 2, top_h + maxf(0, (avail.y - bh) * 0.35))
+	board_area.position = Vector2(x0 + (vs.x - bw) / 2, top_h + maxf(0, avail.y - bh))
 	board_area.size = Vector2(bw, bh)
 	core.scale = Vector2.ONE * board_scale
 	items_box.position = Vector2(x0 + mx, vs.y - 180)
