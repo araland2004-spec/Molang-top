@@ -388,7 +388,7 @@ func _build_world() -> void:
 	env.background_mode = Environment.BG_CANVAS      # 뒤에 2D 하늘 그라데이션
 	# 환경광도 하늘에서: 윗면은 하늘색, 옆·아랫면은 땅색을 받아 은은한 색 차이 (HDRI 처럼)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_sky_contribution = 1.0
+	env.ambient_light_sky_contribution = 0.35     # 하늘색(파랑)이 그늘을 차갑게 물들이지 않게, 대부분은 아래 색으로
 	env.ambient_light_color = Color(0.9, 0.9, 1.0)
 	env.ambient_light_energy = 0.5
 	# ACES: 밝은 곳이 하얗게 날아가지 않고 대비가 살아남 (희뿌연 화면 개선)
@@ -406,7 +406,7 @@ func _build_world() -> void:
 	sk.sky_material = sky_mat
 	sk.radiance_size = Sky.RADIANCE_SIZE_64
 	env.sky = sk
-	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
+	env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED   # 유리·벽에 파란 하늘 반사 끔 (집 색이 차갑게 보였음)
 	# 블룸: 아주 밝은 것(창문·가로등·전구·반딧불·빛나는 풀)만 은은하게 번짐
 	env.glow_enabled = true
 	env.glow_intensity = 0.55
@@ -642,18 +642,32 @@ func _build_house_model() -> void:
 	house_root.position = Vector3.ZERO
 	house_root.add_child(cottage)
 	_pixel(cottage)
+	# 연기 모델만 숨김 (굴뚝 연기는 따로 움직이는 걸 씀). 받침 땅(마당·계단 앞 흙길)은 살려 둠
+	var bases: Array = []
 	for n in cottage.find_children("*", "Node3D", true, false):
 		var nm := String(n.name)
-		if nm.begins_with("base") or nm.begins_with("smoke"):
+		if nm.begins_with("smoke"):
 			(n as Node3D).visible = false
-	# 크기·자리 맞추기
+		elif nm.begins_with("base"):
+			bases.append(n)
+	# 크기: 받침 땅까지 3칸 폭에 맞춤
 	var box := _vis_aabb(cottage)
 	var s := 3.0 / maxf(box.size.x, box.size.z)
 	cottage.scale = Vector3.ONE * s
+	# 높이: 받침 땅 윗면이 블록 윗면보다 살짝 위 (아래 두께는 블록 속에 묻힘)
+	for b in bases:
+		b.visible = false
+	var body := _vis_aabb(cottage)
+	for b in bases:
+		b.visible = true
 	box = _vis_aabb(cottage)
 	var c := box.get_center()
-	cottage.position += Vector3(-c.x, FLOOR_TOP - box.position.y - 0.01, -c.z)
-	box = _vis_aabb(cottage)
+	cottage.position += Vector3(-c.x, FLOOR_TOP + 0.04 - body.position.y, -c.z)
+	for b in bases:
+		b.visible = false
+	box = _vis_aabb(cottage)      # 집 몸체 자리 (몰랑이가 못 들어가는 곳)
+	for b in bases:
+		b.visible = true
 	HOUSE_BOX0 = Rect2(box.position.x + 0.05, box.position.z + 0.05, box.size.x - 0.1, box.size.z - 0.1)
 	var door := cottage.find_child("door_panel", true, false) as Node3D
 	if door == null:
@@ -804,19 +818,19 @@ func _update_mood() -> void:
 	var s := _sky_now()
 	var night: float = s["night"]
 	# 낮: 따뜻한 햇빛 + 청록 그늘(밤과 같은 색 계열), 채도는 낮추고 그림자를 진하게 → 민트색이 형광처럼 뜨지 않게
-	sun.light_energy = lerpf(0.95, 0.15, night)
-	sun.light_color = Color(1.0, 0.9, 0.76).lerp(Color(0.45, 0.7, 0.85), night)
-	sun.shadow_opacity = lerpf(0.7, 0.45, night)
-	env.ambient_light_color = Color(0.45, 0.62, 0.72).lerp(Color(0.22, 0.42, 0.45), night)   # 밤: 짙은 청록
-	env.ambient_light_energy = lerpf(0.22, 0.8, night)   # 하늘(0.35배)에서 받는 환경광
+	# 낮: 따뜻한 햇빛 + 따뜻한 중간색 그늘 (집 모델 원래 색 그대로) / 밤: 달빛 청록이지만 디테일은 보이게
+	sun.light_energy = lerpf(0.68, 0.28, night)
+	sun.light_color = Color(1.0, 0.93, 0.82).lerp(Color(0.6, 0.75, 0.9), night)
+	env.ambient_light_color = Color(0.95, 0.9, 0.82).lerp(Color(0.42, 0.6, 0.66), night)
+	env.ambient_light_energy = lerpf(0.55, 0.95, night)
 	env.adjustment_enabled = true
-	env.adjustment_brightness = lerpf(1.0, 0.92, night)
-	env.adjustment_saturation = lerpf(1.18, 0.9, night)
-	env.adjustment_contrast = lerpf(1.08, 1.1, night)
+	env.adjustment_brightness = 1.0
+	env.adjustment_saturation = lerpf(1.0, 0.95, night)
+	env.adjustment_contrast = lerpf(1.0, 1.02, night)
 	env.fog_light_color = (s["bot"] as Color).lerp(Color(0.06, 0.14, 0.16), 0.55 + 0.35 * night)
 	env.fog_density = lerpf(0.0, 0.018, night)
 	for em in house_emit:
-		(em as BaseMaterial3D).emission_energy_multiplier = lerpf(0.12, 1.3, night)
+		(em as BaseMaterial3D).emission_energy_multiplier = lerpf(0.28, 1.1, night)   # 낮에도 창이 은은하게 (레퍼런스처럼)
 	for hl in house_lights:
 		if is_instance_valid(hl[0]):
 			(hl[0] as Light3D).light_energy = minf(float(hl[1]), 1.5) * night
@@ -826,9 +840,9 @@ func _update_mood() -> void:
 	if fireflies:
 		fireflies.emitting = night > 0.3
 	# 3점 조명 + 하늘 반사 + 블룸을 시간에 맞춰
-	sun.shadow_opacity = lerpf(0.85, 0.4, night)
-	fill.light_energy = lerpf(0.55, 0.3, night)
-	fill.light_color = Color(0.62, 0.84, 0.9).lerp(Color(0.3, 0.75, 0.75), night)
+	sun.shadow_opacity = lerpf(0.6, 0.35, night)
+	fill.light_energy = lerpf(0.3, 0.4, night)
+	fill.light_color = Color(1.0, 0.95, 0.88).lerp(Color(0.45, 0.75, 0.8), night)
 	rim.light_energy = lerpf(0.35, 0.28, night)
 	rim.light_color = Color(1.0, 0.9, 0.78).lerp(Color(0.55, 0.95, 0.85), night)
 	sky_mat.sky_top_color = s["top"]
