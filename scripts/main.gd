@@ -1492,7 +1492,11 @@ const CAM_HFOV := 32.0
 func _vfov_for(hfov: float) -> float:
 	var vs := get_viewport().get_visible_rect().size
 	var asp := vs.x / maxf(1.0, vs.y)
-	return clampf(rad_to_deg(2.0 * atan(tan(deg_to_rad(hfov) / 2.0) / asp)), 25.0 * hfov / 20.0, 75.0)
+	# 가로 시야를 맞추되, 폴드·태블릿처럼 덜 길쭉한 화면에선 세로 폰(9:18)만큼의 세로 시야는 지켜요
+	# (안 그러면 넓은 화면일수록 확 확대돼서 집이 잘렸음)
+	var v := rad_to_deg(2.0 * atan(tan(deg_to_rad(hfov) / 2.0) / asp))
+	var v_ref := rad_to_deg(2.0 * atan(tan(deg_to_rad(hfov) / 2.0) / 0.5))
+	return clampf(maxf(v, v_ref), 25.0 * hfov / 20.0, 75.0)
 
 
 func _vfov() -> float:
@@ -2707,7 +2711,7 @@ func _layout_hud() -> void:
 	if hud_bot == null:
 		return
 	var vs := get_viewport().get_visible_rect().size
-	var wide := vs.x > HUD_COL_W + 112 + 260
+	var wide := vs.x > HUD_COL_W + 112 + 260 and vs.x > vs.y * 1.1     # 가로 화면일 때만 오른쪽 기둥 (폴드 펼침은 세로처럼)
 	if wide:
 		hud_bot.anchor_left = 1.0
 		hud_bot.offset_left = -56 - HUD_COL_W
