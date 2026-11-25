@@ -30,12 +30,12 @@ const SENSOR_Y := 150.0
 const MEM_A := 21.0
 const MEM_B := 32.0
 const MEM_TRAVEL := 21.0
-const PRESS_FULL := 5.5          # 반원이 「꽉 눌림」으로 보는 깊이 (작을수록 예민)
+const PRESS_FULL := 3.5          # 반원이 「꽉 눌림」으로 보는 깊이 (작을수록 예민)
 const REST_SPD := 12.0           # 평균 속도가 이보다 느리면 쉬기 시작 (px/s)
 const REST_AFTER := 0.4          # 그만큼 계속 느리면 쉼 (초)
 const REST_DRIFT := 4.0          # 중심이 이 안에서만 움직이면 제자리 떨림 (px)
 const WAKE_SPD := 120.0          # 이보다 빠른 숫자가 닿으면 깨움
-var heavy_blobs := 22          # 숫자가 이보다 많으면 가벼운 계산 (겹침 정리 1번)
+var heavy_blobs := 14          # 숫자가 이보다 많으면 가벼운 계산 (겹침 정리 1번)
 const CHAMFER := 80.0
 const MERGE_SUBSTEPS := 10
 const GRAV := 1100.0
@@ -60,7 +60,7 @@ const STREAK_WAIT := 2.5
 const TIER_MAX := 899
 # 몸 둘레 점 개수 (웹 버전 10 + r×0.3). GDScript 는 느려서 조금 줄임 — 모양은 곡선으로 부드럽게 그림
 const POINTS_BASE := 8.0
-const POINTS_PER_R := 0.2
+const POINTS_PER_R := 0.13      # 숫자 고리 점 수 (예전 0.2): 큰 숫자일수록 점이 덜 늘게 → 계산 가벼움
 
 var num_font: Font
 var txt_font: Font
@@ -150,6 +150,9 @@ var pull := 0.0
 var aim := 0.0
 
 var tiers_r := PackedFloat64Array()
+## 배열을 잠깐 떼어 내는 자리표: 로컬로 꺼낸 배열을 고칠 때 Blob 쪽이 같은 배열을 잡고 있으면
+## 고닷이 매번 통째로 복사해요(쓰기 시 복사). 꺼낸 동안 이걸 꽂아 두면 제자리에서 고쳐져서 훨씬 가벼움.
+var _E := PackedFloat64Array()
 var synth = null    # 소리 (game_screen 이 넣어 줌)
 
 
@@ -204,6 +207,7 @@ class Blob:
 	var sleep := false
 	var warp_cd := 0.0
 	var warp_n := 0
+	var tri_ok := true
 	var pop_t := 0.0     # 새로 합쳐진 젤리의 「퐁」(그림만 1→1.18→1)
 	var rx := PackedFloat64Array()
 	var ry := PackedFloat64Array()
@@ -360,6 +364,7 @@ func internal_constraints(b: Blob) -> void:
 	var n := b.n
 	var x := b.x
 	var y := b.y
+	b.x = _E; b.y = _E
 	var s := b.s
 	var L := b.L * s
 	var edges := 0 if ((b.row and b != sel) or b.lane) else n
@@ -475,6 +480,7 @@ func walls(b: Blob) -> void:
 	var n := b.n
 	var x := b.x
 	var y := b.y
+	b.x = _E; b.y = _E
 	var px := b.px
 	var py := b.py
 	var bvx := b.vx
@@ -654,6 +660,7 @@ func points_into(A: Blob, B: Blob, resolve: bool) -> bool:
 	var ay := A.y
 	var bx := B.x
 	var by := B.y
+	A.x = _E; A.y = _E; B.x = _E; B.y = _E
 	var row_shove := (A.launch and B.row) or (B.launch and A.row)
 	var wp := A.w * ((0.2 if A.launch_up else 0.03) if (A.launch and B.row) else 1.0)
 	var we := B.w * ((0.2 if B.launch_up else 0.03) if (B.launch and A.row) else 1.0)
@@ -664,6 +671,7 @@ func points_into(A: Blob, B: Blob, resolve: bool) -> bool:
 	if B.rest:
 		we = 0.0
 	if wp == 0.0 and we == 0.0:
+		A.x = ax; A.y = ay; B.x = bx; B.y = by
 		return false
 	var grip := (0.14 if (A.launch_up or B.launch_up) else 0.005) if A.row != B.row else 0.11
 	var hit := false
@@ -686,6 +694,7 @@ func points_into(A: Blob, B: Blob, resolve: bool) -> bool:
 			continue
 		hit = true
 		if not resolve:
+			A.x = ax; A.y = ay; B.x = bx; B.y = by
 			return true
 		A.touch = true; B.touch = true
 		if not row_shove or A.launch_up or B.launch_up:
@@ -737,8 +746,7 @@ func points_into(A: Blob, B: Blob, resolve: bool) -> bool:
 			ax[i] -= tx * f * wp; ay[i] -= ty * f * wp
 			bx[be] += tx * f * u * we; by[be] += ty * f * u * we
 			bx[k2] += tx * f * v * we; by[k2] += ty * f * v * we
-	if hit:
-		A.x = ax; A.y = ay; B.x = bx; B.y = by
+	A.x = ax; A.y = ay; B.x = bx; B.y = by
 	return hit
 
 
@@ -811,10 +819,12 @@ func collide() -> void:
 				var ux := dx / d * push
 				var uy := dy / d * push
 				var axs := a.x; var ays := a.y
+				a.x = _E; a.y = _E
 				for k in a.n:
 					axs[k] -= ux * fa; ays[k] -= uy * fa
 				a.x = axs; a.y = ays
 				var bxs := b.x; var bys := b.y
+				b.x = _E; b.y = _E
 				for k in b.n:
 					bxs[k] += ux * fb; bys[k] += uy * fb
 				b.x = bxs; b.y = bys
@@ -1035,6 +1045,7 @@ func substep(h: float) -> void:
 		var y: PackedFloat64Array = b.y
 		var px: PackedFloat64Array = b.px
 		var py: PackedFloat64Array = b.py
+		b.vx = _E; b.vy = _E; b.x = _E; b.y = _E; b.px = _E; b.py = _E
 		var gx := (tilt_g * (g / GRAV) + shake_ax) * h if g != 0.0 else 0.0
 		var gy := (g + (shake_ay if g != 0.0 else 0.0)) * h
 		for i in n:
@@ -1068,6 +1079,7 @@ func substep(h: float) -> void:
 		var py: PackedFloat64Array = b.py
 		var vx: PackedFloat64Array = b.vx
 		var vy: PackedFloat64Array = b.vy
+		b.x = _E; b.y = _E; b.vx = _E; b.vy = _E
 		var mx := 0.0
 		var my := 0.0
 		for i in n:
@@ -1772,8 +1784,10 @@ func update_stuck(b: Blob, dt: float) -> void:
 
 func sim_step(dt: float) -> void:
 	if not over:
-		for i in SUB:
-			substep(H_STEP)
+		# 숫자가 많으면(15개+) 한 프레임 3번 → 2번 나눠 계산 (모양은 거의 같고 계산은 2/3)
+		var sub := SUB if blobs.size() < 15 else 2
+		for i in sub:
+			substep(1.0 / (60.0 * sub))
 	clock += dt
 	for b: Blob in blobs:
 		if b.pop_t > 0:
@@ -1827,7 +1841,7 @@ func sim_step(dt: float) -> void:
 		for i in 2:
 			var amt := minf(1, press[i] / PRESS_FULL)
 			press[i] = 0.0
-			gauge[i] = minf(1, gauge[i] + dt * 0.5 * amt) if (amt > 0.02 and shake_safe <= 0) else maxf(0, gauge[i] - dt * 0.55)
+			gauge[i] = minf(1, gauge[i] + dt * 0.75 * amt) if (amt > 0.02 and shake_safe <= 0) else maxf(0, gauge[i] - dt * 0.55)
 	if not over and shake_safe <= 0 and gauge[0] >= 1 and gauge[1] >= 1:
 		end_game()
 	if not over:
@@ -1888,7 +1902,10 @@ func draw_blob(b: Blob) -> void:
 		col = col.lerp(Color(0.16, 0.2, 0.22), 0.45 + sin(clock * 3 + b.id) * 0.06)
 	col.a = alpha
 	var poly := pts
-	if Geometry2D.triangulate_polygon(poly).is_empty():
+	# 꼬인 모양인지 검사(삼각형 나누기)는 무거워서 6프레임에 한 번만 (그리기에서 한 번 더 나누니 매 프레임 두 번이었음)
+	if (draw_tick + b.id) % 6 == 0 or b.age < 0.3:
+		b.tri_ok = not Geometry2D.triangulate_polygon(poly).is_empty()
+	if not b.tri_ok:
 		draw_circle(Vector2(b.cx, b.cy), b.r * b.s, col)
 	else:
 		draw_colored_polygon(poly, col)
@@ -1955,7 +1972,11 @@ func draw_arrow() -> void:
 		o + Vector2(ux * neck + uy * 9, uy * neck - ux * 9)]), col)
 
 
+var draw_tick := 0
+
+
 func _draw() -> void:
+	draw_tick += 1
 	var off := Vector2.ZERO
 	if shake > 0.01:
 		off = Vector2((randf() - 0.5) * 6 * shake, (randf() - 0.5) * 6 * shake)
