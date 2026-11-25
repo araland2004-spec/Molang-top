@@ -15,6 +15,8 @@ var d := {
 signal jelly_changed
 
 var next_mode := ""
+var next_items: Array = []   # 스테이지 입장 팝업에서 고른 가방 아이템 (게임 시작 때 꺼내 씀)
+var home_popup := ""         # 게임 → 집으로 돌아오며 열 창 ("stage" = 스테이지 입장 팝업)
 var home_view := {}      # 집 → 게임으로 갈 때 몰랑이 자리·카메라 (돌아오면 그대로, 앱을 껐다 켜면 처음 자리)
 var jelly_seen := -1     # 집 화면이 마지막으로 보여 준 젤리 수 (돌아왔을 때 「+N」 연출용)
 var work_carry := 0.0

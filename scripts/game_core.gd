@@ -281,14 +281,21 @@ func endless_throws() -> int:
 	return roundi(550 + (prog - 20) * 450.0 / 80.0) if prog >= 20 else 300
 
 
+var bonus := {}          # 스테이지 입장 때 가방에서 골라 들고 온 아이템 (k → 개수)
+
+
 func item_open(k: String) -> bool:
-	return stage_idx + 1 >= item_at[k] if mode == "stage" else (prog >= endless_at[k] or int(daily_left.get(k, 0)) > 0)
+	if mode == "stage":
+		return stage_idx + 1 >= item_at[k] or int(bonus.get(k, 0)) > 0
+	return prog >= endless_at[k] or int(daily_left.get(k, 0)) > 0
 
 
 func item_start(k: String) -> int:
 	if not item_open(k):
 		return 0
-	return 1 if mode == "stage" else int(daily_left.get(k, 0))
+	if mode == "stage":
+		return (1 if stage_idx + 1 >= item_at[k] else 0) + int(bonus.get(k, 0))
+	return int(daily_left.get(k, 0))
 
 
 func rocks_on() -> bool:

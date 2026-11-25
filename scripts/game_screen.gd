@@ -525,6 +525,14 @@ func start_stage(i: int) -> void:
 		return
 	core.mode = "stage"
 	core.stage_idx = i
+	# 입장 팝업에서 고른 가방 아이템: 이번 판에 +1씩 (가방에서 꺼냄, 이 판에서만)
+	core.bonus = {}
+	for k in Save.next_items:
+		if Save.bag_count(k) > 0:
+			Save.d["bag"][k] = Save.bag_count(k) - 1
+			core.bonus[k] = int(core.bonus.get(k, 0)) + 1
+	Save.next_items = []
+	Save.save()
 	core.new_game()
 	restart_btn.text = "다시"
 	_close_overlays()
@@ -981,227 +989,14 @@ func _flush_clear() -> bool:
 	return false
 
 
+## 스테이지 목록 화면은 없앴어요 → 집으로 돌아가서 「스테이지 입장」 팝업을 열어요
 func show_menu() -> void:
 	if _flush_clear():
-		return      # 클리어 카드를 먼저 보여 줌 (카드에서 목록으로 갈 수 있어요)
+		return      # 클리어 카드를 먼저 보여 줌
 	core.over = true
-	dragging = false
-	core.sel = null
-	for c in menu_grid_box.get_children():
-		c.queue_free()
-	var prog := int(Save.d["prog"])
-	var total: int = core.stages.size()
-	var cur := mini(prog, total - 1)
-	if open_chapter < 0:
-		open_chapter = cur / 10
-	# 머리
-	var head := HBoxContainer.new()
-	menu_grid_box.add_child(head)
-	var t := Mol.lbl("스테이지", 48, Mol.TEXT, "b")
-	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	head.add_child(t)
-	head.add_child(Mol.lbl("%d" % prog, 40, Mol.TEXT, "num"))
-	head.add_child(Mol.lbl(" / %d" % total, 40, Mol.TEXT_SUB, "num_m"))
-	menu_grid_box.add_child(Mol.GradLine.new(Color(0.494, 0.941, 0.784, 0.35), true))
-	var free_now := int(Save.d["prog"]) < 5
-	var ent := Mol.lbl(("처음 5단계까지는 횟수 없이 · " if free_now else "오늘 입장 %d/%d · " % [Save.stage_left(), Save.STAGE_DAILY]) + "깨면 무한 모드에서 쓸 아이템을 받아요", 22, Mol.AMBER if (free_now or Save.stage_left() > 0) else Mol.ALERT, "m")
-	ent.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	menu_grid_box.add_child(ent)
-	if not free_now and Save.stage_left() <= 0:
-		var gb := Mol.btn("보석 %d개로 1번 더 들어가기 (가진 보석 %d)" % [Save.STAGE_ENTRY_GEM, Save.gem()], "glow", 22)
-		gb.custom_minimum_size.y = 72
-		gb.disabled = Save.gem() < Save.STAGE_ENTRY_GEM
-		gb.pressed.connect(func():
-			if Save.buy_stage_entry():
-				_toast("오늘 입장 +1")
-				show_menu())
-		menu_grid_box.add_child(gb)
-		# 광고 보고 1번 더 (광고 제거를 샀으면 광고 없이 바로)
-		var mo = Save.monet
-		if mo.available() and Save.ad_stage_left() > 0:
-			var ab := Mol.btn(("무료로 1번 더 · 광고 제거 혜택" if mo.has_no_ads() else "광고 보고 1번 더") + " (오늘 %d번 남음)" % Save.ad_stage_left(), "glow", 22)
-			ab.custom_minimum_size.y = 72
-			ab.pressed.connect(func():
-				mo.rewarded(func(ok: bool):
-					if ok and Save.ad_stage_entry():
-						_toast("오늘 입장 +1")
-						show_menu()))
-			menu_grid_box.add_child(ab)
-	# 이어하기 카드 (주 버튼)
-	var st: Dictionary = core.stages[cur]
-	var cont := Button.new()
-	cont.focus_mode = Control.FOCUS_NONE
-	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
-		cont.add_theme_stylebox_override(k, Mol.primary(36))
-	cont.custom_minimum_size.y = 160
-	cont.pressed.connect(func(): start_stage(cur))
-	menu_grid_box.add_child(cont)
-	var ch := HBoxContainer.new()
-	ch.set_anchors_preset(Control.PRESET_FULL_RECT)
-	ch.offset_left = 36
-	ch.offset_right = -36
-	ch.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	cont.add_child(ch)
-	var cl := VBoxContainer.new()
-	cl.alignment = BoxContainer.ALIGNMENT_CENTER
-	cl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	cl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ch.add_child(cl)
-	cl.add_child(Mol.lbl("이어하기", 26, Color(Mol.AMBER, 0.8), "r"))
-	cl.add_child(Mol.lbl(core.goal_text(st), 36, Mol.AMBER, "b"))
-	var items_txt: Array = []
-	var jump := cur >= 24 and (cur + 1) % 5 == 0
-	if jump:
-		items_txt.append("고비 판")
-	for k in ["shake", "undo", "hammer", "tilt", "x2"]:
-		if cur + 1 >= int(core.item_at.get(k, 9999)):
-			items_txt.append(ITEM_NAMES[k])
-	cl.add_child(Mol.lbl(" · ".join(items_txt) if items_txt.size() else ("던지기 %d번" % int(st["throws"]) if int(st["throws"]) else "던지기 무제한"), 24, Color(Mol.AMBER, 0.75), "r"))
-	var cr := VBoxContainer.new()
-	cr.alignment = BoxContainer.ALIGNMENT_CENTER
-	cr.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ch.add_child(cr)
-	var sl := Mol.lbl("STAGE", 20, Color(Mol.AMBER, 0.8), "num_m")
-	sl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	cr.add_child(sl)
-	var nl := Mol.lbl(str(cur + 1), 76, Mol.AMBER, "num")
-	nl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	cr.add_child(nl)
-	# 다른 버튼
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 14)
-	menu_grid_box.add_child(row)
-	var eb := Mol.btn("무한 모드", "sec", 26)
-	eb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	eb.pressed.connect(start_endless)
-	row.add_child(eb)
-	if not core.blobs.is_empty() and not card.visible:
-		var rb := Mol.btn("이 판 다시", "sec", 26)
-		rb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		rb.pressed.connect(_restart_same)
-		row.add_child(rb)
-	var hb := Mol.btn("집으로", "sec", 26)
-	hb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hb.pressed.connect(go_home)
-	row.add_child(hb)
-	# 챕터 (10단계씩, 지금 챕터만 펼침) — 위에서부터 최근 챕터
-	var stars: Dictionary = Save.d.get("stars", {})
-	var chapters := ceili(total / 10.0)
-	var top_ch := mini(chapters - 1, cur / 10 + 1)
-	for ci in range(top_ch, -1, -1):
-		var a := ci * 10
-		var b := mini(total, a + 10)
-		var done_n := clampi(prog - a, 0, b - a)
-		var star_n := 0
-		for k in range(a, b):
-			star_n += int(stars.get(str(k), 0))
-		var rowc := HBoxContainer.new()
-		rowc.add_theme_constant_override("separation", 12)
-		menu_grid_box.add_child(rowc)
-		var dot := Control.new()
-		dot.custom_minimum_size = Vector2(28, 0)
-		var is_cur := ci == cur / 10
-		var dot_col: Color = Mol.AMBER if is_cur else (Mol.LINE if done_n == b - a else Color(0.494, 0.941, 0.784, 0.25))
-		dot.draw.connect(func():
-			dot.draw_line(Vector2(14, 0), Vector2(14, dot.size.y), Color(0.494, 0.941, 0.784, 0.25), 2)
-			dot.draw_circle(Vector2(14, 46), 12, dot_col)
-			if is_cur:
-				dot.draw_circle(Vector2(14, 46), 20, Color(Mol.AMBER, 0.2)))
-		rowc.add_child(dot)
-		var panel := PanelContainer.new()
-		panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		panel.add_theme_stylebox_override("panel", Mol.sb(Color(0.03, 0.09, 0.1, 0.7), Color(0.494, 0.941, 0.784, 0.14), 32, Vector2(30, 20)))
-		rowc.add_child(panel)
-		var pv := VBoxContainer.new()
-		pv.add_theme_constant_override("separation", 14)
-		panel.add_child(pv)
-		var hh := Button.new()
-		hh.flat = true
-		hh.focus_mode = Control.FOCUS_NONE
-		hh.custom_minimum_size.y = 40
-		var hrow := HBoxContainer.new()
-		hrow.set_anchors_preset(Control.PRESET_FULL_RECT)
-		hrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		hh.add_child(hrow)
-		var expanded := ci == open_chapter
-		var tl := Mol.lbl("%d–%d · %s" % [a + 1, b, _chapter_name(a)], 30, Mol.TEXT if expanded else Mol.TEXT_SUB, "b")
-		tl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		tl.clip_text = true
-		hrow.add_child(tl)
-		hrow.add_child(Mol.lbl("%d/%d ★%d%s" % [done_n, b - a, star_n, "" if expanded else " ›"], 26, Mol.TEXT_SUB, "num_m"))
-		var cc := ci
-		hh.pressed.connect(func():
-			open_chapter = cc
-			show_menu())
-		pv.add_child(hh)
-		if not expanded:
-			continue
-		var grid := GridContainer.new()
-		grid.columns = 5
-		grid.add_theme_constant_override("h_separation", 12)
-		grid.add_theme_constant_override("v_separation", 12)
-		pv.add_child(grid)
-		for k in range(a, b):
-			var done := k < prog
-			var now := k == prog
-			var boss := k >= 24 and (k + 1) % 5 == 0
-			var bt := Button.new()
-			bt.focus_mode = Control.FOCUS_NONE
-			bt.text = str(k + 1)
-			bt.add_theme_font_override("font", Mol.font("num"))
-			bt.add_theme_font_size_override("font_size", 30)
-			bt.custom_minimum_size = Vector2(0, 72)
-			bt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			var bg := Color(1.0, 0.757, 0.443) if now else (Color(0.494, 0.941, 0.784, 0.12) if done else Color(0.02, 0.07, 0.08, 0.6))
-			var ln := Mol.VIOLET if boss else Color(0.494, 0.941, 0.784, 0.18)
-			var stl := Mol.sb(bg, ln, 24, Vector2(4, 4), 3 if boss else 2)
-			if now:
-				stl.shadow_color = Color(1.0, 0.757, 0.443, 0.3)
-				stl.shadow_size = 14
-			for sname in ["normal", "hover", "focus", "pressed", "hover_pressed", "disabled"]:
-				bt.add_theme_stylebox_override(sname, stl)
-			var fc := Color("#3a2408") if now else (Mol.MINT if done else Mol.TEXT_DIM)
-			for cn in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_disabled_color", "font_hover_pressed_color"]:
-				bt.add_theme_color_override(cn, fc)
-			var idx: int = k
-			if k > prog:
-				# 잠긴 칸 (인터랙션 제안서 E): 작아지지 않고 좌우로 흔들림 + 진동 20ms + 「N단계를 깨면 열려요」
-				bt.pressed.connect(func():
-					var x0 := bt.position.x
-					var tw := bt.create_tween()
-					for d in [5.0, -5.0, 3.0, -3.0, 0.0]:
-						tw.tween_property(bt, "position:x", x0 + d, 0.05)
-					Save.buzz(20)
-					_toast("%d단계를 깨면 열려요" % idx))
-			else:
-				Mol.press(bt, "icon")      # 단계 칸 0.92 눌림 (G)
-				bt.pressed.connect(func(): start_stage(idx))
-			grid.add_child(bt)
-		var nd := Mol.DashLine.new()
-		pv.add_child(nd)
-		var nx := ""
-		for kk in ["shake", "undo", "hammer", "tilt", "x2"]:
-			var at := int(core.item_at.get(kk, 9999))
-			if at > b and nx == "":
-				nx = kk
-		var ft := HBoxContainer.new()
-		pv.add_child(ft)
-		var fl := Mol.lbl(("다음 아이템 · " + ITEM_NAMES[nx]) if nx != "" else "아이템을 모두 열었어요", 24, Mol.TEXT_SUB, "r")
-		fl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		ft.add_child(fl)
-		if nx != "":
-			ft.add_child(Mol.lbl("%d단계" % int(core.item_at[nx]), 24, Mol.TEXT, "num"))
-	if OS.has_feature("web"):
-		var ib := Mol.btn("원래 몰랑탑 기록 불러오기", "ghost", 22)
-		ib.pressed.connect(_import_web)
-		menu_grid_box.add_child(ib)
-	card.visible = false
-	guide.visible = false
-	hint_lbl.visible = false
-	menu.visible = true
+	Save.home_popup = "stage"
+	get_tree().change_scene_to_file("res://scenes/main.tscn")
 
-
-# ───────────────────────── 가이드 ─────────────────────────
 
 func show_guide(k: String, done: Callable) -> void:
 	var g: Dictionary = Save.data.get("guides", {}).get(k, {})

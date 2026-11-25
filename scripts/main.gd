@@ -223,6 +223,10 @@ func _ready() -> void:
 	outside_nodes.append(extra.yard_root)
 	_update_camera()
 	_restore_view()
+	if Save.home_popup == "stage":
+		Save.home_popup = ""
+		var c2 := mini(int(Save.d.get("prog", 0)), 199)
+		open_stage_popup.call_deferred(c2, "")
 	_refresh_ui()
 	for st in get_tree().get_nodes_in_group("seat"):
 		if st is Node3D:
@@ -2590,9 +2594,10 @@ func _build_hud() -> void:
 	var crow := HBoxContainer.new()
 	crow.add_theme_constant_override("separation", 12)
 	bot.add_child(crow)
+	# 스테이지 카드: 번호만 크게 → 누르면 입장 팝업 (목표·아이템 고르기·입장 횟수)
 	var sc_btn := _play_card(day, amber, Color(1.0, 0.92, 0.78, 0.92) if day else Color(0.17, 0.15, 0.1, 0.88),
-		"STAGE %d" % (cur + 1), "스테이지", gtxt, "오늘 %d/%d번" % [Save.stage_left(), Save.STAGE_DAILY])
-	sc_btn.pressed.connect(func(): _go_game("stage:%d" % cur))
+		"STAGE", "%d" % (cur + 1), "", "")
+	sc_btn.pressed.connect(func(): open_stage_popup(cur, gtxt))
 	crow.add_child(sc_btn)
 	var run: Dictionary = Save.d.get("run", {})
 	var going: bool = run.get("blobs", []).size() > 0 and not run.get("over", false)
@@ -3277,3 +3282,121 @@ func _refresh_ui() -> void:
 		edit_info.text = "%s · 넓힐 수 있는 땅 %d칸" % [_bname(pal_files[clampi(selected, 0, pal_files.size() - 1)]), int(Save.home().get("land_free", 0))]
 	for i in palette_buttons.size():
 		palette_buttons[i].button_pressed = (i == selected)
+
+
+# ───────────────────────── 스테이지 입장 팝업 ─────────────────────────
+## 스테이지 00 · 목표 / 가방 아이템 고르기(고른 건 이번 판에 +1, 가방에서 빠짐) / 오늘 입장 횟수 · 더 사기 / 입장
+const STAGE_ITEMS := [["shake", "흔들기", "item_shake"], ["undo", "되돌리기", "item_undo"], ["hammer", "뿅망치", "item_hammer"],
+	["tilt", "기울이기", "tilt_right"], ["x2", "×2", "item_x2star"]]
+var stage_pop: Control
+var stage_pick := {}
+
+
+func open_stage_popup(cur: int, goal := "") -> void:
+	if stage_pop:
+		stage_pop.queue_free()
+	if goal == "":
+		var stg: Array = Save.data.get("stages", [])
+		if cur < stg.size():
+			var st: Dictionary = stg[cur]
+			match str(st["goal"]):
+				"tier": goal = "%s 만들기" % _num_text(int(st["t"]))
+				"score": goal = "점수 %s" % _comma(int(st["v"]))
+				"up": goal = "위로 %d번 합치기" % int(st["v"])
+				_: goal = "대기줄에서 %s" % _num_text(int(st["t"]))
+	var day := Mol.is_day()
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.55)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	dim.gui_input.connect(func(ev):
+		if ev is InputEventMouseButton and ev.pressed:
+			_close_stage_popup())
+	ui_root.add_child(dim)
+	stage_pop = dim
+	hud_blocks.append(dim)
+	var p := PanelContainer.new()
+	p.add_theme_stylebox_override("panel", Mol.card(40))
+	p.anchor_left = 0.5; p.anchor_right = 0.5; p.anchor_top = 0.5; p.anchor_bottom = 0.5
+	p.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	p.grow_vertical = Control.GROW_DIRECTION_BOTH
+	p.custom_minimum_size.x = minf(640.0, ui_root.get_viewport_rect().size.x - 48)
+	p.mouse_filter = Control.MOUSE_FILTER_STOP
+	dim.add_child(p)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 16)
+	p.add_child(v)
+	var head := HBoxContainer.new()
+	v.add_child(head)
+	var t := Mol.lbl("스테이지 %d" % (cur + 1), 44, Mol.AMBER, "b")
+	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(t)
+	var x := Mol.btn("✕", "ghost", 30)
+	x.custom_minimum_size = Vector2(72, 72)
+	x.pressed.connect(_close_stage_popup)
+	head.add_child(x)
+	if goal != "":
+		v.add_child(Mol.lbl("목표 · " + goal, 26, Mol.TEXT, "m"))
+	# 아이템 고르기
+	v.add_child(Mol.lbl("가방에서 아이템 들고 가기 (이번 판만 +1)", 20, Mol.TEXT_SUB, "r"))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	v.add_child(row)
+	stage_pick = {}
+	for it in STAGE_ITEMS:
+		var k: String = it[0]
+		var n := Save.bag_count(k)
+		var b := Mol.icon_btn(it[2], "%s\n%d개" % [it[1], n], day, 128)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.toggle_mode = true
+		b.disabled = n <= 0
+		b.toggled.connect(func(on: bool):
+			stage_pick[k] = on
+			synth_tone(660 if on else 520, 880 if on else 400, 0.05, 0.06))
+		row.add_child(b)
+	# 입장 횟수
+	var free_now := int(Save.d.get("prog", 0)) < 5
+	var left := Save.stage_left()
+	v.add_child(Mol.lbl("처음 5단계까지는 횟수 없이 들어가요" if free_now else "오늘 입장 %d/%d번 남음" % [left, Save.STAGE_DAILY], 22, Mol.AMBER if (free_now or left > 0) else Mol.ALERT, "m"))
+	if not free_now and left <= 0:
+		var gb := Mol.btn("보석 %d개로 1번 더 (가진 보석 %d)" % [Save.STAGE_ENTRY_GEM, Save.gem()], "sec", 22)
+		gb.custom_minimum_size.y = 72
+		gb.disabled = Save.gem() < Save.STAGE_ENTRY_GEM
+		gb.pressed.connect(func():
+			if Save.buy_stage_entry():
+				toast("오늘 입장 +1")
+				refresh_ui()
+				open_stage_popup(cur, goal))
+		v.add_child(gb)
+		var mo = Save.monet
+		if mo and mo.available() and Save.ad_stage_left() > 0:
+			var ab := Mol.btn(("무료로 1번 더 · 광고 제거 혜택" if mo.has_no_ads() else "광고 보고 1번 더") + " (오늘 %d번)" % Save.ad_stage_left(), "sec", 22)
+			ab.custom_minimum_size.y = 72
+			ab.pressed.connect(func():
+				mo.rewarded(func(ok: bool):
+					if ok and Save.ad_stage_entry():
+						toast("오늘 입장 +1")
+						open_stage_popup(cur, goal)))
+			v.add_child(ab)
+	var go := Mol.btn("스테이지 %d 입장" % (cur + 1), "primary_solid" if false else "primary", 30)
+	go.custom_minimum_size.y = 96
+	go.disabled = not free_now and left <= 0
+	go.pressed.connect(func():
+		var picks: Array = []
+		for k in stage_pick:
+			if stage_pick[k]:
+				picks.append(k)
+		Save.next_items = picks
+		_close_stage_popup()
+		_go_game("stage:%d" % cur))
+	v.add_child(go)
+	p.scale = Vector2.ONE * 0.9
+	p.pivot_offset = p.custom_minimum_size / 2
+	p.create_tween().tween_property(p, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+func _close_stage_popup() -> void:
+	if stage_pop:
+		hud_blocks.erase(stage_pop)
+		stage_pop.queue_free()
+		stage_pop = null
