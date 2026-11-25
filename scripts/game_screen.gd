@@ -628,6 +628,9 @@ func _paint_items() -> void:
 	for k in item_btns:
 		var b: Button = item_btns[k]
 		var open: bool = core.item_open(k)
+		# 무한 모드: 오늘 횟수를 다 써서 0개여도 버튼이 사라지지 않게 (스테이지에서 한 번 연 아이템은 늘 보임, 0개면 꺼짐)
+		if core.mode != "stage" and int(Save.d.get("prog", 0)) + 1 >= int(core.item_at.get(k, 9999)):
+			open = true
 		b.visible = open
 		any = any or open
 		var left: int = {"shake": core.shake_left, "undo": core.undo_left, "hammer": core.hammer_left, "tilt": core.tilt_left, "x2": core.x2_left}[k]
@@ -683,7 +686,7 @@ func _board_input(e: InputEvent) -> void:
 	if input_guard > 0:
 		return
 	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-		var lp: Vector2 = (e.position - board_area.position) / board_scale
+		var lp: Vector2 = (board_area.get_transform().affine_inverse() * e.position) / board_scale     # 기울여 돌아간 판도 정확히
 		if e.pressed:
 			if core.over or core.clear_t > 0 or dragging:
 				return
@@ -747,6 +750,11 @@ func _process(delta: float) -> void:
 	var dt := minf(0.05, delta)
 	if core.tilt_t > 0:
 		_read_tilt()
+	# 기울이는 만큼 판 전체가 같이 돌아가 보이게 (숫자 각도의 40%)
+	board_area.pivot_offset = board_area.size / 2
+	var want := deg_to_rad(core.tilt_now * 0.4)
+	if absf(board_area.rotation - want) > 0.0005:
+		board_area.rotation = lerpf(board_area.rotation, want, minf(1.0, dt * 8.0))
 	if not card.visible and not menu.visible and not guide.visible:
 		acc += dt
 		# 밀린 시간 따라잡기: 계산이 무거울 땐(숫자가 많을 때) 한 프레임에 한 번만.

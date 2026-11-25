@@ -90,6 +90,7 @@ var tilt_now := 0.0
 var tilt_g := 0.0
 var tilt_btn := 0
 var tilt_deg := 0.0
+var tilt_cos := 1.0
 var shake_t := 0.0
 var shake_ph := 0.0
 var shake_ax := 0.0
@@ -208,6 +209,7 @@ class Blob:
 	var warp_cd := 0.0
 	var warp_n := 0
 	var tri_ok := true
+	var a0 := 0.0            # 처음 점들을 둘러 놓은 시작 각 (돌아간 각도 = 지금 점 각 - 처음 각)
 	var pop_t := 0.0     # 새로 합쳐진 젤리의 「퐁」(그림만 1→1.18→1)
 	var rx := PackedFloat64Array()
 	var ry := PackedFloat64Array()
@@ -325,6 +327,7 @@ func make_blob(t: int, cx: float, cy: float, vx := 0.0, vy := 0.0, s := 1.0) -> 
 	var n := roundi(POINTS_BASE + r * POINTS_PER_R)
 	var start := randf() * TAU
 	var b := Blob.new()
+	b.a0 = start
 	b.id = next_id
 	next_id += 1
 	b.t = t
@@ -1054,7 +1057,8 @@ func substep(h: float) -> void:
 		var py: PackedFloat64Array = b.py
 		b.vx = _E; b.vy = _E; b.x = _E; b.y = _E; b.px = _E; b.py = _E
 		var gx := (tilt_g * (g / GRAV) + shake_ax) * h if g != 0.0 else 0.0
-		var gy := (g + (shake_ay if g != 0.0 else 0.0)) * h
+		# 기울이면 아래로 당기는 힘도 그만큼 줄어요 (진짜 판을 기울인 것처럼 → 옆으로 와르르)
+		var gy := (g * tilt_cos + (shake_ay if g != 0.0 else 0.0)) * h
 		for i in n:
 			vy[i] += gy; vx[i] += gx
 			vx[i] *= damp; vy[i] *= damp
@@ -1170,6 +1174,13 @@ func blend_shape(nb: Blob, a: Blob, b: Blob) -> void:
 		px[i] = x[i]; py[i] = y[i]
 	nb.x = x; nb.y = y; nb.px = px; nb.py = py
 	nb.wob = 1.1
+	# 합쳐진 숫자가 글자와 함께 휙 돌아가게: 둘레 방향으로 도는 속도 (어느 쪽인지는 둘이 부딪힌 방향)
+	var w := 7.0 * (1.0 if (ux * (a.vy[0] - b.vy[0]) - uy * (a.vx[0] - b.vx[0])) >= 0.0 else -1.0)
+	var vx := nb.vx; var vy := nb.vy
+	for i in nb.n:
+		vx[i] += -(y[i] - nb.cy) * w
+		vy[i] += (x[i] - nb.cx) * w
+	nb.vx = vx; nb.vy = vy
 
 
 func resolve_merges() -> void:
@@ -1834,9 +1845,11 @@ func sim_step(dt: float) -> void:
 		if tilt_t <= 0:
 			tilt_t = 0; tilt_btn = 0
 			items_changed.emit()
-	var tilt_target := (tilt_btn * 28.0 if tilt_btn else tilt_deg) if tilt_t > 0 else 0.0
-	tilt_now += (tilt_target - tilt_now) * minf(1, dt * 7)
-	tilt_g = 0.0 if absf(tilt_now) < 3 else GRAV * sin(deg_to_rad(tilt_now - signf(tilt_now) * 3))
+	# 기울이기: 예전 최대 28°는 거의 티가 안 났음 → 버튼은 55°, 폰 기울기는 1.8배 (최대 60°)
+	var tilt_target := (tilt_btn * 55.0 if tilt_btn else clampf(tilt_deg * 1.8, -60.0, 60.0)) if tilt_t > 0 else 0.0
+	tilt_now += (tilt_target - tilt_now) * minf(1, dt * 5)
+	tilt_g = 0.0 if absf(tilt_now) < 2 else GRAV * 1.25 * sin(deg_to_rad(tilt_now))
+	tilt_cos = cos(deg_to_rad(tilt_now))
 	tick_row(dt)
 	for b: Blob in blobs:
 		b.age += dt
@@ -1934,10 +1947,23 @@ func draw_blob(b: Blob) -> void:
 		_text_center("×2", Vector2(b.cx, b.cy), maxf(10, R * 0.42), INK, num_font)
 		return
 	var size := minf(R * 0.85, 13 + R * 0.1)
-	_text_center(num_text(b.t), Vector2(b.cx, b.cy + size * 0.05), size, INK, num_font)
+	_text_center(num_text(b.t), Vector2(b.cx, b.cy + size * 0.05), size, INK, num_font, blob_angle(b))
 
 
-func _text_center(s: String, at: Vector2, size: float, col: Color, font: Font) -> void:
+## 숫자 몸이 돌아간 각도 (점들이 처음 자리에서 평균 얼마나 돌았나) → 글자도 같이 돌려요
+func blob_angle(b: Blob) -> float:
+	var ss := 0.0
+	var cc := 0.0
+	var step := maxi(1, b.n / 6)
+	var i := 0
+	while i < b.n:
+		var a := atan2(b.y[i] - b.cy, b.x[i] - b.cx) - (b.a0 + float(i) / b.n * TAU)
+		ss += sin(a); cc += cos(a)
+		i += step
+	return atan2(ss, cc)
+
+
+func _text_center(s: String, at: Vector2, size: float, col: Color, font: Font, rot := 0.0) -> void:
 	if font == null:
 		return
 	# 판은 통째로 확대돼서 글자가 흐려지니, 실제 화면 크기로 그리고 줄여서 찍음 (모양은 예전 그대로)
@@ -1946,7 +1972,7 @@ func _text_center(s: String, at: Vector2, size: float, col: Color, font: Font) -
 	var sz := font.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
 	var asc := font.get_ascent(fs)
 	var desc := font.get_descent(fs)
-	draw_set_transform(_cur_off + at, 0, Vector2.ONE / S)
+	draw_set_transform(_cur_off + at, rot, Vector2.ONE / S)
 	draw_string(font, Vector2(-sz.x / 2, (asc - desc) / 2), s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
 	draw_set_transform(_cur_off)
 
