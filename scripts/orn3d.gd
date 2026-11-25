@@ -51,7 +51,7 @@ var drag := ""                 # rub · rot · hang
 var last_pos := Vector2.ZERO
 var t0 := 0.0
 var now := 0.0
-var phase := "rub"             # rub · card · hang · done
+var phase := "rub"             # rub · shine · card · hang · done
 var turned := false
 var turn_tip := false
 var mask_dirty := false
@@ -375,7 +375,7 @@ func _progress() -> void:
 
 
 func _finish() -> void:
-	phase = "card"
+	phase = "shine"      # 반짝임(0.5초) 동안은 눌러도 넘어가지 않게 — 전엔 이때 누르면 걸기로 넘어간 뒤 카드가 트리 위에 남았어요
 	drag = ""
 	sec = Time.get_ticks_msec() / 1000.0 - t0
 	var scaled := sec / maxf(1.0, hard * 0.8)
@@ -396,6 +396,9 @@ func _finish() -> void:
 	var q0 := orn.basis.get_rotation_quaternion()
 	tw.parallel().tween_method(func(f: float): orn.basis = Basis(q0.slerp(Quaternion.IDENTITY, f)), 0.0, 1.0, 0.4)
 	await tw.finished
+	if phase != "shine":
+		return
+	phase = "card"
 	hint.text = ""
 	card = PanelContainer.new()
 	card.add_theme_stylebox_override("panel", Mol.card(32))

@@ -117,7 +117,10 @@ func _notification(what: int) -> void:
 
 ## 처음부터 새로: 기록·젤리·집을 모두 지우고 맨 처음 상태로 (안내도 처음부터)
 func reset_all() -> void:
+	var iap = d.get("iap")      # 산 것(광고 제거·시즌 팩)은 처음부터 새로 해도 남겨요 (복원 기능이 아직 없어서 지우면 되찾을 수 없어요)
 	d = DEFAULTS.duplicate(true)
+	if iap is Dictionary:
+		d["iap"] = iap
 	d["stage_rev"] = int(data.get("stageRev", {}).get("rev", 1))
 	jelly_seen = -1
 	next_mode = ""

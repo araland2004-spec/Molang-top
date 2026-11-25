@@ -243,7 +243,8 @@ func _build_interior() -> void:
 			var tex: String = bl.get(fid, "plank")
 			var fy := 0.012 if model else 0.0
 			fboxes.append({"b": [x0, fy - 0.01, z0, x0 + cx, fy, z0 + cz], "t": tex, "tile": maxf(cx, cz), "only": ["top"]})
-	interior.add_child(Boxes.build(fboxes))
+	floor_tiles = Boxes.build(fboxes)
+	interior.add_child(floor_tiles)
 	var wp := "wallpaperL" if int(H()["lvl"]) >= 2 else "wallpaper"
 	if model == null:
 		_box_walls(rx, rz, wh, t, wp)
@@ -413,11 +414,10 @@ func _blockers() -> Array:
 				out.append(Rect2(float(pz[0]) - hx, float(pz[1]) - hz, hx * 2, hz * 2))
 			else:
 				out.append(Rect2(f[0] * sx - f[2], f[1] * sz - f[3], f[2] * 2, f[3] * 2))
-	out.append(Rect2(tree_pos.x - 0.5, tree_pos.z - 0.5, 1.0, 1.0))
-	var dx: float = M["DESK_AT"][0] * sx
-	var dz: float = M["DESK_AT"][1] * sz
-	out.append(Rect2(dx - 0.36, dz - 0.8, 0.72, 1.6))
-	out.append(Rect2(pile_pos.x - 0.32, pile_pos.z - 0.26, 0.64, 0.52))
+	# 트리·오너먼트 상자는 켜져 있을 때만 있어요. 책상은 뺐어요 (안 보이는데 막혀서 그 바닥을 눌러도 안 걸어갔어요)
+	if orn_on():
+		out.append(Rect2(tree_pos.x - 0.5, tree_pos.z - 0.5, 1.0, 1.0))
+		out.append(Rect2(pile_pos.x - 0.32, pile_pos.z - 0.26, 0.64, 0.52))
 	return out
 
 
@@ -582,6 +582,7 @@ func _fb_show(repaint: bool) -> void:
 
 ## 블록·바닥 편집 중에는 바닥만 보이게: 집·장식·캐릭터·펫 모양을 잠깐 숨겨요 (빛은 그대로). 편집을 마치면 되돌려요.
 var _edit_hidden: Array = []
+var floor_tiles: Node3D      # 집 안 칠한 바닥 칸 (_build_interior)
 func hide_for_edit(on: bool) -> void:
 	for n in _edit_hidden:
 		if is_instance_valid(n):
@@ -591,8 +592,9 @@ func hide_for_edit(on: bool) -> void:
 		return
 	var keep := {}
 	if inside and interior:
-		keep[interior.get_child(0)] = true     # 바닥 판
-		keep[interior.get_child(1)] = true     # 바닥 칸
+		keep[interior.get_child(0)] = true     # 바닥 판 (방 모델이 있으면 방 모델)
+		if is_instance_valid(floor_tiles):
+			keep[floor_tiles] = true           # 칠한 바닥 칸 (방 모델이 생긴 뒤로 1번째 자식이 아니에요)
 	else:
 		for c in main.floor_nodes:
 			keep[main.floor_nodes[c]] = true
@@ -2012,8 +2014,11 @@ func after_deco() -> void:
 	rebuild_yard()
 	if inside:
 		_build_interior()
+		if floor_edit != "":
+			hide_for_edit(true)      # 칠할 때마다 방을 새로 지어서, 숨겨 둔 가구·몰랑이가 다시 보이던 것
 		main.set_walk_area(Vector2(-room.x + 0.3, -room.y + 0.3), Vector2(room.x - 0.3, room.y - 0.3), _blockers())
-	_check_unlocks()
+	# 한 프레임 뒤에: 바로 부르면 start_moving 등이 이어서 여는 막대(_bottom_sheet → _close_sheet)가 열림 안내(say)를 곧바로 닫아 버렸어요
+	_check_unlocks.call_deferred()
 	# 도감을 다 채우면 집마다 한 번 새 집 짓기를 권해요
 	if vol_done() and int(H().get("asked_vol", 0)) != int(H()["no"]):
 		H()["asked_vol"] = int(H()["no"])
@@ -2802,9 +2807,11 @@ func _pos_key(id: String) -> String:
 
 func pos_of(id: String):
 	var P = H().get("pos")
-	if not (P is Dictionary):
-		return null
-	return P.get(_pos_key(id))
+	var v = P.get(_pos_key(id)) if P is Dictionary else null
+	# 1단계 집 가구 모델은 자리가 없으면 FURN_AT 에 그려져요(_placed) → 고르기·돌리기·끌기·막힘도 같은 자리를 보게
+	if v == null and FURN_AT.has(id) and FURN_OF.has(id) and _lvl_key() == "in1" and inside_zone(id):
+		return (FURN_AT[id] as Array).duplicate()
+	return v
 
 
 func inside_zone(id: String) -> bool:
@@ -2927,6 +2934,12 @@ func _set_pos(id: String, x: float, z: float, rot: int) -> void:
 
 func start_moving(id: String) -> void:
 	_close_sheet()
+	# 옮기기·심기 막대가 이미 떠 있으면(다른 물건을 눌러 바로 고를 때) 먼저 닫아요 — 안 닫으면 새 막대 밑에 남아 탭을 막았어요
+	if plant_bar:
+		main.hud_blocks.erase(plant_bar)
+		plant_bar.queue_free()
+		plant_bar = null
+	plant_asset = ""
 	move_id = id
 	sel_prop = ""
 	if not is_put(id):
