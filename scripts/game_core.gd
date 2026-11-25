@@ -43,6 +43,8 @@ const H_STEP := 1.0 / (60.0 * SUB)
 const QMAX := 4
 const LANE_H := 30.0
 const ODDS := [10, 12, 18, 20, 18, 13, 7, 2]
+## 무한 모드: 큰 숫자(64~256)가 덜 나오게 → 8192 가 첫 번째 큰 고비 (예전엔 너무 쉽게 나왔음)
+const ODDS_ENDLESS := [17, 19, 21, 18, 13, 8, 3, 1]
 const ROCK_FROM := 19
 const MISS_LIMIT := 3
 const MISS_WAIT := 2.2
@@ -288,9 +290,9 @@ func rocks_on() -> bool:
 
 
 func pick() -> int:
-	var od: Array = ODDS.duplicate()
-	if mode != "stage" and max_tier >= 11:
-		od.append(ODDS[6])
+	var od: Array = ODDS.duplicate() if mode == "stage" else ODDS_ENDLESS.duplicate()
+	if mode != "stage" and max_tier >= 12:
+		od.append(ODDS_ENDLESS[6])      # 8192 를 만든 뒤에야 512 도 가끔
 	var cap: int = int(stages[stage_idx]["cap"]) if mode == "stage" else od.size() - 1
 	var tot := 0.0
 	for i in cap + 1:
@@ -398,7 +400,8 @@ func internal_constraints(b: Blob) -> void:
 		var ang := atan2(A, B)
 		var ca := cos(ang)
 		var sa := sin(ang)
-		var k := (0.0032 * minf(1.0, (36.0 / b.r) * (36.0 / b.r)) + 0.009 * maxf(0.0, (34.0 - b.r) / 17.0)) * (0.3 if b.wob > 0 else 1.0)
+		# 모양 되돌리는 힘(장력): 조금 낮춰서 밀면 틈 사이로 더 쏙 들어가게 (0.0032 → 0.0024)
+		var k := (0.0024 * minf(1.0, (36.0 / b.r) * (36.0 / b.r)) + 0.0072 * maxf(0.0, (34.0 - b.r) / 17.0)) * (0.3 if b.wob > 0 else 1.0)
 		var small := maxf(0.0, (42.0 - b.r) / 25.0)
 		var dev := 0.0
 		var gxs := PackedFloat64Array()
