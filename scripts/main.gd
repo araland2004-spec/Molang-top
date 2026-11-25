@@ -188,7 +188,11 @@ func _ready() -> void:
 	input_guard = 0.35
 	Bgm.unlocked.connect(func(nm: String): _toast("새 음악이 열렸어요: " + nm))
 	if OS.has_feature("web") and str(JavaScriptBridge.eval("location.hash")) == "#bench":
-		_go_game.call_deferred("endless")
+		# 성능 측정: 집을 만들기 전이라 몰랑이(player)가 없어요 → _go_game 을 거치지 않고 바로 게임 화면으로
+		set_process(false)
+		set_process_unhandled_input(false)
+		Save.next_mode = "endless"
+		get_tree().change_scene_to_file.call_deferred("res://scenes/game.tscn")
 		return
 	_load_data()
 	_load_blocks()
@@ -225,7 +229,7 @@ func _ready() -> void:
 	_restore_view()
 	if Save.home_popup == "stage":
 		Save.home_popup = ""
-		var c2 := mini(int(Save.d.get("prog", 0)), 199)
+		var c2 := mini(int(Save.d.get("prog", 0)), maxi(0, Save.data.get("stages", []).size() - 1))   # 다 깨면 마지막 단계 (단계 수는 데이터 기준)
 		open_stage_popup.call_deferred(c2, "")
 	_refresh_ui()
 	for st in get_tree().get_nodes_in_group("seat"):
@@ -2576,7 +2580,7 @@ func _build_hud() -> void:
 	hud_bot = bot
 	hud_groups.append(bot)
 	var prog := int(Save.d.get("prog", 0))
-	var cur := mini(prog, 199)
+	var cur := mini(prog, maxi(0, Save.data.get("stages", []).size() - 1))   # 다 깨면 마지막 단계 (단계 수는 데이터 기준)
 	# 이어하기: 두 장으로 나눔 — 왼쪽 스테이지 · 오른쪽 무한 모드
 	var amber := Mol.DAY_PRIMARY_TEXT if day else Mol.AMBER
 	var mint := Mol.DAY_LINE if day else Mol.MINT
