@@ -743,7 +743,7 @@ func _process(delta: float) -> void:
 		acc += dt
 		# 밀린 시간 따라잡기: 계산이 무거울 땐(숫자가 많을 때) 한 프레임에 한 번만.
 		# 예전엔 최대 3번 → 느린 기기에서 한 프레임이 3배로 길어지고 또 밀려서 점점 뚝뚝 끊겼어요.
-		var cap := 1 if sim_ms > 6.0 else 2
+		var cap := 1 if sim_ms > 3.0 else 2      # 무거우면 따라잡기 안 함 (느린 폰에서 끊김이 몰리던 것)
 		var steps := 0
 		while acc >= 1.0 / 60 and steps < cap:
 			var t0 := Time.get_ticks_usec()

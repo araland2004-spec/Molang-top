@@ -21,7 +21,7 @@ func _ready() -> void:
 
 
 func tone(f0: float, f1: float, dur: float, vol: float, kind := "sine") -> void:
-	if muted or voices.size() > 24:
+	if muted or voices.size() >= 12:      # 동시에 12개까지 (많이 겹치면 어차피 안 들리고 계산만 무거움)
 		return
 	voices.append([0.0, 0.0, f0, f1, dur, vol, kind])
 
@@ -43,19 +43,26 @@ func _process(_dt: float) -> void:
 		var dur: float = v[4]
 		var vol: float = v[5]
 		var kind: String = v[6]
+		# 높이·크기 변화를 샘플마다 pow 로 다시 구하지 않고, 한 번 구한 뒤 곱해 나감 (같은 소리, 계산은 훨씬 가벼움)
+		var k0 := t / dur
+		var f := f0 * pow(f1 / f0, k0)
+		var g := vol * pow(0.001 / vol, k0) if vol > 0.001 else 0.0
+		var rf := pow(f1 / f0, dt / dur)
+		var rg := pow(0.001 / vol, dt / dur) if vol > 0.001 else 1.0
+		var kk := 1 if kind == "square" else (2 if kind == "saw" else (3 if kind == "triangle" else 0))
 		for i in n:
 			if t >= dur:
 				break
-			var k := t / dur
-			var f := f0 * pow(f1 / f0, k)
-			var g := vol * pow(0.001 / vol, k) if vol > 0.001 else 0.0
-			ph = fmod(ph + f * dt, 1.0)
+			ph += f * dt
+			if ph >= 1.0:
+				ph -= 1.0
+			f *= rf
+			g *= rg
 			var s: float
-			match kind:
-				"square": s = 1.0 if ph < 0.5 else -1.0
-				"saw": s = ph * 2.0 - 1.0
-				"triangle": s = 1.0 - 4.0 * absf(ph - 0.5)
-				_: s = sin(ph * TAU)
+			if kk == 0: s = sin(ph * TAU)
+			elif kk == 1: s = 1.0 if ph < 0.5 else -1.0
+			elif kk == 2: s = ph * 2.0 - 1.0
+			else: s = 1.0 - 4.0 * absf(ph - 0.5)
 			var a := s * g * 0.6
 			buf[i] += Vector2(a, a)
 			t += dt

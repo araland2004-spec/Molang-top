@@ -33,7 +33,8 @@ const MEM_TRAVEL := 21.0
 const PRESS_FULL := 5.5          # 반원이 「꽉 눌림」으로 보는 깊이 (작을수록 예민)
 const REST_SPD := 12.0           # 평균 속도가 이보다 느리면 쉬기 시작 (px/s)
 const REST_AFTER := 0.4          # 그만큼 계속 느리면 쉼 (초)
-const WAKE_SPD := 45.0           # 이보다 빠른 숫자가 닿으면 깨움
+const REST_DRIFT := 4.0          # 중심이 이 안에서만 움직이면 제자리 떨림 (px)
+const WAKE_SPD := 120.0          # 이보다 빠른 숫자가 닿으면 깨움
 var heavy_blobs := 22          # 숫자가 이보다 많으면 가벼운 계산 (겹침 정리 1번)
 const CHAMFER := 80.0
 const MERGE_SUBSTEPS := 10
@@ -154,6 +155,7 @@ var synth = null    # 소리 (game_screen 이 넣어 줌)
 
 class Blob:
 	var rest := false        # 멈춰서 쉬는 중: 움직임 계산을 건너뜀 (반원 누름은 계속 셈)
+	var anchor := Vector2(-999, -999)   # 쉬기 판정: 이 자리에서 크게 안 벗어나면 「제자리 떨림」으로 봄
 	var woke := 0.0          # 막 깨어난 뒤 잠깐: 모양 되돌리기가 튀어 오르는 속도로 바뀌지 않게
 	var still := 0.0
 	var spd := 0.0
@@ -1087,10 +1089,15 @@ func substep(h: float) -> void:
 		b.spd = spd
 		b.spd_avg += (spd - b.spd_avg) * 0.04
 		# 거의 안 움직이면 잠깐 뒤 쉬게 (대기줄·날아가는 중·막 생긴 숫자는 빼고). 말랑한 몸은 쌓여 있어도 조금씩 떨려서 평균으로 봐요
-		if b.spd_avg < REST_SPD and spd < REST_SPD * 2.5 and not b.row and not b.lane and not b.launch and b.age > 1.0 and b.wob <= 0:
+		# 쉬기 판정: 속도 대신 「자리」로 봐요. 쌓인 말랑한 몸은 늘 초당 25~50px 로 떨려서 속도 기준(12)으론
+		# 거의 쉬지 못했음(20개 중 0~3개) → 중심이 2.5px 안에서만 오가면 제자리 떨림 → 쉼
+		var c := Vector2(b.cx, b.cy)
+		if not b.row and not b.lane and not b.launch and b.age > 1.0 and b.wob <= 0 and spd < 160.0 \
+				and c.distance_squared_to(b.anchor) < REST_DRIFT * REST_DRIFT:
 			b.still += h
 		else:
 			b.still = 0.0
+			b.anchor = c
 		var ms := 1.0
 		if b.hit and not b.row and spd > 520:
 			ms = 520 / spd
