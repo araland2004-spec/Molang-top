@@ -566,11 +566,11 @@ func open_floor_box(n := 1) -> void:
 	_preset_x10(n)
 
 
-## 결과 화면의 「10개 더」로 다시 열 때: 새 상자 창도 ×10 을 켜 둠 (전엔 1개만 열렸어요)
+## 결과 화면의 「10개 더」로 다시 열 때: 새 상자 창도 ×10 을 켜 둠 (돌려서 여는 건 직접)
 func _preset_x10(n: int) -> void:
 	var g = sheet
 	if n == 10 and g is GiftBox and g.x10_btn and not g.x10_btn.disabled:
-		g.x10_btn.pressed.emit.call_deferred()      # 「10개 더」 한 번으로 바로 10개가 열려요
+		g.x10_btn.set_pressed.call_deferred(true)    # 「10개 더」면 10개로 켜 둠 — 돌리는 건 직접
 
 
 func _fb_show(repaint: bool) -> void:
@@ -2840,6 +2840,78 @@ func _box_center(boxes: Array) -> Vector2:
 	return Vector2((x0 + x1) / 2, (z0 + z1) / 2)
 
 
+## 가구가 바닥에서 차지하는 반쪽 크기 (돌린 방향 반영). 벽 뚫기·겹침 검사용
+var _half_cache := {}
+
+
+func item_half(id: String, rot: int) -> Vector2:
+	var key := "%s:%s" % [_lvl_key() if inside_zone(id) else "out", id]
+	var h: Vector2
+	if _half_cache.has(key):
+		h = _half_cache[key]
+	else:
+		var fm: Node3D = furn_model(id) if (inside_zone(id) and _lvl_key() == "in1") else null
+		if fm:
+			var a := _node_aabb(fm)
+			h = Vector2(a.size.x, a.size.z) / 2
+			fm.free()
+		else:
+			var bx := _boxes_of(id)
+			var x0 := 1e9; var x1 := -1e9; var z0 := 1e9; var z1 := -1e9
+			for b in bx:
+				var a: Array = b["b"]
+				x0 = minf(x0, minf(a[0], a[3])); x1 = maxf(x1, maxf(a[0], a[3]))
+				z0 = minf(z0, minf(a[2], a[5])); z1 = maxf(z1, maxf(a[2], a[5]))
+			h = Vector2(x1 - x0, z1 - z0) / 2 if bx.size() else Vector2(0.3, 0.3)
+		_half_cache[key] = h
+	return Vector2(h.y, h.x) if rot % 2 == 1 else h
+
+
+## 다른 가구와 겹치는지 (러그는 밑에 깔리니까 빼고). 겹치면 그 가구 이름
+func _overlap_item(id: String, x: float, z: float, rot: int) -> String:
+	if id == "rug":
+		return ""
+	var me := item_half(id, rot) * 0.85
+	for it in zone_items("in" if inside else "out"):
+		var o: String = it["id"]
+		if o == id or o == "rug" or not is_put(o) or not MOVABLE.has(o):
+			continue
+		var pz = pos_of(o)
+		if not (pz is Array):
+			continue
+		var oh := item_half(o, int(pz[2])) * 0.85
+		if absf(float(pz[0]) - x) < me.x + oh.x and absf(float(pz[1]) - z) < me.y + oh.y:
+			return item_name(o)
+	return ""
+
+
+## 집 안 문 앞 (가구를 못 두는 곳): 방 모델의 문 자리에서 안쪽으로 1.4
+func _door_zone() -> Rect2:
+	if interior:
+		var d := interior.find_child("door_panel", true, false) as Node3D
+		if d:
+			var p := interior.to_local(d.global_position)
+			return Rect2(p.x - 0.9, room.y - 1.5, 1.8, 1.6)
+	return Rect2(-2.6, room.y - 1.5, 2.0, 1.6)
+
+
+## 밖에서 처음 놓을 빈자리: 몰랑이 근처에서 내 땅·집 아님·다른 가구와 안 겹치는 곳
+func _free_out_spot(id: String, near: Vector3) -> Vector2:
+	for r in range(0, 14):
+		for k in maxi(1, r * 6):
+			var a := TAU * k / maxf(1.0, r * 6.0)
+			var x := snappedf(near.x + 0.75 + cos(a) * r * 0.35, 0.25)
+			var z := snappedf(near.z + 0.5 + sin(a) * r * 0.35, 0.25)
+			if not main.land_set.has(Vector2i(roundi(x), roundi(z))):
+				continue
+			if main._in_house(Vector3(x, main.FLOOR_TOP, z), 0.35) or (main.workshop and main.WORKSHOP_BOX.grow(0.35).has_point(Vector2(x, z))):
+				continue
+			if _overlap_item(id, x, z, 0) != "":
+				continue
+			return Vector2(x, z)
+	return Vector2(snappedf(near.x + 0.75, 0.25), snappedf(near.z + 0.5, 0.25))
+
+
 ## 집 안 가구 모델 (1단계 집, inside_stage01.glb): 꾸미기 아이템 → 모델 안 노드 이름
 const FURN_GLB := "res://assets/house/inside_stage01.glb"
 const FURN_OF := {"sofa": ["armrest"], "shelf": ["chest"], "table": ["table", "stool1"], "plant": ["plant_grp"],
@@ -2951,7 +3023,8 @@ func start_moving(id: String) -> void:
 		elif inside:
 			_set_pos(id, clampf(snappedf(pp.x, 0.2), -room.x + 0.5, room.x - 0.5), clampf(snappedf(pp.z - 0.8, 0.2), -room.y + 0.5, room.y - 0.5), 0)
 		else:
-			_set_pos(id, snappedf(pp.x + 0.75, 0.25), snappedf(pp.z + 0.5, 0.25), 0)
+			var sp := _free_out_spot(id, pp)      # 내 땅 밖(안 보이는 곳)·집 자리·다른 가구 위에 놓이지 않게
+			_set_pos(id, sp.x, sp.y, 0)
 		Save.bump("place")
 		Save.save()
 		main.synth_tone(660, 990, 0.08, 0.1)
@@ -2988,7 +3061,12 @@ func start_moving(id: String) -> void:
 		var pz = pos_of(id)
 		var c := _box_center(_boxes_of(id))
 		if pz is Array:
-			_set_pos(id, float(pz[0]), float(pz[1]), int(pz[2]) + 1)
+			var nx := float(pz[0]); var nz := float(pz[1]); var nr := int(pz[2]) + 1
+			if inside:
+				var hh := item_half(id, nr)      # 돌려서 길쭉한 쪽이 벽을 뚫지 않게 안으로 당김
+				nx = clampf(nx, -room.x + hh.x + 0.05, room.x - hh.x - 0.05)
+				nz = clampf(nz, -room.y + hh.y + 0.05, room.y - hh.y - 0.05)
+			_set_pos(id, nx, nz, nr)
 		else:
 			_set_pos(id, c.x, c.y, 1)
 		main.synth_tone(560, 700, 0.05, 0.08)
@@ -3035,9 +3113,17 @@ func _move_at(pos: Vector2) -> void:
 	var pz = pos_of(move_id)
 	var rot := int(pz[2]) if pz is Array else 0
 	if inside:
-		# 방 안 0.2 칸 단위, 벽에서 조금 떨어지게
-		var x := clampf(snappedf(p.x, 0.2), -room.x + 0.35, room.x - 0.35)
-		var z := clampf(snappedf(p.z, 0.2), -room.y + 0.35, room.y - 0.35)
+		# 방 안 0.2 칸 단위, 가구 크기만큼 벽에서 떨어지게 (큰 가구가 벽을 뚫던 것)
+		var hh := item_half(move_id, rot)
+		var x := clampf(snappedf(p.x, 0.2), -room.x + hh.x + 0.05, room.x - hh.x - 0.05)
+		var z := clampf(snappedf(p.z, 0.2), -room.y + hh.y + 0.05, room.y - hh.y - 0.05)
+		if move_id != "rug" and _door_zone().intersects(Rect2(x - hh.x, z - hh.y, hh.x * 2, hh.y * 2)):
+			main.toast("문 앞은 비워 둬요")
+			return
+		var ov := _overlap_item(move_id, x, z, rot)
+		if ov != "":
+			main.toast("%s와(과) 겹쳐요" % ov)
+			return
 		_set_pos(move_id, x, z, rot)
 	else:
 		# 밖도 칸에 묶지 않고 누른 자리(0.25 칸 단위)에
@@ -3049,6 +3135,10 @@ func _move_at(pos: Vector2) -> void:
 			return
 		if main._in_house(Vector3(x, main.FLOOR_TOP, z), 0.3):
 			main.toast("집 자리에는 못 놓아요")
+			return
+		var ov := _overlap_item(move_id, x, z, rot)
+		if ov != "":
+			main.toast("%s와(과) 겹쳐요" % ov)
 			return
 		_set_pos(move_id, x, z, rot)
 	Save.bump("place")
@@ -3165,6 +3255,14 @@ func _house_ok(c: Vector2i) -> String:
 		for cell in main.house_cells(other):
 			if mine.has(cell):
 				return "집과 공방이 겹쳐요 · 조금 떨어진 곳을 눌러 보세요"
+	for it in zone_items("out"):
+		var o: String = it["id"]
+		var pz = pos_of(o)
+		if not (is_put(o) and MOVABLE.has(o) and pz is Array):
+			continue
+		var rel := Vector2i(roundi(float(pz[0])), roundi(float(pz[1]))) - c
+		if absi(rel.x) <= 1 and rel.y >= -1 and rel.y <= 1:
+			return "그 자리에 %s이(가) 있어요 · 옮기거나 치운 뒤 놓아 주세요" % item_name(o)
 	var props: Dictionary = H()["props"]
 	for k in props:
 		var xz: PackedStringArray = str(k).split(",")

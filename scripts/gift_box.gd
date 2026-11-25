@@ -135,15 +135,18 @@ func _ready() -> void:
 	btns.alignment = BoxContainer.ALIGNMENT_CENTER
 	btns.add_theme_constant_override("separation", 16)
 	v.add_child(btns)
-	# 「10개 열기」: 한 번만 누르면 바로 10개가 빙글 돌며 열려요 (예전엔 켜고 → 다시 밀어야 했음)
+	# 「10개 열기」: 켜 두고 직접 상자를 밀어 돌리면 10개가 한꺼번에 열려요 (저절로 돌지 않음)
 	x10_btn = Mol.btn("10개 열기 · %s" % _comma(PRICE * 10), "sec", 26)
 	x10_btn.custom_minimum_size.x = 250
+	x10_btn.toggle_mode = true
 	x10_btn.disabled = int(Save.d.get("jelly", 0)) < PRICE * 10
-	x10_btn.pressed.connect(func():
+	x10_btn.toggled.connect(func(on: bool):
 		if phase != "idle":
 			return
-		count = 10
-		_start_spin(1200.0 * (1.0 if randf() < 0.5 else -1.0)))
+		count = 10 if on else 1
+		x10_btn.text = ("10개 · 밀어서 열기" if on else "10개 열기 · %s" % _comma(PRICE * 10))
+		tag.text = "상자를 옆으로 밀어 돌려 보세요"
+		_paint_sub())
 	btns.add_child(x10_btn)
 	_paint_sub()
 	var q := Mol.btn("그만두기", "sec", 28)
