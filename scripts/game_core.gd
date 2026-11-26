@@ -1525,7 +1525,7 @@ func do_undo() -> bool:
 
 
 func do_shake() -> bool:
-	if shake_left <= 0 or over or shake_t > 0:
+	if shake_left <= 0 or over or shake_t > 0 or clear_t > 0:     # 깬 뒤 클리어 대기 중엔 아이템만 날아가서 막음
 		return false
 	shake_left -= 1
 	for b: Blob in blobs:
@@ -1539,7 +1539,7 @@ func do_shake() -> bool:
 
 
 func do_tilt() -> bool:
-	if tilt_left <= 0 or over or tilt_t > 0:
+	if tilt_left <= 0 or over or tilt_t > 0 or clear_t > 0:
 		return false
 	tilt_left -= 1
 	tilt_t = TILT_SECS
@@ -1704,10 +1704,16 @@ func snapshot() -> Dictionary:
 	for b: Blob in blobs:
 		if b.row:
 			continue
-		bl.append({"t": b.t, "x": roundi(b.cx), "y": roundi(b.cy)})
+		var e := {"t": b.t, "x": roundi(b.cx), "y": roundi(b.cy)}
+		if b.wild:
+			e["w"] = 1      # ×2 별 (예전엔 빠져서 이어 하면 보통 숫자가 됐음)
+		bl.append(e)
+	var qw: Array = []
 	for q: Blob in queue:
+		if q.wild:
+			qw.append(qu.size())
 		qu.append(q.t)
-	return {"score": score, "max_tier": max_tier, "throws_left": throws_left, "over": over, "blobs": bl, "queue": qu, "streak": streak, "rid": run_id, "got": got_items, "thrown": thrown}
+	return {"qw": qw, "score": score, "max_tier": max_tier, "throws_left": throws_left, "over": over, "blobs": bl, "queue": qu, "streak": streak, "rid": run_id, "got": got_items, "thrown": thrown}
 
 
 func restore(d: Dictionary) -> void:
@@ -1722,13 +1728,16 @@ func restore(d: Dictionary) -> void:
 	for s in d.get("blobs", []):
 		var t := int(s["t"])
 		var r: float = tiers_r[t]
-		var b := make_blob(t, clampf(float(s["x"]), r, W - r), minf(H - r, float(s["y"])), 0, 0, 1)
+		# 날아가던 중(대기줄 위 길) 저장된 숫자는 대기줄과 겹치지 않게 선반 아래로 내려 놓음
+		var b := make_blob(t, clampf(float(s["x"]), r, W - r), clampf(float(s["y"]), SHELF_BOT + r + 2, H - r), 0, 0, 1)
 		b.age = 2
+		b.wild = int(s.get("w", 0)) == 1
 		blobs.append(b)
 	var i := 0
 	for t in d.get("queue", []):
 		var q := make_blob(int(t), 50 + i * 87, ROW_Y, 0, 0, 1)
 		q.row = true; q.age = 2; q.tx = q.cx
+		q.wild = d.get("qw", []).any(func(k): return int(k) == i)
 		blobs.append(q); queue.append(q)
 		i += 1
 	score_changed.emit(score)
