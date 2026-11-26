@@ -539,7 +539,8 @@ func start_stage(i: int) -> void:
 	_paint_info()
 	var st: Dictionary = core.stages[i]
 	var tips: Array = Save.d.get("tips_seen", [])
-	if st.get("tip") and not tips.has(i):
+	# 저장(JSON)을 다시 읽으면 숫자가 실수(3.0)라 has(3) 이 안 맞음 → 정수로 비교
+	if st.get("tip") and not tips.any(func(x): return int(x) == i):
 		# 단계 안내문은 그 단계를 처음 할 때만
 		hint_lbl.text = str(st["tip"]).replace("<br>", "\n")
 		hint_lbl.visible = true
@@ -714,7 +715,8 @@ func _board_input(e: InputEvent) -> void:
 					pass
 				_paint_items()
 	elif e is InputEventMouseMotion and dragging:
-		var dv: Vector2 = (e.position - drag_start) / board_scale
+		# 기울이기로 판이 돌아가 있으면 끈 방향도 판 기준으로 (안 그러면 손가락과 최대 22° 어긋나게 날아감)
+		var dv: Vector2 = ((e.position - drag_start) / board_scale).rotated(-board_area.rotation)
 		var l := dv.length()
 		core.pull = minf(1, maxf(0, l - 12) / 150.0)
 		if l > 12:
