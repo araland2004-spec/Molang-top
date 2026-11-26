@@ -315,6 +315,7 @@ func _process(delta: float) -> void:
 
 func _pop() -> void:
 	phase = "open"
+	btns.visible = false      # 여는 중(보상 계산·그림 준비를 기다리는 동안)엔 「그만두기」를 못 누르게 — 누르면 젤리는 나가고 결과는 못 봐요
 	var r: Dictionary = await pop_cb.call(count)
 	var its: Array = r.get("items", [])
 	if its.size() > 1:
@@ -347,6 +348,7 @@ func _pop() -> void:
 
 
 func _end_buttons(r: Dictionary) -> void:
+	btns.visible = true
 	for c in btns.get_children():
 		c.queue_free()
 	for nn in [1, 10]:
