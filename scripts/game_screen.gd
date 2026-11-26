@@ -539,7 +539,8 @@ func start_stage(i: int) -> void:
 	_paint_info()
 	var st: Dictionary = core.stages[i]
 	var tips: Array = Save.d.get("tips_seen", [])
-	if st.get("tip") and not tips.has(i):
+	# 저장(JSON)을 다시 읽으면 숫자가 실수(3.0)라 has(3) 이 안 맞음 → 정수로 비교
+	if st.get("tip") and not tips.any(func(x): return int(x) == i):
 		# 단계 안내문은 그 단계를 처음 할 때만
 		hint_lbl.text = str(st["tip"]).replace("<br>", "\n")
 		hint_lbl.visible = true
@@ -662,14 +663,14 @@ func _use_item(k: String) -> void:
 			if core.do_undo():
 				Save.spend_item("undo", endless)
 		"hammer":
-			if core.hammer_left > 0 and not core.over:
+			if core.hammer_left > 0 and not core.over and core.clear_t <= 0:
 				core.hammer_armed = not core.hammer_armed
 				_toast("판 안의 숫자를 눌러요" if core.hammer_armed else "뿅망치를 내려놨어요")
 		"tilt":
 			if core.do_tilt():
 				Save.spend_item("tilt", endless)
 		"x2":
-			if core.x2_left > 0 and not core.over:
+			if core.x2_left > 0 and not core.over and core.clear_t <= 0:
 				core.x2_armed = not core.x2_armed
 				_toast("다음에 던지는 숫자가 별이 돼요" if core.x2_armed else "별을 내려놨어요")
 	_paint_items()
@@ -682,43 +683,62 @@ func _gui_input(e: InputEvent) -> void:
 
 
 ## e.position 은 화면(이 Control) 좌표
+## 첫 손가락(그리고 PC 마우스)은 마우스 이벤트로 오고, 두 번째 손가락부터는 터치 이벤트로만 와요.
+## ◀▶ 를 한 손가락으로 누른 채 다른 손가락으로도 던질 수 있게 둘 다 받아요 (첫 손가락의 터치 이벤트는 마우스와 겹치니 버림).
 func _board_input(e: InputEvent) -> void:
 	if input_guard > 0:
 		return
-	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-		var lp: Vector2 = (board_area.get_transform().affine_inverse() * e.position) / board_scale     # 기울여 돌아간 판도 정확히
-		if e.pressed:
-			if core.over or core.clear_t > 0 or dragging:
-				return
-			if core.hammer_armed:
-				if core.hammer_at(lp.x, lp.y) if board_area.get_rect().has_point(e.position) else false:
-					Save.spend_item("hammer", core.mode != "stage")
-					_paint_items()
-				return
-			if core.grab(lp.x):
-				dragging = true
-				drag_start = e.position
-				Save.buzz(8)
-		else:
-			if dragging:
-				dragging = false
-				var used: String = core.release(true)
-				Save.buzz(8)
-				if used == "x2":
-					Save.spend_item("x2", core.mode != "stage")
-				if hint_lbl.visible and core.mode != "stage":
-					hint_lbl.visible = false
-					Save.d["seen_hint"] = true
-					Save.save()
-				elif hint_lbl.visible and core.score == 0:
-					pass
+	if e is InputEventScreenTouch and e.index > 0:
+		_board_press(e.position, e.pressed, e.index)
+	elif e is InputEventScreenDrag and e.index > 0:
+		_board_move(e.position, e.index)
+	elif e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+		_board_press(e.position, e.pressed, -1)
+	elif e is InputEventMouseMotion:
+		_board_move(e.position, -1)
+
+
+var drag_ptr := -1     # 지금 던지려고 잡고 있는 손가락 (-1 = 마우스·첫 손가락)
+
+
+func _board_press(pos: Vector2, pressed: bool, ptr: int) -> void:
+	var lp: Vector2 = (board_area.get_transform().affine_inverse() * pos) / board_scale     # 기울여 돌아간 판도 정확히
+	if pressed:
+		if core.over or core.clear_t > 0 or dragging:
+			return
+		if core.hammer_armed:
+			if core.hammer_at(lp.x, lp.y) if Rect2(Vector2.ZERO, board_area.size).has_point(lp * board_scale) else false:     # 판이 돌아가 있어도 판 안인지 정확히
+				Save.spend_item("hammer", core.mode != "stage")
 				_paint_items()
-	elif e is InputEventMouseMotion and dragging:
-		var dv: Vector2 = (e.position - drag_start) / board_scale
-		var l := dv.length()
-		core.pull = minf(1, maxf(0, l - 12) / 150.0)
-		if l > 12:
-			core.aim = atan2(dv.x, dv.y)
+			return
+		if core.grab(lp.x):
+			dragging = true
+			drag_ptr = ptr
+			drag_start = pos
+			Save.buzz(8)
+	else:
+		if dragging and ptr == drag_ptr:
+			dragging = false
+			var used: String = core.release(true)
+			Save.buzz(8)
+			if used == "x2":
+				Save.spend_item("x2", core.mode != "stage")
+			if hint_lbl.visible and core.mode != "stage":
+				hint_lbl.visible = false
+				Save.d["seen_hint"] = true
+				Save.save()
+			_paint_items()
+
+
+func _board_move(pos: Vector2, ptr: int) -> void:
+	if not dragging or ptr != drag_ptr:
+		return
+	# 기울이기로 판이 돌아가 있으면 끈 방향도 판 기준으로 (안 그러면 손가락과 최대 22° 어긋나게 날아감)
+	var dv: Vector2 = ((pos - drag_start) / board_scale).rotated(-board_area.rotation)
+	var l := dv.length()
+	core.pull = minf(1, maxf(0, l - 12) / 150.0)
+	if l > 12:
+		core.aim = atan2(dv.x, dv.y)
 
 
 # ───────────────────────── 매 프레임 ─────────────────────────

@@ -63,7 +63,7 @@ func _migrate_stages() -> void:
 	var nw := {}
 	for k in old:
 		var n := int(k) + 1
-		if removed.has(n):
+		if removed.any(func(r): return int(r) == n):     # JSON 숫자는 실수(17.0)라 has(17) 이 안 맞음
 			continue
 		var m := n
 		for r in removed:

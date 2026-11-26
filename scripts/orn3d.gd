@@ -255,6 +255,8 @@ func _build_ui() -> void:
 	var later := Mol.btn("나중에", "ghost", 20)
 	later.custom_minimum_size.y = 64
 	later.pressed.connect(func():
+		if phase == "done":     # 다 걸고 반짝이는 동안 누르면 보상(done_cb)을 못 받던 것
+			return
 		if quit_cb.is_valid():
 			quit_cb.call()
 		queue_free())

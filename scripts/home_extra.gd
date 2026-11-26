@@ -3904,7 +3904,14 @@ func _node_aabb(root: Node3D) -> AABB:
 	var f := true
 	for mi in root.find_children("*", "GeometryInstance3D", true, false):
 		var m := mi as GeometryInstance3D
-		var a: AABB = root.global_transform.affine_inverse() * m.global_transform * m.get_aabb()
+		# 장면에 안 붙은 노드(item_half 의 furn_model)도 재야 해서 global_transform 대신 부모를 따라 올라가며 곱함
+		var t := Transform3D.IDENTITY
+		var n: Node = m
+		while n != null and n != root:
+			if n is Node3D:
+				t = (n as Node3D).transform * t
+			n = n.get_parent()
+		var a: AABB = t * m.get_aabb()
 		box = a if f else box.merge(a)
 		f = false
 	return box

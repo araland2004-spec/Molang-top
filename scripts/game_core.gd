@@ -46,7 +46,7 @@ const LANE_H := 30.0
 const ODDS := [10, 12, 18, 20, 18, 13, 7, 2]
 ## 무한 모드: 큰 숫자(64~256)가 덜 나오게 → 8192 가 첫 번째 큰 고비 (예전엔 너무 쉽게 나왔음)
 const ODDS_ENDLESS := [17, 19, 21, 18, 13, 8, 3, 1]
-const ROCK_FROM := 19
+const ROCK_FROM := 18     # 0부터 센 단계 번호. stageRev(17단계 뺌)로 돌덩이 안내가 18번(19단계)으로 당겨져서 같이 맞춤
 const MISS_LIMIT := 3
 const MISS_WAIT := 2.2
 const COMBO_MAX := 10
@@ -1504,7 +1504,7 @@ func take_undo() -> void:
 
 
 func do_undo() -> bool:
-	if undo_snap == null or undo_left <= 0 or over:
+	if undo_snap == null or undo_left <= 0 or over or clear_t > 0:     # 깬 뒤 0.8초 사이에 되돌리면 던지기 수가 늘어 별이 부풀던 것
 		return false
 	var S: Dictionary = undo_snap
 	blobs = S["blobs"].map(func(b): return b.clone())
@@ -1525,7 +1525,7 @@ func do_undo() -> bool:
 
 
 func do_shake() -> bool:
-	if shake_left <= 0 or over or shake_t > 0:
+	if shake_left <= 0 or over or shake_t > 0 or clear_t > 0:     # 깬 뒤 클리어 대기 중엔 아이템만 날아가서 막음
 		return false
 	shake_left -= 1
 	for b: Blob in blobs:
@@ -1539,7 +1539,7 @@ func do_shake() -> bool:
 
 
 func do_tilt() -> bool:
-	if tilt_left <= 0 or over or tilt_t > 0:
+	if tilt_left <= 0 or over or tilt_t > 0 or clear_t > 0:
 		return false
 	tilt_left -= 1
 	tilt_t = TILT_SECS
@@ -1627,6 +1627,7 @@ func new_game() -> void:
 	undo_left = item_start("undo"); undo_snap = null
 	x2_left = item_start("x2"); x2_armed = false
 	tilt_left = item_start("tilt"); tilt_t = 0; tilt_btn = 0
+	tilt_now = 0.0; tilt_g = 0.0; tilt_cos = 1.0     # 기울이던 중 끝난 판을 다시 하면 새 판이 기울어진 채 시작하던 것
 	shake_left = item_start("shake")
 	if mode != "stage":
 		throws_left = endless_throws()
@@ -1703,10 +1704,16 @@ func snapshot() -> Dictionary:
 	for b: Blob in blobs:
 		if b.row:
 			continue
-		bl.append({"t": b.t, "x": roundi(b.cx), "y": roundi(b.cy)})
+		var e := {"t": b.t, "x": roundi(b.cx), "y": roundi(b.cy)}
+		if b.wild:
+			e["w"] = 1      # ×2 별 (예전엔 빠져서 이어 하면 보통 숫자가 됐음)
+		bl.append(e)
+	var qw: Array = []
 	for q: Blob in queue:
+		if q.wild:
+			qw.append(qu.size())
 		qu.append(q.t)
-	return {"score": score, "max_tier": max_tier, "throws_left": throws_left, "over": over, "blobs": bl, "queue": qu, "streak": streak, "rid": run_id, "got": got_items, "thrown": thrown}
+	return {"qw": qw, "score": score, "max_tier": max_tier, "throws_left": throws_left, "over": over, "blobs": bl, "queue": qu, "streak": streak, "rid": run_id, "got": got_items, "thrown": thrown}
 
 
 func restore(d: Dictionary) -> void:
@@ -1721,13 +1728,16 @@ func restore(d: Dictionary) -> void:
 	for s in d.get("blobs", []):
 		var t := int(s["t"])
 		var r: float = tiers_r[t]
-		var b := make_blob(t, clampf(float(s["x"]), r, W - r), minf(H - r, float(s["y"])), 0, 0, 1)
+		# 날아가던 중(대기줄 위 길) 저장된 숫자는 대기줄과 겹치지 않게 선반 아래로 내려 놓음
+		var b := make_blob(t, clampf(float(s["x"]), r, W - r), clampf(float(s["y"]), SHELF_BOT + r + 2, H - r), 0, 0, 1)
 		b.age = 2
+		b.wild = int(s.get("w", 0)) == 1
 		blobs.append(b)
 	var i := 0
 	for t in d.get("queue", []):
 		var q := make_blob(int(t), 50 + i * 87, ROW_Y, 0, 0, 1)
 		q.row = true; q.age = 2; q.tx = q.cx
+		q.wild = d.get("qw", []).any(func(k): return int(k) == i)
 		blobs.append(q); queue.append(q)
 		i += 1
 	score_changed.emit(score)
@@ -1862,7 +1872,7 @@ func sim_step(dt: float) -> void:
 			var amt := minf(1, press[i] / PRESS_FULL)
 			press[i] = 0.0
 			gauge[i] = minf(1, gauge[i] + dt * 0.75 * amt) if (amt > 0.02 and shake_safe <= 0) else maxf(0, gauge[i] - dt * 0.55)
-	if not over and shake_safe <= 0 and gauge[0] >= 1 and gauge[1] >= 1:
+	if not over and clear_t <= 0 and shake_safe <= 0 and gauge[0] >= 1 and gauge[1] >= 1:     # 이미 깼으면(클리어 대기 중) 반원이 차도 실패로 바꾸지 않음
 		end_game()
 	if not over:
 		since_merge += dt
