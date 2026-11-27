@@ -60,6 +60,16 @@ const STREAK_WAIT := 2.5
 const TIER_MAX := 899
 # 몸 둘레 점 개수 (웹 버전 10 + r×0.3). GDScript 는 느려서 조금 줄임 — 모양은 곡선으로 부드럽게 그림
 const POINTS_BASE := 8.0
+## 숫자 몰랑이 크기 배율 (판 너비 360 기준 반지름 × 이 값). 2026-11-27: 너무 작다는 의견에 1.0 → 1.12
+const SIZE_K := 1.12
+## 말랑함: 모양 되돌리는 힘(장력)과 많이 찌그러졌을 때 더 버티는 힘. 작을수록 흐물흐물
+## 2026-11-27: 장력이 세다는 의견에 전체적으로 낮춤 (예전 값은 각 줄 주석)
+const SOFT_K := 0.0018           # 모양 되돌리는 힘 (예전 0.0024)
+const SOFT_SMALL := 0.0055       # 작은 숫자 보정 (예전 0.0072)
+const SOFT_DEV := 0.022          # 많이 찌그러지면 더 버팀 (예전 0.03)
+const SOFT_EDGE := 0.07           # 둘레 길이 유지 (예전 0.11): 낮을수록 눌리면 옆으로 퍼짐
+const SOFT_SMOOTH := 0.1          # 울퉁불퉁 펴기 (예전 0.25): 이게 제일 「팽팽하게」 보이게 하던 힘
+const SOFT_SMOOTH_LO := 0.03      # 거의 매끈할 때 펴기 (예전 0.1)
 const POINTS_PER_R := 0.13      # 숫자 고리 점 수 (예전 0.2): 큰 숫자일수록 점이 덜 늘게 → 계산 가벼움
 
 var num_font: Font
@@ -236,7 +246,7 @@ class Blob:
 func _init() -> void:
 	tiers_r.resize(TIER_MAX + 1)
 	for i in TIER_MAX + 1:
-		tiers_r[i] = 17.0 * pow(1.135, i) if i <= 12 else 17.0 * pow(1.135, 12) + 22.0 * (1.0 - pow(0.8, i - 12))
+		tiers_r[i] = (17.0 * pow(1.135, i) if i <= 12 else 17.0 * pow(1.135, 12) + 22.0 * (1.0 - pow(0.8, i - 12))) * SIZE_K
 
 
 static func tier_color(t: int) -> Color:
@@ -385,7 +395,7 @@ func internal_constraints(b: Blob) -> void:
 		var d := sqrt(dx * dx + dy * dy)
 		if d == 0.0:
 			d = 1e-6
-		var c := (d - L) / d * 0.5 * 0.11
+		var c := (d - L) / d * 0.5 * SOFT_EDGE
 		x[i] += dx * c; y[i] += dy * c; x[j] -= dx * c; y[j] -= dy * c
 	var cx := 0.0
 	var cy := 0.0
@@ -417,8 +427,8 @@ func internal_constraints(b: Blob) -> void:
 		var ang := atan2(A, B)
 		var ca := cos(ang)
 		var sa := sin(ang)
-		# 모양 되돌리는 힘(장력): 조금 낮춰서 밀면 틈 사이로 더 쏙 들어가게 (0.0032 → 0.0024)
-		var k := (0.0024 * minf(1.0, (36.0 / b.r) * (36.0 / b.r)) + 0.0072 * maxf(0.0, (34.0 - b.r) / 17.0)) * (0.3 if b.wob > 0 else 1.0)
+		# 모양 되돌리는 힘(장력): 값은 위 SOFT_* (2026-11-27 더 흐물하게)
+		var k := (SOFT_K * minf(1.0, (36.0 / b.r) * (36.0 / b.r)) + SOFT_SMALL * maxf(0.0, (34.0 - b.r) / 17.0)) * (0.3 if b.wob > 0 else 1.0)
 		var small := maxf(0.0, (42.0 - b.r) / 25.0)
 		var dev := 0.0
 		var gxs := PackedFloat64Array()
@@ -434,7 +444,7 @@ func internal_constraints(b: Blob) -> void:
 			gys[i] = gy
 			dev += absf(gx - x[i]) + absf(gy - y[i])
 		dev = dev / n / (b.r * s)
-		var kk := k + (small * 0.3 + (0.0 if b.wob > 0 else 0.03)) * maxf(0.0, dev - (0.15 if small > 0 else 0.4))
+		var kk := k + (small * 0.3 + (0.0 if b.wob > 0 else SOFT_DEV)) * maxf(0.0, dev - (0.15 if small > 0 else 0.4))
 		# 큰 숫자에 깔린 숫자가 납작하게 눌려 찌그러져 보이지 않게: 위에 실린 무게만큼 더 버팀
 		var heavy := minf(0.12, b.load / (b.r * b.r) * 0.01)
 		if heavy > 0.0 and b.wob <= 0:
@@ -472,7 +482,7 @@ func internal_constraints(b: Blob) -> void:
 			var h := n - 1 if i == 0 else i - 1
 			var lx := (ox[h] + ox[j]) / 2.0 - ox[i]
 			var ly := (oy[h] + oy[j]) / 2.0 - oy[i]
-			var sm := 0.25 if lx * lx + ly * ly > LL else 0.1
+			var sm := SOFT_SMOOTH if lx * lx + ly * ly > LL else SOFT_SMOOTH_LO
 			x[i] += lx * sm; y[i] += ly * sm
 			var dx := x[i] - cx
 			var dy := y[i] - cy
