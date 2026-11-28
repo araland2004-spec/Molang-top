@@ -1190,7 +1190,8 @@ func open_stage_popup(cur: int, goal := "") -> void:
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	dim.gui_input.connect(func(ev):
-		if ev is InputEventMouseButton and ev.pressed:
+		# 왼쪽 클릭(폰 터치)만 닫기 — 휠·오른쪽 클릭까지 받으면 PC 웹에서 스크롤만 해도 창이 닫혔어요
+		if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
 			_close_stage_popup())
 	ui_root.add_child(dim)
 	stage_pop = dim
