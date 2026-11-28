@@ -76,6 +76,10 @@ jobs:
             rm -rf /tmp/src && git worktree add -f /tmp/src origin/$b
             out=build/web; [ "$b" != main ] && out=build/web/$b
             mkdir -p $out
+            # 빌드 번호: 게임 안(scripts/build_id.gd)과 version.txt 에 같이 → 오래된 캐시면 게임이 알아채고 업데이트를 띄워요
+            sha=$(git -C /tmp/src rev-parse --short HEAD)
+            printf 'extends RefCounted\nconst ID := "%s"\n' "$sha" > /tmp/src/scripts/build_id.gd
+            printf '%s' "$sha" > $out/version.txt
             (cd /tmp/src && $GODOT --headless --import >/dev/null 2>&1 || true)
             (cd /tmp/src && $GODOT --headless --export-release "Web" $GITHUB_WORKSPACE/$out/index.html)
             git worktree remove --force /tmp/src

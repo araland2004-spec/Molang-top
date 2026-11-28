@@ -686,7 +686,7 @@ func open_settings() -> void:
 	rb.add_theme_color_override("font_color", Mol.ALERT)
 	rb.pressed.connect(_ask_reset)
 	v.add_child(rb)
-	var ver: Button = main._px_btn("몰랑탑 베타 · 고닷 버전", main.C_CREAM, 18)
+	var ver: Button = main._px_btn("몰랑탑 베타 · 빌드 " + preload("res://scripts/build_id.gd").ID, main.C_CREAM, 18)
 	ver.flat = true
 	ver.pressed.connect(func():
 		dev_taps += 1

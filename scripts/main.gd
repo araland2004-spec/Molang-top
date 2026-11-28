@@ -106,6 +106,7 @@ func _ready() -> void:
 	_update_camera()
 	_update_mood()
 	refresh_ui()
+	_check_update()
 	if Save.home_popup == "stage":
 		Save.home_popup = ""
 		open_stage_popup.call_deferred(mini(int(Save.d.get("prog", 0)), 199), "")
@@ -358,6 +359,31 @@ func _go_game(m: String) -> void:
 	Save.next_mode = m
 	Save.home_view = {"yaw": yaw, "zoom": zoom}
 	get_tree().change_scene_to_file("res://scenes/game.tscn")
+
+
+## 웹: 브라우저·홈 화면 앱이 예전 빌드를 캐시해 두는 경우가 있어서(PWA), version.txt 를 새로 받아 비교해요.
+## 다르면 위에 「새 버전」 띠 → 누르면 캐시를 비우고 새로 고침.
+const BuildId := preload("res://scripts/build_id.gd")
+var update_btn: Button
+
+
+func _check_update() -> void:
+	if not OS.has_feature("web") or BuildId.ID == "dev":
+		return
+	JavaScriptBridge.eval("window.__mlv='';fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.ok?r.text():''}).then(function(t){window.__mlv=(t||'').trim()}).catch(function(){})")
+	await get_tree().create_timer(2.5).timeout
+	var v := str(JavaScriptBridge.eval("window.__mlv||''"))
+	if v == "" or v == BuildId.ID or not is_instance_valid(ui_root):
+		return
+	update_btn = _px_btn("새 버전이 나왔어요 · 눌러서 업데이트", C_YELLOW, 24)
+	update_btn.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	update_btn.offset_left = -300
+	update_btn.offset_right = 300
+	update_btn.offset_top = 290
+	update_btn.offset_bottom = 290 + 72
+	update_btn.pressed.connect(func(): JavaScriptBridge.eval("(async function(){try{if(navigator.serviceWorker){var rs=await navigator.serviceWorker.getRegistrations();for(var r of rs){await r.unregister();}}if(window.caches){var ks=await caches.keys();for(var k of ks){await caches.delete(k);}}}catch(e){}location.reload();})()"))
+	ui_root.add_child(update_btn)
+	hud_blocks.append(update_btn)
 
 
 ## 공유: 웹은 폰 공유 창(안 되면 링크 복사), 앱은 링크 복사. 서버가 있으면 내 친구 코드를 붙여요 (받은 사람이 열면 친구 추가)
