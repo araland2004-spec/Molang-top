@@ -641,11 +641,13 @@ func persist() -> void:
 	# (「목록」 버튼은 목록을 열기 전에 먼저 저장하고, 진짜 게임 오버는 _on_finished 에서 run 을 비움)
 	if core and core.mode == "endless" and not core.over and int(Save.d.get("erew_rid", -1)) != core.run_id:
 		Save.d["run"] = core.snapshot()
+		Save.d["best"] = maxi(int(Save.d["best"]), core.best)      # 판 중간에 나가도 최고 점수는 바로 남겨요 (홈 BEST·이어 하기 표시)
 		Save.save()
 
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_APPLICATION_PAUSED:
+	# 웹(브라우저)은 탭을 바꾸거나 화면을 끌 때 창 포커스 아웃(WM_WINDOW_FOCUS_OUT)으로 알려 줘요 (save.gd 와 같게)
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_WM_WINDOW_FOCUS_OUT or what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_APPLICATION_PAUSED:
 		persist()
 
 
