@@ -7,6 +7,7 @@ signal info_changed()
 signal toast(text: String)
 signal finished(kind: String, reason: String)   # kind: "over" | "clear"
 signal items_changed()
+signal made(t: int, shiny: bool)   # 합쳐서 숫자를 만들 때마다 (도감 기록 · 반짝이)
 signal buzz(ms: int)   # 진동 (웹: 합치기 8/16, 세게 던지기 12, 클리어 30, 끝 60)
 
 const INK := Color("#111113")
@@ -132,7 +133,10 @@ var shake_left := 0
 var up_count := 0
 var up_tier := 0
 var board_tier := 0
-var mode := "endless"
+var mode := "endless"     # "endless" | "stage" | "daily"(오늘의 판: 고정 순서 · 규칙 하나)
+var daily_rule := ""      # 오늘의 판 규칙 id (league.gd RULES)
+var rng := RandomNumberGenerator.new()    # 오늘의 판: 모두 같은 순서로 나오게 날짜로 씨앗을 심어요
+var shiny_p := 0.0        # 반짝이 몰랑이 확률 (화면 쪽에서 넣어 줌)
 var stage_idx := 0
 var throws_left := 0
 var prog := 0
@@ -209,6 +213,7 @@ class Blob:
 	var warp_cd := 0.0
 	var warp_n := 0
 	var tri_ok := true
+	var shiny := false       # 반짝이 몰랑이 (금빛 테두리·반짝임)
 	var a0 := 0.0            # 처음 점들을 둘러 놓은 시작 각 (돌아간 각도 = 지금 점 각 - 처음 각)
 	var pop_t := 0.0     # 새로 합쳐진 젤리의 「퐁」(그림만 1→1.18→1)
 	var rx := PackedFloat64Array()
@@ -280,6 +285,8 @@ func stage_opt(k: String) -> Variant:
 
 
 func endless_throws() -> int:
+	if mode == "daily" and daily_rule == "throws":
+		return 150
 	return roundi(550 + (prog - 20) * 450.0 / 80.0) if prog >= 20 else 300
 
 
@@ -287,6 +294,8 @@ var bonus := {}          # 스테이지 입장 때 가방에서 골라 들고 �
 
 
 func item_open(k: String) -> bool:
+	if mode == "daily":
+		return int(daily_left.get(k, 0)) > 0
 	if mode == "stage":
 		return stage_idx + 1 >= item_at[k] or int(bonus.get(k, 0)) > 0
 	return prog >= endless_at[k] or int(daily_left.get(k, 0)) > 0
@@ -297,22 +306,32 @@ func item_start(k: String) -> int:
 		return 0
 	if mode == "stage":
 		return (1 if stage_idx + 1 >= item_at[k] else 0) + int(bonus.get(k, 0))
-	return int(daily_left.get(k, 0))
+	return int(daily_left.get(k, 0))      # 무한: 하루 3번 + 가방 · 오늘의 판: 규칙대로 (화면 쪽에서 넣어 줌)
 
 
 func rocks_on() -> bool:
 	return mode == "stage" and stage_idx >= ROCK_FROM
 
 
+## 랜덤: 오늘의 판은 날짜 씨앗(모두 같은 순서), 그 밖은 그냥
+func _rf() -> float:
+	return rng.randf() if mode == "daily" else randf()
+
+
+const ODDS_BIG := [8, 12, 18, 20, 18, 14, 7, 3]     # 오늘의 판 「큰 몰랑이 날」
+
+
 func pick() -> int:
 	var od: Array = ODDS.duplicate() if mode == "stage" else ODDS_ENDLESS.duplicate()
+	if mode == "daily" and daily_rule == "big":
+		od = ODDS_BIG.duplicate()
 	if mode != "stage" and max_tier >= 12:
 		od.append(ODDS_ENDLESS[6])      # 8192 를 만든 뒤에야 512 도 가끔
 	var cap: int = int(stages[stage_idx]["cap"]) if mode == "stage" else od.size() - 1
 	var tot := 0.0
 	for i in cap + 1:
 		tot += od[i]
-	var v := randf() * tot
+	var v := _rf() * tot
 	for i in cap + 1:
 		v -= od[i]
 		if v < 0:
@@ -1210,6 +1229,16 @@ func resolve_merges() -> void:
 		var nb := make_blob(nt, X, Y, (va.x + vb.x) / 2, (va.y + vb.y) / 2, 0.94)
 		blend_shape(nb, a, b)
 		nb.pop_t = 0.28
+		# 반짝이: 합칠 때 아주 가끔 (반짝이끼리 합치면 더 잘 나와요)
+		nb.shiny = randf() < shiny_p * (6.0 if (a.shiny or b.shiny) else 1.0)
+		if nb.shiny:
+			toast.emit("반짝이 %s 몰랑이가 나타났어요!" % num_text(nt))
+			buzz.emit(40)
+			for k in 14:
+				var ang2 := randf() * TAU
+				var sp2 := 120.0 + randf() * 160.0
+				particles.append([X, Y, cos(ang2) * sp2, sin(ang2) * sp2 - 90, 2 + randf() * 3, 0.8, Color("#ffe27a")])
+		made.emit(nt, nb.shiny)
 		for k in 8:     # 같은 색 조각 8개 (인터랙션 제안서 I)
 			var ang := k * TAU / 8.0 + randf() * 0.4
 			var sp := 90.0 + randf() * 120.0
@@ -1293,7 +1322,7 @@ func drop_rock() -> void:
 func note_tier(nt: int) -> void:
 	if nt > max_tier:
 		max_tier = nt
-		if nt >= 7 and mode == "endless":
+		if nt >= 7 and mode != "stage":
 			if nt >= 9 and nt <= 13:
 				toast.emit("첫 %s! 이번 판 점수 +%d%%" % [num_text(nt), roundi(momentum() * 100)])
 				info_changed.emit()
@@ -1402,7 +1431,7 @@ func tick_row(dt: float) -> void:
 		busy -= dt
 		return
 	if n < QMAX:
-		var left := randf() < 0.5
+		var left := _rf() < 0.5
 		var t := pick()
 		if mode == "stage" and stages[stage_idx].get("row") and n >= 2 and randf() < (0.45 if stage_idx < 12 else 0.2):
 			var far: Array = queue.slice(1) if left else queue.slice(0, n - 1)
@@ -1429,6 +1458,8 @@ func tick_row(dt: float) -> void:
 
 ## 던지기 수 제한이 있는 판인지 (무한 모드는 제한 없음 · 양쪽 반원이 다 눌리면 끝)
 func limited() -> bool:
+	if mode == "daily":
+		return daily_rule == "throws"
 	return mode == "stage" and int(stages[stage_idx]["throws"]) > 0
 
 
@@ -1604,6 +1635,8 @@ func new_game() -> void:
 	blobs = []; pending = []; particles = []; floaters = []; queue = []; touches.clear(); warp_fx = []
 	score = 0; max_tier = 0; aim = 0; over = false; out_t = 0; since_merge = 0; clear_t = 0
 	run_id = int(Time.get_unix_time_from_system() * 1000.0) % 2000000000 + randi() % 1000
+	if mode == "daily":
+		rng.seed = hash(Time.get_date_string_from_unix_time(int(Time.get_unix_time_from_system()) + 9 * 3600) + daily_rule)
 	got_items = 0
 	thrown = 0
 	board_tier = 0; up_count = 0; up_tier = 0
@@ -1703,7 +1736,7 @@ func snapshot() -> Dictionary:
 	for b: Blob in blobs:
 		if b.row:
 			continue
-		bl.append({"t": b.t, "x": roundi(b.cx), "y": roundi(b.cy)})
+		bl.append({"t": b.t, "x": roundi(b.cx), "y": roundi(b.cy), "s": b.shiny})
 	for q: Blob in queue:
 		qu.append(q.t)
 	return {"score": score, "max_tier": max_tier, "throws_left": throws_left, "over": over, "blobs": bl, "queue": qu, "streak": streak, "rid": run_id, "got": got_items, "thrown": thrown}
@@ -1723,6 +1756,7 @@ func restore(d: Dictionary) -> void:
 		var r: float = tiers_r[t]
 		var b := make_blob(t, clampf(float(s["x"]), r, W - r), minf(H - r, float(s["y"])), 0, 0, 1)
 		b.age = 2
+		b.shiny = bool(s.get("s", false))
 		blobs.append(b)
 	var i := 0
 	for t in d.get("queue", []):
@@ -1931,8 +1965,20 @@ func draw_blob(b: Blob) -> void:
 		draw_colored_polygon(poly, col)
 	var loop := pts.duplicate()
 	loop.append(pts[0])
-	draw_polyline(loop, EDGE, 2.6, true)
+	if b.shiny:
+		draw_polyline(loop, Color("#ffd84a"), 6.0, true)
+		draw_polyline(loop, Color(1, 1, 1, 0.5 + 0.5 * sin(clock * 6.0 + b.id)), 2.0, true)
+	else:
+		draw_polyline(loop, EDGE, 2.6, true)
 	var R := b.r * b.s
+	if b.shiny:
+		# 반짝임 두 개 (돌아가며 빛나요)
+		for k2 in 2:
+			var ph := clock * 1.6 + k2 * PI
+			var sp := Vector2(b.cx + cos(ph) * R * 0.62, b.cy + sin(ph) * R * 0.62)
+			var sz := R * (0.12 + 0.05 * sin(clock * 8.0 + k2))
+			draw_colored_polygon(PackedVector2Array([sp + Vector2(0, -sz * 2), sp + Vector2(sz * 0.5, 0), sp + Vector2(0, sz * 2), sp + Vector2(-sz * 0.5, 0)]), Color(1, 1, 0.85))
+			draw_colored_polygon(PackedVector2Array([sp + Vector2(-sz * 2, 0), sp + Vector2(0, sz * 0.5), sp + Vector2(sz * 2, 0), sp + Vector2(0, -sz * 0.5)]), Color(1, 1, 0.85))
 	if b.rock:
 		for d in [[-0.3, 0.0, 0.16], [0.22, 0.32, 0.13], [0.24, -0.36, 0.11]]:
 			draw_circle(Vector2(b.cx + R * d[0], b.cy + R * d[1]), R * d[2], Color("#58585e"))

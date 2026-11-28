@@ -6,7 +6,7 @@ extends Node
 ## · 보상형 광고: 스테이지 입장 +1 (하루 AD_STAGE_MAX 번) — game_screen 단계 목록
 ## · 전면 광고: 판이 끝날 때 INTER_EVERY 판에 한 번 — game_screen._on_finished (집·꾸미기 화면에는 안 넣어요)
 ## · 광고 제거(no_ads, 한 번 사면 끝): 전면 광고 없음 + 보상형 자리는 광고 없이 바로 보상
-## · 시즌 팩(비소모성): 사면 묶인 꾸미기 아이템이 모은 장식(own)에 들어가요. 판매는 시즌 동안만, 산 건 계속 써요.
+## · 시즌 팩(비소모성): 지금은 없음 (PACKS 에 넣으면 상점에 떠요)
 ##
 ## 결제(광고 제거·시즌 팩)는 구현돼 있어요 — 플러그인만 넣으면 동작:
 ## 1. GodotGooglePlayBilling 3.x 를 addons/GodotGooglePlayBilling 에 넣고, Android 내보내기에서 gradle 빌드 + 플러그인 켜기
@@ -23,9 +23,7 @@ const AD_UNIT := {"rewarded": "", "interstitial": ""}    # AdMob 광고 단위 i
 
 const NO_ADS := "no_ads"
 ## 시즌 팩: 상품 id → 이름·설명·묶인 아이템 id(꾸미기 아이템)·판매 중인지·표시 가격(실제 가격은 플레이 콘솔 값을 받아서 씀)
-const PACKS := {
-	"pack_winter_2026": {"n": "겨울 시즌 팩", "d": "눈 내린 마을 장식 묶음 (에셋 준비 중)", "items": [], "on": true, "price": "₩2,900"},
-}
+const PACKS := {}     # 예전 겨울 시즌 팩(꾸미기 장식)은 꾸미기를 빼면서 없앴어요. 새 팩은 여기에 (예: 반짝이 몰랑이 스킨)
 const NO_ADS_PRICE := "₩4,900"     # 표시용 기본값. 실제 기기에선 플레이 콘솔에 등록한 가격(현지 통화)을 받아서 보여 줘요
 
 signal changed      # 구매·복원 뒤 (상점·목록 다시 그리기)
@@ -122,10 +120,6 @@ func title(pid: String) -> String:
 
 func _grant(pid: String) -> void:
 	iap()[pid] = true
-	if PACKS.has(pid):
-		var own: Dictionary = Save.home()["own"]
-		for id in PACKS[pid]["items"]:
-			own[id] = maxi(1, int(own.get(id, 0)))
 	Save.save()
 	changed.emit()
 

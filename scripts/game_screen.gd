@@ -90,6 +90,8 @@ func _ready() -> void:
 		core.endless_at = iu["endless"]
 	core.best = int(Save.d["best"])
 	core.prog = int(Save.d["prog"])
+	core.shiny_p = Save.SHINY_P
+	core.made.connect(_on_made)
 	_build_ui()
 	core.score_changed.connect(func(s):
 		score_lbl.text = GameCore.score_text(s)
@@ -106,7 +108,9 @@ func _ready() -> void:
 	if OS.has_feature("web") and str(JavaScriptBridge.eval("location.hash")) == "#bench":
 		_bench.call_deferred()
 		return
-	if nm.begins_with("stage:"):
+	if nm == "daily":
+		start_daily()
+	elif nm.begins_with("stage:"):
 		start_stage(int(nm.substr(6)))
 	elif nm == "menu":
 		core.new_game()
@@ -339,7 +343,7 @@ func _build_ui() -> void:
 	card_menu.pressed.connect(show_menu)
 	card_links.add_child(card_menu)
 	card_links.add_child(Mol.lbl("·", 26, Mol.TEXT_DIM))
-	var ch := Mol.btn("집으로", "ghost", 26)
+	var ch := Mol.btn("홈으로", "ghost", 26)
 	ch.pressed.connect(go_home)
 	card_links.add_child(ch)
 
@@ -453,7 +457,11 @@ func _bonus_str() -> String:
 
 
 func _paint_info() -> void:
-	if core.mode != "stage":
+	if core.mode == "daily":
+		stage_lbl.text = "오늘의 판 · " + str(Save.league.rule()["n"])
+		throws_lbl.text = (("던지기 %d 남음" % core.throws_left) if core.limited() else "던진 %d번" % core.thrown) + _bonus_str()
+		goal_row.visible = false
+	elif core.mode != "stage":
 		stage_lbl.text = "무한 모드"
 		throws_lbl.text = "던진 %d번 · 최고 %s" % [core.thrown, GameCore.score_text(core.best)] + _bonus_str()
 		# 무한 모드는 목표 게이지·아이템 보상 없음 (아이템이 너무 빨리 쌓였음 → 아이템은 스테이지에서)
@@ -515,6 +523,33 @@ func start_endless(resume := true) -> void:
 		show_guide("endless", func(): pass)
 
 
+## 오늘의 판: 하루 한 번 기록 · 모두 같은 순서 · 규칙 하나 (scripts/league.gd)
+func start_daily() -> void:
+	if not Save.league.start_daily():
+		_toast("오늘의 판은 이미 했어요 · 내일 또 만나요")
+		go_home.call_deferred()
+		return
+	core.mode = "daily"
+	core.daily_rule = str(Save.league.rule()["id"])
+	core.daily_left = Save.league.rule_items()
+	core.new_game()
+	restart_btn.text = "새 판"
+	_close_overlays()
+	_paint_info()
+	hint_lbl.visible = false
+	_toast("오늘의 판 · %s — %s" % [Save.league.rule()["n"], Save.league.rule()["d"]])
+
+
+## 판에서 숫자를 만들 때마다: 도감 기록 (처음 만든 숫자면 젤리 보상)
+func _on_made(t: int, shiny: bool) -> void:
+	var first := not Save.dex_has(t)
+	var r := Save.dex_add(t, shiny)
+	if first and t >= Save.DEX_FROM and t <= Save.DEX_TO and t >= 4:
+		_toast("도감에 %s 몰랑이 등록!%s" % [GameCore.num_text(t), (" 젤리 +%d" % r) if r > 0 else ""])
+	elif shiny and int(Save.dex().get(str(t), {}).get("s", 0)) == 1:
+		_toast("반짝이 %s 몰랑이를 도감에 등록했어요!" % GameCore.num_text(t))
+
+
 func start_stage(i: int) -> void:
 	i = clampi(i, 0, core.stages.size() - 1)
 	# 하루 입장 횟수 (처음 안내 중인 1단계는 빼고)
@@ -561,6 +596,9 @@ func _close_overlays() -> void:
 
 
 func _on_restart() -> void:
+	if core.mode == "daily" and not core.over:
+		_toast("오늘의 판은 하루 한 번이에요 · 끝까지 가 봐요!")
+		return
 	if core.over:
 		_restart_same()
 		return
@@ -573,6 +611,9 @@ func _on_restart() -> void:
 
 
 func _restart_same() -> void:
+	if core.mode == "daily":
+		go_home()
+		return
 	if core.mode == "stage":
 		start_stage(core.stage_idx)
 	else:
@@ -582,7 +623,7 @@ func _restart_same() -> void:
 func persist() -> void:
 	# core.over 는 게임 오버뿐 아니라 「목록」을 열었을 때도 켜짐 → 그때 저장하면 이어 하기가 사라져서 건너뜀
 	# (「목록」 버튼은 목록을 열기 전에 먼저 저장하고, 진짜 게임 오버는 _on_finished 에서 run 을 비움)
-	if core and core.mode != "stage" and not core.over and int(Save.d.get("erew_rid", -1)) != core.run_id:
+	if core and core.mode == "endless" and not core.over and int(Save.d.get("erew_rid", -1)) != core.run_id:
 		Save.d["run"] = core.snapshot()
 		Save.save()
 
@@ -594,6 +635,9 @@ func _notification(what: int) -> void:
 
 func go_home() -> void:
 	_flush_clear()
+	if core and core.mode == "daily" and not core.over:
+		core.over = true
+		Save.league.finish_daily(core.score)      # 나가면 그때 점수로 기록 (하루 한 번이라 다시 못 들어와요)
 	persist()
 	get_tree().change_scene_to_file("res://scenes/main.tscn")
 
@@ -629,7 +673,7 @@ func _paint_items() -> void:
 		var b: Button = item_btns[k]
 		var open: bool = core.item_open(k)
 		# 무한 모드: 오늘 횟수를 다 써서 0개여도 버튼이 사라지지 않게 (스테이지에서 한 번 연 아이템은 늘 보임, 0개면 꺼짐)
-		if core.mode != "stage" and int(Save.d.get("prog", 0)) + 1 >= int(core.item_at.get(k, 9999)):
+		if core.mode == "endless" and int(Save.d.get("prog", 0)) + 1 >= int(core.item_at.get(k, 9999)):
 			open = true
 		b.visible = open
 		any = any or open
@@ -653,7 +697,7 @@ func _paint_items() -> void:
 
 
 func _use_item(k: String) -> void:
-	var endless: bool = core.mode != "stage"
+	var endless: bool = core.mode == "endless"     # 오늘의 판 아이템은 가방에서 안 꺼내요
 	match k:
 		"shake":
 			if core.do_shake():
@@ -692,7 +736,7 @@ func _board_input(e: InputEvent) -> void:
 				return
 			if core.hammer_armed:
 				if core.hammer_at(lp.x, lp.y) if board_area.get_rect().has_point(e.position) else false:
-					Save.spend_item("hammer", core.mode != "stage")
+					Save.spend_item("hammer", core.mode == "endless")
 					_paint_items()
 				return
 			if core.grab(lp.x):
@@ -705,7 +749,7 @@ func _board_input(e: InputEvent) -> void:
 				var used: String = core.release(true)
 				Save.buzz(8)
 				if used == "x2":
-					Save.spend_item("x2", core.mode != "stage")
+					Save.spend_item("x2", core.mode == "endless")
 				if hint_lbl.visible and core.mode != "stage":
 					hint_lbl.visible = false
 					Save.d["seen_hint"] = true
@@ -799,7 +843,7 @@ func endless_goal(k: int) -> int:
 
 
 func _check_endless_goal() -> void:
-	if core.mode == "stage" or core.over:
+	if core.mode != "endless" or core.over:
 		return
 	var got := false
 	while core.score >= endless_goal(core.got_items) and core.got_items < 60:
@@ -841,7 +885,7 @@ func _stage_items(i: int, first: bool, stars: int) -> Array:
 
 func _on_finished(kind: String, reason: String) -> void:
 	dragging = false
-	if core.mode != "stage":
+	if core.mode == "endless":
 		Save.d["run"] = {}
 	if kind == "clear":
 		_stage_clear()
@@ -857,7 +901,13 @@ func _game_over(reason: String) -> void:
 		var top := GameCore.num_text(core.top_tier())
 		_show_card(reason, top, "목표 " + core.goal_text(st) + " · 가장 큰 숫자 " + top, "", "다시 하기", true)
 		card_act = "retry"
+	elif core.mode == "daily":
+		var rw: String = Save.league.finish_daily(core.score)
+		var stk: int = Save.league.streak()
+		_show_card(reason, GameCore.score_text(core.score), "오늘의 판 · %s · 가장 큰 숫자 %s%s\n랭킹에서 다른 사람 점수와 비교해 봐요" % [Save.league.rule()["n"], GameCore.num_text(core.max_tier), (" · %d일 연속" % stk) if stk > 1 else ""], rw, "홈으로", false)
+		card_act = "home"
 	else:
+		Save.league.submit_week(core.score)
 		Save.d["best"] = maxi(int(Save.d["best"]), core.best)
 		Save.bump("endless")
 		var reward := ""
@@ -872,21 +922,12 @@ func _game_over(reason: String) -> void:
 				e = {"day": Save.kst_day(), "n": 0}
 			e["n"] = int(e["n"]) + 1
 			Save.d["erew"] = e
-			if str(Save.d.get("onb", "")) == "endless" and not bool(Save.d.get("tut_gift", false)):
-				j = maxi(j, 160)          # 안내 판: 상자 하나는 꼭 열 수 있게 (처음 한 번만)
-				Save.d["tut_gift"] = true
 			Save.add_jelly(j)
 			Save.d["last_reward"] = j
 			reward = "무한 모드 보상 젤리 +%d" % j if j > 0 else ""
 		else:
 			reward = "오늘 보상 판(%d번)을 다 썼어요" % Save.ENDLESS_PAID
 		Save.save()
-		if str(Save.d.get("onb", "")) == "endless":
-			Save.d["onb"] = "box"
-			Save.save()
-			card_act = "home"
-			_show_card(reason, GameCore.score_text(core.score), "받은 젤리로 집에서 장식 상자를 열 수 있어요", reward, "집에 가서 상자 열기", false)
-			return
 		_show_card(reason, GameCore.score_text(core.score), "최고 기록 %s · 가장 큰 숫자 %s%s" % [GameCore.score_text(core.best), GameCore.num_text(core.max_tier), ""], reward, "다시 하기", false)
 		card_act = "retry"
 
@@ -929,7 +970,7 @@ func _stage_clear() -> void:
 	var note := ("던지기 %d번 남기고 성공" % core.throws_left if throws else "점수 " + GameCore.score_text(core.score)) + extra
 	note += "\n무한 모드 가방에 %s · 오늘 입장 %d번 남음" % [" · ".join(names), Save.stage_left()]
 	if Save.quest_ready():
-		note += "\n퀘스트 완료! 「%s」 · 집에서 보석을 받아요" % Save.quest_cur()["t"]
+		note += "\n퀘스트 완료! 「%s」 · 홈에서 보석을 받아요" % Save.quest_cur()["t"]
 	_show_card("모든 단계를 깼어요!" if last else "클리어!", big, note,
 		("첫 클리어 " if first else "다시 깨기 ") + "젤리 +%d · 아이템 %d개" % [j, gift.size()], "목록으로" if last else "다음 단계 · %d" % (i + 2), not last)
 	card_act = "menu" if last else "next"
@@ -941,6 +982,8 @@ func _show_card(title: String, big: String, note: String, reward: String, main: 
 		var i: int = core.stage_idx
 		var jump := i >= 24 and (i + 1) % 5 == 0
 		card_head.text = "STAGE %d%s" % [i + 1, " · 고비" if jump else ""]
+	elif core.mode == "daily":
+		card_head.text = "DAILY"
 	else:
 		card_head.text = "ENDLESS"
 	card_title.text = title
@@ -957,8 +1000,9 @@ func _show_card(title: String, big: String, note: String, reward: String, main: 
 		card_chips.add_child(chip)
 	card_chips.visible = reward != ""
 	card_main.text = main
-	card_retry.visible = main != "다시 하기"     # card_act 는 이 함수가 끝난 뒤에 정해져서(앞 판 값) 여기서 보면 안 돼요
+	card_retry.visible = main != "다시 하기" and core.mode != "daily"     # card_act 는 이 함수가 끝난 뒤에 정해져서(앞 판 값) 여기서 보면 안 돼요
 	card_menu.visible = true
+	card_links.visible = core.mode != "daily"      # 오늘의 판은 「홈으로」 하나만
 	card.visible = true
 	var cp: Control = card.get_child(0)
 	cp.reset_size()
@@ -997,7 +1041,7 @@ func _flush_clear() -> bool:
 	return false
 
 
-## 스테이지 목록 화면은 없앴어요 → 집으로 돌아가서 「스테이지 입장」 팝업을 열어요
+## 스테이지 목록 화면은 없앴어요 → 홈으로 돌아가서 「스테이지 입장」 팝업을 열어요
 func show_menu() -> void:
 	if _flush_clear():
 		return      # 클리어 카드를 먼저 보여 줌

@@ -1,5 +1,5 @@
 extends Node
-## 저장(웹 버전 localStorage 대신). 집 화면과 숫자 게임이 같이 씀. 웹 빌드에선 브라우저 저장소에 남아요.
+## 저장(웹 버전 localStorage 대신). 홈 화면(바닥·몰랑이)과 숫자 게임이 같이 씀. 웹 빌드에선 브라우저 저장소에 남아요.
 
 const PATH := "user://molang_save.json"
 const DAILY_MAX := 3
@@ -9,18 +9,18 @@ const STAGE_DAILY := 5     # 스테이지는 하루 5번 입장 (무한 모드�
 var d := {
 	"best": 0, "prog": 0, "seen_hint": false, "guides": [], "jelly": 100, "muted": false,
 	"daily": {"day": "", "used": {}}, "bag": {}, "erew": {"day": "", "n": 0}, "stars": {},
-	"play_sec": 0.0, "work_total": 0,
-	"home": {"own": {}, "put": {}, "lvl": 1, "orn": 0, "fairies": [], "pets": [], "events": [], "name": "몰랑이네", "floors_in": {}, "seen_box": 0},
+	"play_sec": 0.0,
+	"home": {"events": [], "name": "몰랑이네"},
+	"dex": {},          # 몰랑이 도감: 숫자 단계(문자열) → {"n": 만든 수, "s": 반짝이 수}
 }
 signal jelly_changed
 
 var next_mode := ""
 var next_items: Array = []   # 스테이지 입장 팝업에서 고른 가방 아이템 (게임 시작 때 꺼내 씀)
 var home_popup := ""         # 게임 → 집으로 돌아오며 열 창 ("stage" = 스테이지 입장 팝업)
-var home_view := {}      # 집 → 게임으로 갈 때 몰랑이 자리·카메라 (돌아오면 그대로, 앱을 껐다 켜면 처음 자리)
-var jelly_seen := -1     # 집 화면이 마지막으로 보여 준 젤리 수 (돌아왔을 때 「+N」 연출용)
-var work_carry := 0.0
-var save_t := 0.0      # 집 → 게임으로 넘어갈 때: "endless" | "menu" | "stage:N"
+var home_view := {}      # 홈 → 게임으로 갈 때 카메라 방향·확대 (돌아오면 그대로)
+var jelly_seen := -1     # 홈 화면이 마지막으로 보여 준 젤리 수 (돌아왔을 때 「+N」 연출용)
+var save_t := 0.0
 var data := {}           # mollang_data.json
 
 
@@ -28,6 +28,7 @@ var DEFAULTS := {}
 
 
 var monet: Node      # 광고·결제
+var league: Node     # 오늘의 판 · 주간 리그 랭킹
 
 
 func _ready() -> void:
@@ -45,6 +46,8 @@ func _ready() -> void:
 	monet = preload("res://scripts/monet.gd").new()
 	add_child(monet)
 	monet.restore.call_deferred()
+	league = preload("res://scripts/league.gd").new()
+	add_child(league)
 
 
 ## 겹치던 단계를 빼서 번호가 당겨졌을 때(stageRev): 깬 단계 수·별 기록을 새 번호로 옮김
@@ -75,37 +78,9 @@ func _migrate_stages() -> void:
 	d["stage_rev"] = int(rev.get("rev", 1))
 
 
-## 공방(웹 버전과 같게): 화면이 켜져 있는 동안 1분에 0.5 + 0.1 × 깬 단계 젤리. 플레이 시간도 여기서 셈.
-func work_rate() -> float:
-	# 기본(단계) × 편안함(꾸미기, 최대 ×2) × 완성한 트리마다 +10%
-	var ws := 1.5 if home().get("workshop_at") is Array else 1.0      # 공방을 지으면 ×1.5
-	return (0.5 + 0.1 * int(d["prog"])) * (1.0 + comfort() / 100.0) * (1.0 + 0.1 * int(home().get("trees", 0))) * ws
-
-
-## 집 편안함 0~100: 놓아 둔 가구 ×3 · 넓힌 땅 칸 ×1 · 함께 사는 펫 ×10 · 완성한 트리 ×10
-func comfort() -> int:
-	var h := home()
-	var c := 0
-	for id in h["put"]:
-		if h["put"][id] and int(h["own"].get(id, 0)) > 0:
-			c += 3
-	if h.get("land_own") is Array:
-		c += maxi(0, (h["land_own"] as Array).size() - 30)
-	c += 10 * (h["pets"] as Array).size()
-	c += 10 * int(h.get("trees", 0))
-	return mini(100, c)
-
-
 func _process(delta: float) -> void:
 	var dt := minf(delta, 5.0)
 	d["play_sec"] = float(d.get("play_sec", 0.0)) + dt
-	work_carry += work_rate() * dt / 60.0
-	if work_carry >= 1.0:
-		var n := int(work_carry)
-		work_carry -= n
-		d["jelly"] = int(d["jelly"]) + n
-		d["work_total"] = int(d.get("work_total", 0)) + n
-		jelly_changed.emit()
 	save_t += delta
 	if save_t > 30.0:      # 웹에선 저장할 때마다 브라우저 저장소를 맞춰서, 너무 자주 하면 잠깐씩 끊겨요
 		save_t = 0
@@ -117,9 +92,9 @@ func _notification(what: int) -> void:
 		save()
 
 
-## 처음부터 새로: 기록·젤리·집을 모두 지우고 맨 처음 상태로 (안내도 처음부터)
+## 처음부터 새로: 기록·젤리·도감을 모두 지우고 맨 처음 상태로 (안내도 처음부터)
 func reset_all() -> void:
-	var iap = d.get("iap")      # 산 것(광고 제거·시즌 팩)은 처음부터 새로 해도 남겨요 (복원 기능이 아직 없어서 지우면 되찾을 수 없어요)
+	var iap = d.get("iap")      # 산 것(광고 제거·시즌 팩)은 처음부터 새로 해도 남겨요
 	d = DEFAULTS.duplicate(true)
 	if iap is Dictionary:
 		d["iap"] = iap
@@ -128,7 +103,6 @@ func reset_all() -> void:
 	next_mode = ""
 	home_view = {}
 	save()
-	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://home3.json"))
 
 
 func save() -> void:
@@ -181,12 +155,14 @@ func use_stage_entry() -> bool:
 const STAGE_ENTRY_GEM := 10
 const QUESTS := [
 	{"id": "stage5", "t": "스테이지 5단계까지 깨기", "kind": "prog", "need": 5, "gem": 30},
-	{"id": "box1", "t": "선물 상자 1번 열기", "kind": "box", "need": 1, "gem": 20},
 	{"id": "endless1", "t": "무한 모드 1판 하기", "kind": "endless", "need": 1, "gem": 20},
+	{"id": "daily1", "t": "오늘의 판 1번 하기", "kind": "daily", "need": 1, "gem": 20},
+	{"id": "dex6", "t": "몰랑이 도감 6칸 채우기 (128 만들기)", "kind": "dex", "need": 6, "gem": 30},
 	{"id": "stage20", "t": "스테이지 20단계까지 깨기", "kind": "prog", "need": 20, "gem": 50},
-	{"id": "deco1", "t": "방이나 섬 꾸미기 (장식 1개 놓기)", "kind": "place", "need": 1, "gem": 30},
-	{"id": "stage30", "t": "스테이지 30단계까지 깨기", "kind": "prog", "need": 30, "gem": 50, "block": 1},
-	{"id": "floor1", "t": "땅 편집으로 바닥 블록 바꾸기", "kind": "floor", "need": 1, "gem": 30},
+	{"id": "daily3", "t": "오늘의 판 3번 하기", "kind": "daily", "need": 3, "gem": 40},
+	{"id": "dex10", "t": "몰랑이 도감 10칸 채우기 (2048 만들기)", "kind": "dex", "need": 10, "gem": 60},
+	{"id": "stage30", "t": "스테이지 30단계까지 깨기", "kind": "prog", "need": 30, "gem": 50},
+	{"id": "dex13", "t": "몰랑이 도감 13칸 채우기 (8192 만들기)", "kind": "dex", "need": 13, "gem": 100},
 ]
 
 
@@ -199,7 +175,7 @@ func add_gem(n: int) -> void:
 	save()
 
 
-## 횟수 기록: box(상자 연 수) · endless(무한 모드 끝낸 판) · place(장식 놓기) · floor(바닥 바꾸기)
+## 횟수 기록: endless(무한 모드 끝낸 판) · daily(오늘의 판 한 수)
 func bump(kind: String, n := 1) -> void:
 	if not (d.get("cnt") is Dictionary):
 		d["cnt"] = {}
@@ -220,6 +196,8 @@ func quest_val(q: Dictionary) -> int:
 		return 0
 	if q["kind"] == "prog":
 		return int(d["prog"])
+	if q["kind"] == "dex":
+		return dex_count()
 	var c: Dictionary = d.get("cnt", {}) if d.get("cnt") is Dictionary else {}
 	return int(c.get(q["kind"], 0))
 
@@ -351,7 +329,7 @@ func import_web(json_str: String) -> bool:
 				d["bag"] = h["inv"]
 			d["home_web"] = h
 			var hm: Dictionary = d["home"]
-			for k in ["own", "put", "lvl", "orn", "fairies", "pets", "events", "name"]:
+			for k in ["events", "name"]:
 				if h.has(k) and h[k] != null:
 					hm[k] = h[k]
 			ok = true
@@ -371,63 +349,60 @@ func import_web(json_str: String) -> bool:
 
 
 func home() -> Dictionary:
+	if not (d.get("home") is Dictionary):
+		d["home"] = {}
 	var h: Dictionary = d["home"]
-	for k in ["own", "put", "floors_in"]:
-		if not (h.get(k) is Dictionary):
-			h[k] = {}
-	for k in ["fairies", "pets", "events"]:
-		if not (h.get(k) is Array):
-			h[k] = []
-	if not h.has("lvl"): h["lvl"] = 1
-	if not h.has("orn"): h["orn"] = 0
-	if not h.has("trees"): h["trees"] = 0                # 완성한 트리 수
-	if not h.has("orn_total"): h["orn_total"] = int(h["orn"]) + 10 * int(h["trees"])   # 지금까지 단 오너먼트 (트리가 바뀌어도 이어짐)
-	if not h.has("keys"): h["keys"] = 0                  # 선물 상자 열쇠 (오너먼트 보상)
-	if not (h.get("props") is Dictionary): h["props"] = {}      # 심어 둔 자연 장식 "x,z" → 모델 이름
-	if not (h.get("colors") is Dictionary): h["colors"] = {}    # 자연 장식마다 열린 색 수
-	if not (h.get("orn_day") is Dictionary): h["orn_day"] = {"day": "", "n": 0}
-	if not (h.get("gift") is Dictionary): h["gift"] = {"day": "", "n": 0, "t": 0.0}
-	if not h.has("name"): h["name"] = "몰랑이네"
-	if not h.has("no"): h["no"] = 1
-	if not (h.get("past") is Dictionary): h["past"] = {}
-	# 예전엔 도감을 다 채워 새 집으로 넘어가면 장식을 비웠어요 → 그때 모은·놓은 장식을 되돌려 줘요 (한 번만)
-	# 집은 늘 1번 집(1단계) — 예전에 새 집(2번)으로 넘어간 저장도 1번 집으로 되돌려요. 2번 집 모델은 공방이 써요
-	if int(h["no"]) > 1:
-		h["no"] = 1
-		h["lvl"] = 1
-	if not h.get("past_merged", false):
-		h["past_merged"] = true
-		for k in h["past"]:
-			var pv = h["past"][k]
-			if not (pv is Dictionary):
-				continue
-			if pv.get("own") is Dictionary:
-				for id in pv["own"]:
-					h["own"][id] = int(h["own"].get(id, 0)) + int(pv["own"][id])
-			if pv.get("put") is Dictionary:
-				for id in pv["put"]:
-					if not h["put"].has(id):
-						h["put"][id] = pv["put"][id]
+	if not (h.get("events") is Array):
+		h["events"] = []
+	if not h.has("name"):
+		h["name"] = "몰랑이네"
 	return h
 
 
-## 오너먼트: 플레이 30분마다 1개 (웹과 같게). 받을 수 있는 수 = 누적 − 지금까지 단 수.
-## 켜 두기만으로 끝없이 벌지 않게 하루 6개(3시간)까지만 달 수 있어요.
-const ORN_DAY_MAX := 6
+# ───────────────────────── 몰랑이 도감 ─────────────────────────
+## 게임에서 숫자를 처음 만들면 도감에 등록되고 홈 바닥에 그 몰랑이가 나와 돌아다녀요.
+## 반짝이: 합칠 때 아주 낮은 확률로 반짝이는 몰랑이가 나와요 (도감에 따로 기록).
+const DEX_FROM := 1          # 2 부터
+const DEX_TO := 14           # 16384 까지
+const SHINY_P := 0.004       # 합칠 때 반짝이가 나올 확률 (250번에 한 번쯤)
 
 
-func orn_ready() -> int:
-	var h := home()
-	var od: Dictionary = h["orn_day"]
-	var used_today := int(od.get("n", 0)) if od.get("day", "") == kst_day() else 0
-	var by_time := maxi(0, int(float(d.get("play_sec", 0.0)) / 1800.0) - int(h["orn_total"]))
-	return mini(by_time, maxi(0, ORN_DAY_MAX - used_today))
+func dex() -> Dictionary:
+	if not (d.get("dex") is Dictionary):
+		d["dex"] = {}
+	return d["dex"]
 
 
-func orn_hung() -> void:
-	var h := home()
-	h["orn_total"] = int(h["orn_total"]) + 1
-	var od: Dictionary = h["orn_day"]
-	if od.get("day", "") != kst_day():
-		od["day"] = kst_day(); od["n"] = 0
-	od["n"] = int(od["n"]) + 1
+func dex_has(t: int) -> bool:
+	return int(dex().get(str(t), {}).get("n", 0)) > 0
+
+
+func dex_count() -> int:
+	var c := 0
+	for t in range(DEX_FROM, DEX_TO + 1):
+		if dex_has(t):
+			c += 1
+	return c
+
+
+## 처음 만든 숫자의 보상 젤리 (큰 숫자일수록 많이)
+static func dex_reward(t: int) -> int:
+	return 0 if t < 4 else (10 * (t - 3) * (t - 3))
+
+
+## 만든 숫자 기록. 처음이면 보상 젤리를 돌려줘요 (아니면 0)
+func dex_add(t: int, shiny := false) -> int:
+	if t < DEX_FROM or t > DEX_TO:
+		return 0
+	var k := str(t)
+	var e: Dictionary = dex().get(k, {"n": 0, "s": 0})
+	var first := int(e.get("n", 0)) == 0
+	e["n"] = int(e.get("n", 0)) + 1
+	if shiny:
+		e["s"] = int(e.get("s", 0)) + 1
+	dex()[k] = e
+	var r := dex_reward(t) if first else 0
+	if r > 0:
+		d["jelly"] = int(d["jelly"]) + r
+		jelly_changed.emit()
+	return r
