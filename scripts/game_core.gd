@@ -150,8 +150,8 @@ var clear_t := 0.0
 
 var stages: Array = []
 var item_at := {"shake": 18, "undo": 26, "hammer": 41, "tilt": 56, "x2": 71}
-var endless_at := {"shake": 30, "hammer": 50, "tilt": 100, "undo": 150, "x2": 200}
-var daily_left := {}     # 화면 쪽에서 채워 줌: 무한 모드 아이템 남은 수(하루 3번 + 가방)
+var endless_at := {"shake": 40, "hammer": 70, "tilt": 120, "undo": 160, "x2": 197}
+var daily_left := {}     # 화면 쪽에서 채워 줌: 무한 모드 아이템 남은 수(하루 무료 + 가방)
 
 # 입력
 var sel = null
@@ -310,7 +310,7 @@ func item_start(k: String) -> int:
 		return 0
 	if mode == "stage":
 		return (1 if stage_idx + 1 >= item_at[k] else 0) + int(bonus.get(k, 0))
-	return int(daily_left.get(k, 0))      # 무한: 하루 3번 + 가방 · 오늘의 판: 규칙대로 (화면 쪽에서 넣어 줌)
+	return int(daily_left.get(k, 0))      # 무한: 하루 무료 + 가방 · 오늘의 판: 규칙대로 (화면 쪽에서 넣어 줌)
 
 
 func rocks_on() -> bool:

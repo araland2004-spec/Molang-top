@@ -396,7 +396,10 @@ func open_dex(tab := "") -> void:
 		grid.add_child(cell)
 	if next_t > 0:
 		v.add_child(_wrap("다음 목표: %s 만들기 · 젤리 +%d" % [GameCore.num_text(next_t), Save.dex_reward(next_t)], 20, Mol.AMBER))
-	v.add_child(_wrap("반짝이 몰랑이: 합칠 때 아주 가끔 금빛 몰랑이가 나와요. 반짝이끼리 합치면 더 잘 나와요.", 18, Mol.TEXT_DIM))
+	if Save.shiny_on():
+		v.add_child(_wrap("반짝이 몰랑이: 합칠 때 가끔 금빛 테두리 몰랑이가 나와요. 반짝이가 끼어 합치면 네 배로 뛰어요!", 18, Mol.TEXT_DIM))
+	else:
+		v.add_child(_wrap("??? 스테이지 %d단계를 깨거나 %s를 만들면 특별한 몰랑이가 나타나요" % [Save.SHINY_STAGE, GameCore.num_text(Save.SHINY_TIER)], 18, Mol.TEXT_DIM))
 	_close_btn(v)
 
 
@@ -562,6 +565,17 @@ func _rank_row(n: int, nm: String, sc: int, me: bool, zone: String, av := "") ->
 	var sl := Mol.lbl(arrow + (GameCore.score_text(sc) if sc > 0 else "-"), 22, Mol.MINT if zone == "up" else (Mol.ALERT if zone == "down" else Mol.TEXT), "num")
 	row.add_child(sl)
 	return p
+
+
+## 반짝이가 열렸을 때 한 번 설명
+func show_shiny_news() -> bool:
+	if not bool(Save.d.get("shiny_news", false)):
+		return false
+	Save.d.erase("shiny_news")
+	Save.save()
+	say(["고비를 넘었구나! 이제부터 반짝이 몰랑이가 나타나.", "합칠 때 가끔 금빛 테두리 몰랑이가 생겨.",
+		"반짝이가 끼어서 합치면 두 배가 아니라 네 배로 뛰어! 32랑 32가 128이 되는 거지.", "도감에도 반짝이는 따로 모여."], func(): pass)
+	return true
 
 
 ## 지난주 리그 결과 (새 주 첫 방문 때 한 번)

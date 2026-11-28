@@ -2,7 +2,7 @@ extends Node
 ## 저장(웹 버전 localStorage 대신). 홈 화면(바닥·몰랑이)과 숫자 게임이 같이 씀. 웹 빌드에선 브라우저 저장소에 남아요.
 
 const PATH := "user://molang_save.json"
-const DAILY_MAX := 3
+const DAILY_MAX := 1      # 무한 모드 아이템 하루 무료 횟수 (밸런스: 3 → 1)
 const ENDLESS_PAID := 5
 const STAGE_DAILY := 5     # 스테이지는 하루 5번 입장 (무한 모드에서 쓸 아이템을 모으는 곳)
 
@@ -260,13 +260,13 @@ func bag_count(k: String) -> int:
 	return int(d["bag"].get(k, 0))
 
 
-## 무한 모드에서 하루 3번 쓰는 아이템이 열렸는지 (단계를 깨면 열림). 안 열렸어도 가방에 있으면 쓸 수 있어요.
+## 무한 모드에서 하루 한 번 무료로 쓰는 아이템이 열렸는지 (단계를 깨면 열림). 안 열렸어도 가방에 있으면 쓸 수 있어요.
 func endless_open(k: String) -> bool:
 	var e: Dictionary = data.get("itemUnlock", {}).get("endless", {})
 	return int(d["prog"]) >= int(e.get(k, 9999))
 
 
-## 무한 모드 아이템: 하루 3번 먼저(열린 것만), 그다음 가방
+## 무한 모드 아이템: 하루 무료 먼저(열린 것만), 그다음 가방
 func spend_item(k: String, endless: bool) -> void:
 	if not endless:
 		return
@@ -365,7 +365,25 @@ func home() -> Dictionary:
 ## 반짝이: 합칠 때 아주 낮은 확률로 반짝이는 몰랑이가 나와요 (도감에 따로 기록).
 const DEX_FROM := 1          # 2 부터
 const DEX_TO := 14           # 16384 까지
-const SHINY_P := 0.004       # 합칠 때 반짝이가 나올 확률 (250번에 한 번쯤)
+const SHINY_P := 0.01        # 합칠 때 반짝이가 나올 확률 (100번에 한 번쯤) — 열린 뒤에만
+const SHINY_STAGE := 30      # 반짝이가 열리는 고비: 스테이지 30단계를 깨거나
+const SHINY_TIER := 11       #   2048(11단계)을 처음 만들면
+
+
+func shiny_on() -> bool:
+	return bool(d.get("shiny_on", false))
+
+
+## 고비를 넘었으면 반짝이를 열어요. 이번에 새로 열렸으면 true (화면에서 안내)
+func check_shiny_unlock() -> bool:
+	if shiny_on():
+		return false
+	if int(d.get("prog", 0)) >= SHINY_STAGE or dex_has(SHINY_TIER):
+		d["shiny_on"] = true
+		d["shiny_news"] = true      # 홈에서 몰랑이가 한 번 설명해 줘요
+		save()
+		return true
+	return false
 
 
 func dex() -> Dictionary:

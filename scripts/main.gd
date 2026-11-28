@@ -120,6 +120,8 @@ func _greet() -> void:
 		_toast(fm)
 	if menus.run_onboarding():
 		return
+	if menus.show_shiny_news():
+		return
 	if menus.show_league_result():
 		return
 	menus.quest_greet()
@@ -992,7 +994,7 @@ func _open_shop() -> void:
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	sc.add_child(v)
 	v.add_child(_label("상점", 32, C_INK, false))
-	var desc := _label("무한 모드용 아이템을 사요. 무한 모드에서는 아이템마다 하루 3번 무료, 그다음엔 가방에 산 만큼 더 쓸 수 있어요. (스테이지는 아이템마다 한 번씩 무료)", 20, C_SUB, false)
+	var desc := _label("무한 모드용 아이템을 사요. 무한 모드에서는 아이템마다 하루 한 번 무료, 그다음엔 가방에 산 만큼 더 쓸 수 있어요. (스테이지는 아이템마다 한 번씩 무료)", 20, C_SUB, false)
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	desc.custom_minimum_size.x = 580
 	v.add_child(desc)

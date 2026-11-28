@@ -90,7 +90,8 @@ func _ready() -> void:
 		core.endless_at = iu["endless"]
 	core.best = int(Save.d["best"])
 	core.prog = int(Save.d["prog"])
-	core.shiny_p = Save.SHINY_P
+	Save.check_shiny_unlock()
+	core.shiny_p = Save.SHINY_P if Save.shiny_on() else 0.0     # 반짝이는 고비를 넘은 뒤부터
 	core.made.connect(_on_made)
 	_build_ui()
 	core.score_changed.connect(func(s):
@@ -523,6 +524,16 @@ func start_endless(resume := true) -> void:
 		show_guide("endless", func(): pass)
 
 
+## 고비를 넘어 반짝이가 열림: 바로 이 판부터 나와요
+func _shiny_unlocked() -> void:
+	if not Save.check_shiny_unlock():
+		return
+	if core.mode != "daily":
+		core.shiny_p = Save.SHINY_P
+	_toast("고비를 넘었어요! 이제 반짝이 몰랑이가 나타나요 · 반짝이가 끼어 합치면 네 배!")
+	Save.buzz(40)
+
+
 ## 오늘의 판: 하루 한 번 기록 · 모두 같은 순서 · 규칙 하나 (scripts/league.gd)
 func start_daily() -> void:
 	if not Save.league.start_daily():
@@ -530,6 +541,7 @@ func start_daily() -> void:
 		go_home.call_deferred()
 		return
 	core.mode = "daily"
+	core.shiny_p = 0.0         # 오늘의 판은 모두 같게 (반짝이 없음)
 	core.daily_rule = str(Save.league.rule()["id"])
 	core.daily_left = Save.league.rule_items()
 	core.new_game()
@@ -543,6 +555,10 @@ func start_daily() -> void:
 ## 판에서 숫자를 만들 때마다: 도감 기록 (처음 만든 숫자면 젤리 보상)
 func _on_made(t: int, shiny: bool) -> void:
 	var first := not Save.dex_has(t)
+	if first and t == Save.SHINY_TIER and not Save.shiny_on():
+		Save.dex_add(t, shiny)
+		_shiny_unlocked()
+		return
 	var r := Save.dex_add(t, shiny)
 	if first and t >= Save.DEX_FROM and t <= Save.DEX_TO and t >= 4:
 		_toast("도감에 %s 몰랑이 등록!%s" % [GameCore.num_text(t), (" 젤리 +%d" % r) if r > 0 else ""])
@@ -837,16 +853,20 @@ func _process(delta: float) -> void:
 const GOAL_ITEMS := ["shake", "undo", "hammer", "tilt"]
 
 
+## 무한 모드 점수 목표 보상 (밸런스: 판마다 최대 ENDLESS_GOAL_MAX개, 목표가 빠르게 멀어져요)
+## 5,000 · 23,000 · 56,000 · 106,000 · 173,000
+const ENDLESS_GOAL_MAX := 5
+
+
 func endless_goal(k: int) -> int:
-	var easy := 1.0 - minf(int(Save.d["prog"]), 150) / 300.0
-	return maxi(500, snappedi(int(2000.0 * pow(k + 1, 1.75) * easy), 500))
+	return snappedi(int(5000.0 * pow(k + 1, 2.2)), 1000)
 
 
 func _check_endless_goal() -> void:
 	if core.mode != "endless" or core.over:
 		return
 	var got := false
-	while core.score >= endless_goal(core.got_items) and core.got_items < 60:
+	while core.score >= endless_goal(core.got_items) and core.got_items < ENDLESS_GOAL_MAX:
 		var it: String = GOAL_ITEMS[randi() % GOAL_ITEMS.size()]
 		Save.d["bag"][it] = Save.bag_count(it) + 1
 		core.daily_left[it] = int(core.daily_left.get(it, 0)) + 1
@@ -866,9 +886,9 @@ func _check_endless_goal() -> void:
 		_paint_items()
 
 
-## 스테이지 클리어 보상: 무한 모드에서 쓸 아이템을 가방에. 첫 클리어 2개 · 다시 깨기 1개 · 별 3개면 +1. 70단계부터 ×2 별도 나와요.
+## 스테이지 클리어 보상: 무한 모드에서 쓸 아이템을 가방에. 첫 클리어 1개 · 별 3개면 +1 · 다시 깨기는 없음 (밸런스). 70단계부터 ×2 별도 나와요.
 func _stage_items(i: int, first: bool, stars: int) -> Array:
-	var n := (2 if first else 1) + (1 if stars >= 3 else 0)
+	var n := (1 if first else 0) + (1 if (first and stars >= 3) else 0)
 	var pool: Array = GOAL_ITEMS.duplicate()
 	if i >= 69:
 		pool.append("x2")
@@ -889,6 +909,7 @@ func _on_finished(kind: String, reason: String) -> void:
 		Save.d["run"] = {}
 	if kind == "clear":
 		_stage_clear()
+		_shiny_unlocked()       # 스테이지 고비(30단계)를 넘었으면 반짝이 열림
 	else:
 		_game_over(reason)
 	Save.monet.game_finished()       # 몇 판에 한 번 전면 광고 (광고 제거 샀으면 없음)
@@ -953,7 +974,7 @@ func _stage_clear() -> void:
 		var n := i + 1
 		for k in core.endless_at:
 			if int(core.endless_at[k]) == n:
-				extra += " · 이제 무한 모드에서 %s를 하루 3번 쓸 수 있어요!" % ITEM_NAMES[k]
+				extra += " · 이제 무한 모드에서 %s를 하루 한 번 무료로 쓸 수 있어요!" % ITEM_NAMES[k]
 	var throws := int(st["throws"])
 	var stars := 3
 	if throws:
