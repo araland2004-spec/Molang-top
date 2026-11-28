@@ -8,11 +8,13 @@ extends Node
 ## · 광고 제거(no_ads, 한 번 사면 끝): 전면 광고 없음 + 보상형 자리는 광고 없이 바로 보상
 ## · 시즌 팩(비소모성): 사면 묶인 꾸미기 아이템이 모은 장식(own)에 들어가요. 판매는 시즌 동안만, 산 건 계속 써요.
 ##
-## 실제 출시 전 할 일 (3단계)
-## 1. AdMob 플러그인(Poing Studios) + GodotGooglePlayBilling 플러그인을 넣고 Android 내보내기에서 gradle 빌드 켜기
-## 2. 아래 AD_UNIT·상품 id 를 AdMob·플레이 콘솔에 등록한 값으로 바꾸고, _real_* 함수를 플러그인 API 로 채우기
-## 3. TEST 를 false 로 (웹 빌드에선 광고·구매 버튼이 숨어요)
-## 4. 구매는 3일 안에 확인(acknowledge)해야 환불되지 않아요 → _on_purchase 에서 바로 확인
+## 결제(광고 제거·시즌 팩)는 구현돼 있어요 — 플러그인만 넣으면 동작:
+## 1. GodotGooglePlayBilling 3.x 를 addons/GodotGooglePlayBilling 에 넣고, Android 내보내기에서 gradle 빌드 + 플러그인 켜기
+## 2. 플레이 콘솔 > 수익 창출 > 인앱 상품에 "no_ads" (일회성·비소모성) 등록, 가격 ₩4,900 → 가격은 콘솔 값이 상점에 그대로 떠요
+## 3. 내부 테스트 트랙에 올리고 라이선스 테스터 계정으로 결제 시험 (테스트 카드라 돈이 안 나가요)
+## 4. TEST 를 false 로 (웹 빌드에선 광고·구매 버튼이 숨어요)
+## · 구매는 받자마자 확인(acknowledge)해요 (3일 안에 안 하면 자동 환불) · 켤 때마다 구매 내역을 다시 받아 복원해요
+## 광고(AdMob)는 아직: _real_rewarded / _real_interstitial 를 AdMob 플러그인(Poing Studios)으로 채우기
 
 const TEST := true                  # 플러그인 전: 웹·PC에서도 가짜 광고·가짜 구매로 흐름을 시험해요
 const AD_STAGE_MAX := 3             # 하루에 광고로 늘릴 수 있는 스테이지 입장
@@ -24,11 +26,16 @@ const NO_ADS := "no_ads"
 const PACKS := {
 	"pack_winter_2026": {"n": "겨울 시즌 팩", "d": "눈 내린 마을 장식 묶음 (에셋 준비 중)", "items": [], "on": true, "price": "₩2,900"},
 }
-const NO_ADS_PRICE := "₩3,900"
+const NO_ADS_PRICE := "₩4,900"     # 표시용 기본값. 실제 기기에선 플레이 콘솔에 등록한 가격(현지 통화)을 받아서 보여 줘요
 
 signal changed      # 구매·복원 뒤 (상점·목록 다시 그리기)
+signal notice(text: String)     # 결제 결과 안내 (대기 중·실패 등) → main 이 토스트로 보여 줘요
 
 var _overlay: CanvasLayer
+var _bc: Object             # 결제 클라이언트 (BillingClient.gd 래퍼 또는 플러그인 싱글턴)
+var _ready_bc := false
+var _prices := {}           # 상품 id → 플레이에서 받은 표시 가격 ("₩4,900")
+var _want_restore := false
 
 
 func iap() -> Dictionary:
@@ -45,9 +52,18 @@ func owns(pid: String) -> bool:
 	return bool(iap().get(pid, false))
 
 
-## 플러그인이 있는 진짜 기기인지 (지금은 플러그인을 아직 안 넣어서 늘 false)
+## 플러그인이 있는 진짜 기기인지 (안드로이드 + GodotGooglePlayBilling 플러그인)
 func real() -> bool:
-	return OS.has_feature("android") and Engine.has_singleton("GodotGooglePlayBilling")
+	return OS.has_feature("android") and (Engine.has_singleton(BILLING_SINGLETON) or ResourceLoader.exists(BILLING_WRAPPER))
+
+
+## 상점에 보여 줄 가격: 플레이에서 받은 값이 있으면 그걸, 없으면 기본값
+func price(pid: String) -> String:
+	if _prices.has(pid):
+		return str(_prices[pid])
+	if pid == NO_ADS:
+		return NO_ADS_PRICE
+	return str(PACKS.get(pid, {}).get("price", ""))
 
 
 ## 광고·구매 버튼을 보여 줄지 (진짜 기기거나 테스트 중일 때만)
@@ -125,20 +141,152 @@ func _real_interstitial() -> void:
 	pass
 
 
-## TODO: GodotGooglePlayBilling — purchase(pid) → 구매 신호에서 _on_purchase
-func _real_buy(_pid: String) -> void:
-	pass
+func _real_buy(pid: String) -> void:
+	if not _ensure_bc():
+		notice.emit("결제를 준비하지 못했어요. 잠시 뒤 다시 해 주세요")
+		return
+	if not _ready_bc:
+		notice.emit("스토어에 연결하는 중이에요. 잠시 뒤 다시 눌러 주세요")
+		_bc_call(["start_connection", "startConnection"], [])
+		return
+	if _bc.has_method("purchase"):
+		var r = _bc.callv("purchase", [pid, false]) if _arg_count("purchase") >= 2 else _bc.callv("purchase", [pid])
+		if r is Dictionary and int(r.get("response_code", r.get("status", 0))) != 0:
+			notice.emit("결제 창을 열지 못했어요")
 
 
-## TODO: GodotGooglePlayBilling — query_purchases("inapp") → 받은 것마다 _on_purchase
 func _real_restore() -> void:
-	pass
+	if not _ensure_bc():
+		return
+	if _ready_bc:
+		_bc_call(["query_purchases", "queryPurchases"], ["inapp"])
+	else:
+		_want_restore = true
 
 
 ## 구매가 들어오면: 확인(acknowledge)하고 지급. 3일 안에 확인 안 하면 자동 환불돼요.
-func _on_purchase(pid: String) -> void:
-	# TODO: billing.acknowledge_purchase(purchase_token)
-	_grant(pid)
+func _on_purchase(p: Dictionary) -> void:
+	var ids: Array = p.get("product_ids", p.get("products", []))
+	if ids.is_empty() and p.has("sku"):
+		ids = [p["sku"]]
+	var state := int(p.get("purchase_state", p.get("purchaseState", 1)))
+	if state == 2:          # PENDING: 편의점 결제 등 — 돈이 들어오면 다시 알려 줘요
+		notice.emit("결제가 확인되면 바로 지급돼요")
+		return
+	if state != 1:
+		return
+	var token := str(p.get("purchase_token", p.get("purchaseToken", "")))
+	if not bool(p.get("is_acknowledged", p.get("isAcknowledged", false))) and token != "":
+		_bc_call(["acknowledge_purchase", "acknowledgePurchase"], [token])
+	for id in ids:
+		if str(id) == NO_ADS or PACKS.has(str(id)):
+			if not owns(str(id)):
+				_grant(str(id))
+				notice.emit("%s 구매 완료! 고마워요" % title(str(id)))
+
+
+# 결제 클라이언트 준비: 애드온의 BillingClient.gd(플러그인 3.x, Godot 4.2+)가 있으면 그걸, 없으면 싱글턴을 바로 써요
+const BILLING_SINGLETON := "GodotGooglePlayBilling"
+const BILLING_WRAPPER := "res://addons/GodotGooglePlayBilling/BillingClient.gd"
+
+func _ensure_bc() -> bool:
+	if _bc:
+		return true
+	if not real():
+		return false
+	if ResourceLoader.exists(BILLING_WRAPPER):
+		_bc = load(BILLING_WRAPPER).new()
+		if _bc is Node:
+			add_child(_bc)
+	elif Engine.has_singleton(BILLING_SINGLETON):
+		_bc = Engine.get_singleton(BILLING_SINGLETON)
+	if not _bc:
+		return false
+	_sig(["connected"], _on_connected)
+	_sig(["disconnected"], func(): _ready_bc = false)
+	_sig(["connect_error"], func(_a = null, _b = null): _ready_bc = false)
+	_sig(["on_purchase_updated", "purchases_updated"], _on_purchases_updated)
+	_sig(["query_purchases_response"], _on_purchases_updated)
+	_sig(["query_product_details_response", "product_details_query_completed", "sku_details_query_completed"], _on_details)
+	_sig(["purchase_error"], func(code = 0, _msg = ""): _purchase_fail(int(code)))
+	_bc_call(["start_connection", "startConnection"], [])
+	return true
+
+
+func _on_connected() -> void:
+	_ready_bc = true
+	var ids: Array = [NO_ADS]
+	ids.append_array(PACKS.keys())
+	_bc_call(["query_product_details", "queryProductDetails", "querySkuDetails"], [ids, "inapp"])
+	_bc_call(["query_purchases", "queryPurchases"], ["inapp"])      # 켤 때마다 복원 (폰 바꿔도 돌아오게)
+	_want_restore = false
+
+
+## 구매·복원 응답: 3.x 는 {response_code, purchases:[...]}, 1.x 는 purchases 배열 그대로
+func _on_purchases_updated(r = null) -> void:
+	var list: Array = []
+	if r is Dictionary:
+		var code := int(r.get("response_code", r.get("status", 0)))
+		if code != 0:
+			_purchase_fail(code)
+			return
+		list = r.get("purchases", [])
+	elif r is Array:
+		list = r
+	for p in list:
+		if p is Dictionary:
+			_on_purchase(p)
+
+
+func _purchase_fail(code: int) -> void:
+	match code:
+		1: pass                                             # USER_CANCELED: 그냥 닫기
+		7: _bc_call(["query_purchases", "queryPurchases"], ["inapp"])     # ITEM_ALREADY_OWNED: 복원
+		_: notice.emit("결제에 실패했어요 (코드 %d)" % code)
+
+
+## 상품 정보: 플레이 콘솔 가격을 받아 상점에 그대로 보여 줘요
+func _on_details(r = null) -> void:
+	var list: Array = []
+	if r is Dictionary:
+		list = r.get("product_details", r.get("details", []))
+	elif r is Array:
+		list = r
+	for d in list:
+		if not (d is Dictionary):
+			continue
+		var id := str(d.get("product_id", d.get("sku", "")))
+		var pr := ""
+		var off = d.get("one_time_purchase_offer_details", null)
+		if off is Dictionary:
+			pr = str(off.get("formatted_price", ""))
+		if pr == "":
+			pr = str(d.get("price", ""))
+		if id != "" and pr != "":
+			_prices[id] = pr
+	changed.emit()
+
+
+func _sig(names: Array, cb: Callable) -> void:
+	for n in names:
+		if _bc.has_signal(n):
+			_bc.connect(n, cb)
+			return
+
+
+func _bc_call(names: Array, args: Array):
+	for n in names:
+		if _bc and _bc.has_method(n):
+			return _bc.callv(n, args)
+	return null
+
+
+func _arg_count(m: String) -> int:
+	if _bc is Object and _bc.get_script():
+		for d in _bc.get_method_list():
+			if d["name"] == m:
+				return (d["args"] as Array).size()
+	return 2
 
 
 # ───────────────────────── 테스트용 가짜 화면 ─────────────────────────

@@ -3191,19 +3191,21 @@ func _open_shop() -> void:
 	v.add_child(close)
 
 
-## 상점 아래: 광고 제거 · 시즌 팩 (실제 결제는 scripts/monet.gd — 지금은 테스트용 가짜 결제)
+## 상점 아래: 광고 제거 · 시즌 팩 (결제는 scripts/monet.gd — 안드로이드는 구글 플레이 결제, 웹·PC는 테스트용 가짜 결제)
 func _shop_paid(v: VBoxContainer) -> void:
 	var mo = Save.monet
 	if not mo.available():
 		return
 	if not mo.changed.is_connected(_shop_refresh):
 		mo.changed.connect(_shop_refresh)
+	if not mo.notice.is_connected(_toast):
+		mo.notice.connect(_toast)
 	v.add_child(Mol.DashLine.new())
-	var rows := [[mo.NO_ADS, "광고 제거", "판 사이 광고가 사라지고, 광고 보고 받는 보상은 광고 없이 바로 받아요. 한 번 사면 계속.", mo.NO_ADS_PRICE]]
+	var rows := [[mo.NO_ADS, "광고 제거", "판 사이 광고가 사라지고, 광고 보고 받는 보상은 광고 없이 바로 받아요. 한 번 사면 계속.", mo.price(mo.NO_ADS)]]
 	for pid in mo.PACKS:
 		var pk: Dictionary = mo.PACKS[pid]
 		if bool(pk["on"]) or mo.owns(pid):
-			rows.append([pid, str(pk["n"]), str(pk["d"]), str(pk["price"])])
+			rows.append([pid, str(pk["n"]), str(pk["d"]), mo.price(pid)])
 	for r in rows:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 18)
