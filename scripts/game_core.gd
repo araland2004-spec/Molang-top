@@ -60,8 +60,9 @@ const STREAK_STEP := 0.5
 const STREAK_MAX := 8
 const STREAK_WAIT := 2.5
 const TIER_MAX := 899
-## 합치면 몇 단계 뛰나: 2 → 두 배씩이 아니라 네 배씩 (32 + 32 → 128). 1로 바꾸면 예전처럼 두 배
-const MERGE_STEP := 2
+## 합치면 몇 단계 뛰나: 보통은 두 배(1단계), 반짝이(금빛 테두리)가 끼면 네 배(2단계: 32 + 32 → 128)
+const MERGE_STEP := 1
+const SHINY_STEP := 2
 # 몸 둘레 점 개수 (웹 버전 10 + r×0.3). GDScript 는 느려서 조금 줄임 — 모양은 곡선으로 부드럽게 그림
 const POINTS_BASE := 8.0
 const POINTS_PER_R := 0.18      # 숫자 고리 점 수: 점이 적으면 동글동글 딱딱해 보였음 (0.13 → 0.18)
@@ -1218,7 +1219,7 @@ func resolve_merges() -> void:
 		var va := blob_motion(a)
 		var vb := blob_motion(b)
 		a.dead = true; b.dead = true
-		var nt := (b.t if a.wild else a.t) + MERGE_STEP
+		var nt := (b.t if a.wild else a.t) + (SHINY_STEP if (a.shiny or b.shiny) else MERGE_STEP)
 		var shot_id := a.shot if a.shot else b.shot
 		if streak_on and shot_id and shot_wait.has(shot_id):
 			shot_wait.erase(shot_id)
