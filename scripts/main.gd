@@ -79,6 +79,8 @@ var shop_panel: Control
 var stage_pop: Control
 var stage_pick := {}
 var _gem_tex: Texture2D
+var avatar_icon: Control
+const MolIcon := preload("res://scripts/ui/mol_icon.gd")
 
 
 func _ready() -> void:
@@ -99,6 +101,7 @@ func _ready() -> void:
 	add_child(menus)
 	menus.setup(self, ui_root)
 	spawn_molangs()
+	refresh_names()
 	_restore_view()
 	_update_camera()
 	_update_mood()
@@ -112,6 +115,9 @@ func _ready() -> void:
 
 func _greet() -> void:
 	await get_tree().create_timer(0.4).timeout
+	var fm: String = await Save.league.process_pending()      # 친구 초대 링크로 들어왔으면 친구 추가
+	if fm != "":
+		_toast(fm)
 	if menus.run_onboarding():
 		return
 	if menus.show_league_result():
@@ -228,15 +234,21 @@ func spawn_molangs() -> void:
 	for t in range(Save.DEX_FROM, Save.DEX_TO + 1):
 		var e: Dictionary = Save.dex().get(str(t), {})
 		if int(e.get("n", 0)) > 0:
-			list.append([t, false, int(e["n"])])
+			list.append(["t:%d" % t, false, int(e["n"])])
 			if int(e.get("s", 0)) > 0:
-				list.append([t, true, int(e["s"])])
+				list.append(["t:%d" % t, true, int(e["s"])])
+	for bm in Save.BOX_MOLS:
+		var n := int(Save.boxmol().get(bm["id"], 0))
+		if n > 0:
+			list.append(["b:" + str(bm["id"]), false, n])
 	if list.is_empty():
-		list.append([1, false, 0])
+		list.append(["t:1", false, 0])
+	if list.size() > 26:
+		list = list.slice(list.size() - 26)       # 너무 많으면 큰 숫자·상자 몰랑이 쪽으로 (가벼움)
 	for it in list:
 		var m := HomeMolang.new()
 		mol_root.add_child(m)
-		m.setup(int(it[0]), bool(it[1]), int(it[2]), walk, FLOOR_TOP)
+		m.setup(str(it[0]), bool(it[1]), int(it[2]), walk, FLOOR_TOP)
 		# 섬 동그라미 밖이면 안으로
 		var p := Vector2(m.position.x, m.position.z)
 		if p.length() > ISLAND - 0.5:
@@ -344,6 +356,24 @@ func _go_game(m: String) -> void:
 	Save.next_mode = m
 	Save.home_view = {"yaw": yaw, "zoom": zoom}
 	get_tree().change_scene_to_file("res://scenes/game.tscn")
+
+
+## 공유: 웹은 폰 공유 창(안 되면 링크 복사), 앱은 링크 복사. 서버가 있으면 내 친구 코드를 붙여요 (받은 사람이 열면 친구 추가)
+func share_game() -> void:
+	var url := "https://araland2004-spec.github.io/Molang-top/"
+	var code: String = Save.league.friend_code()
+	if code != "":
+		url += "?f=" + code
+	var best := int(Save.d.get("best", 0))
+	var txt := "몰랑탑에서 같이 놀자! 내 최고 점수 %s · 몰랑이 %d마리 모았어" % [_comma(best), Save.dex_count() + Save.boxmol_count()]
+	if OS.has_feature("web"):
+		var js := "(function(){var d={title:'몰랑탑',text:%s,url:%s};if(navigator.share){navigator.share(d).catch(function(){});return 'share';}navigator.clipboard&&navigator.clipboard.writeText(d.text+' '+d.url);return 'copy';})()" % [JSON.stringify(txt), JSON.stringify(url)]
+		var r = JavaScriptBridge.eval(js)
+		if str(r) == "copy":
+			_toast("링크를 복사했어요 · 친구에게 붙여 넣어 보내요")
+		return
+	DisplayServer.clipboard_set(txt + " " + url)
+	_toast("링크를 복사했어요 · 친구에게 붙여 넣어 보내요")
 
 
 func open_daily_or_rank() -> void:
@@ -464,7 +494,9 @@ func _on_tap(pos: Vector2) -> void:
 	Save.buzz(10)
 	synth_tone(700 + best.t * 30, 980 + best.t * 30, 0.08, 0.06)
 	var nm := GameCore.num_text(best.t)
-	if best.made <= 0:
+	if not best.look.is_empty():
+		_toast("%s · %s · %d마리" % [best.look["n"], Save.RARITY[int(best.look["r"])], best.made])
+	elif best.made <= 0:
 		_toast("나는 몰랑이! 게임에서 새 숫자를 만들면 친구들이 놀러 와요")
 	elif best.shiny:
 		_toast("반짝이 %s 몰랑이 · 만난 %d번" % [nm, best.made])
@@ -485,6 +517,8 @@ func refresh_ui() -> void:
 func refresh_names() -> void:
 	if name_label:
 		name_label.text = str(Save.home().get("name", "몰랑이네"))
+	if avatar_icon:
+		avatar_icon.set_who(Save.avatar())
 
 
 func toast(text: String) -> void:
@@ -566,24 +600,33 @@ func _build_hud() -> void:
 	ui_root.add_child(frame)
 	hud_groups.append(frame)
 
-	# 위 왼쪽: 프로필 (누르면 설정)
+	# 위 왼쪽: 프로필 (누르면 프로필 — 사진·이름·친구 코드)
 	var tl := Button.new()
 	tl.focus_mode = Control.FOCUS_NONE
 	var tls := Mol.sb(Color(1, 1, 1, 0.82) if day else Color(0.031, 0.094, 0.106, 0.55), Mol.DAY_PANEL_LINE if day else Color(0.494, 0.941, 0.784, 0.14), 32, Vector2(10, 6))
 	for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
 		tl.add_theme_stylebox_override(k, tls)
 	tl.position = Vector2(48, 80)
-	tl.size = Vector2(330, 108)
-	tl.pressed.connect(func(): menus.open_settings())
+	tl.size = Vector2(380, 108)
+	tl.pressed.connect(func(): menus.open_profile())
+	Mol.press(tl, "icon")
 	ui_root.add_child(tl)
 	hud_groups.append(tl)
 	hud_blocks.append(tl)
 	var ph := HBoxContainer.new()
-	ph.add_theme_constant_override("separation", 20)
+	ph.add_theme_constant_override("separation", 18)
 	ph.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ph.position = Vector2(10, 10)
 	tl.add_child(ph)
-	ph.add_child(face(88))
+	var avp := Panel.new()
+	avp.custom_minimum_size = Vector2(88, 88)
+	avp.add_theme_stylebox_override("panel", Mol.sb(Color(1, 1, 1, 0.6) if day else Color(0.094, 0.231, 0.231, 0.75), Mol.DAY_LINE if day else Color(0.494, 0.941, 0.784, 0.3), 24, Vector2.ZERO))
+	avp.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ph.add_child(avp)
+	avatar_icon = MolIcon.new()
+	avatar_icon.set_anchors_preset(Control.PRESET_FULL_RECT)
+	avatar_icon.show_num = false
+	avp.add_child(avatar_icon)
 	var pv := VBoxContainer.new()
 	pv.alignment = BoxContainer.ALIGNMENT_CENTER
 	pv.add_theme_constant_override("separation", 0)
@@ -595,37 +638,57 @@ func _build_hud() -> void:
 	dex_label = Mol.lbl("", 20, sub, "r")
 	dex_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	pv.add_child(dex_label)
+	# 위 오른쪽: 설정
+	var gear := Mol.square_icon("settings", true)
+	gear.anchor_left = 1.0
+	gear.anchor_right = 1.0
+	gear.offset_left = -48 - 96
+	gear.offset_right = -48
+	gear.offset_top = 92
+	gear.offset_bottom = 92 + 96
+	gear.pressed.connect(func(): menus.open_settings())
+	ui_root.add_child(gear)
+	hud_groups.append(gear)
+	hud_blocks.append(gear)
 
-	# 위 오른쪽: 젤리(상점) · 보석(퀘스트)
+	# 둘째 줄: 젤리(상점) · 보석(퀘스트) ··· 친구 · 공유
 	var chip_sb := Mol.sb(Color(1, 1, 1, 0.82) if day else Color(0.031, 0.094, 0.106, 0.7), Mol.DAY_LINE if day else Color(0.494, 0.941, 0.784, 0.28), 999, Vector2(16, 10))
 	var cur_row := HBoxContainer.new()
-	cur_row.alignment = BoxContainer.ALIGNMENT_END
 	cur_row.add_theme_constant_override("separation", 10)
-	cur_row.anchor_left = 1.0
-	cur_row.anchor_right = 1.0
-	cur_row.offset_left = -48 - 300
+	cur_row.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	cur_row.offset_left = 48
 	cur_row.offset_right = -48
-	cur_row.offset_top = 92
+	cur_row.offset_top = 204
+	cur_row.offset_bottom = 204 + 72
 	ui_root.add_child(cur_row)
 	hud_groups.append(cur_row)
-	var mk_chip := func(icon: Texture2D, cb: Callable) -> Button:
+	var mk_chip := func(icon: Texture2D, text: String, cb: Callable, num := true) -> Button:
 		var c := Button.new()
 		c.focus_mode = Control.FOCUS_NONE
 		for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
 			c.add_theme_stylebox_override(k, chip_sb)
-		c.custom_minimum_size = Vector2(140, 72)
-		c.add_theme_font_override("font", Mol.font("num"))
-		c.add_theme_font_size_override("font_size", 28)
+		c.custom_minimum_size = Vector2(128 if num else 0, 68)
+		c.add_theme_font_override("font", Mol.font("num" if num else "m"))
+		c.add_theme_font_size_override("font_size", 26 if num else 22)
 		for k in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
 			c.add_theme_color_override(k, txt)
-		c.icon = icon
+		if icon:
+			c.icon = icon
+		c.text = text
 		c.add_theme_constant_override("h_separation", 8)
 		c.pressed.connect(cb)
+		Mol.press(c, "icon")
 		cur_row.add_child(c)
 		hud_blocks.append(c)
 		return c
-	jelly_btn = mk_chip.call(_jelly_icon(), _open_shop)
-	gem_btn = mk_chip.call(gem_icon(), func(): menus.open_quests())
+	jelly_btn = mk_chip.call(_jelly_icon(), "", _open_shop)
+	gem_btn = mk_chip.call(gem_icon(), "", func(): menus.open_quests())
+	var sp := Control.new()
+	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sp.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cur_row.add_child(sp)
+	mk_chip.call(null, "친구", func(): menus.open_friends(), false)
+	mk_chip.call(null, "공유", share_game, false)
 
 	# 처음 온 사람: 섬 위 안내
 	empty_hint = Mol.lbl("게임에서 새 숫자를 만들면\n몰랑이 친구들이 놀러 와요", 24, txt, "m")
@@ -633,7 +696,7 @@ func _build_hud() -> void:
 	empty_hint.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	empty_hint.offset_left = -300
 	empty_hint.offset_right = 300
-	empty_hint.offset_top = 230
+	empty_hint.offset_top = 300
 	empty_hint.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.5))
 	empty_hint.add_theme_constant_override("shadow_outline_size", 6)
 	empty_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -716,14 +779,13 @@ func _build_hud() -> void:
 	var dock := HBoxContainer.new()
 	dock.add_theme_constant_override("separation", 12)
 	bot.add_child(dock)
-	for d in [["book", "도감"], ["rank", "랭킹"], ["shop", "상점"], ["list", "퀘스트"], ["music", "음악"]]:
+	for d in [["book", "도감"], ["rank", "랭킹"], ["shop", "상점"], ["list", "퀘스트"]]:
 		var b := Mol.icon_btn(d[0], d[1], day, 116)
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		match d[0]:
 			"book": b.pressed.connect(func(): menus.open_dex())
 			"rank": b.pressed.connect(func(): menus.open_rank())
 			"shop": b.pressed.connect(_open_shop)
-			"music": b.pressed.connect(func(): menus.open_music())
 			"list":
 				b.pressed.connect(func(): menus.open_quests())
 				var dot := Panel.new()
@@ -919,9 +981,16 @@ func _open_shop() -> void:
 	shop_panel.custom_minimum_size = Vector2(620, 0)
 	ui_root.add_child(shop_panel)
 	hud_blocks.append(shop_panel)
+	# 내용이 길어서 화면이 짧은 폰에선 안에서 스크롤돼요
+	var sc := ScrollContainer.new()
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	sc.scroll_deadzone = 12
+	sc.custom_minimum_size = Vector2(620, minf(1240.0, get_viewport().get_visible_rect().size.y - 200))
+	shop_panel.add_child(sc)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 14)
-	shop_panel.add_child(v)
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sc.add_child(v)
 	v.add_child(_label("상점", 32, C_INK, false))
 	var desc := _label("무한 모드용 아이템을 사요. 무한 모드에서는 아이템마다 하루 3번 무료, 그다음엔 가방에 산 만큼 더 쓸 수 있어요. (스테이지는 아이템마다 한 번씩 무료)", 20, C_SUB, false)
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -937,6 +1006,38 @@ func _open_shop() -> void:
 	jh.add_child(ji)
 	jh.add_child(jl)
 	v.add_child(jh)
+	v.add_child(Mol.DashLine.new())
+	# 몰랑이 상자: 열면 상자 몰랑이 (도감 「상자 몰랑이」)
+	var brow := HBoxContainer.new()
+	brow.add_theme_constant_override("separation", 16)
+	v.add_child(brow)
+	var gico := MolIcon.new()
+	gico.custom_minimum_size = Vector2(84, 84)
+	gico.show_num = false
+	gico.set_who("b:" + str(Save.BOX_MOLS[randi() % Save.BOX_MOLS.size()]["id"]))
+	brow.add_child(gico)
+	var bcol := VBoxContainer.new()
+	bcol.alignment = BoxContainer.ALIGNMENT_CENTER
+	bcol.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	brow.add_child(bcol)
+	bcol.add_child(Mol.lbl("몰랑이 상자", 28, Mol.TEXT, "b"))
+	var bd := Mol.lbl("상자 몰랑이 %d/%d · 보통 70%% · 희귀 25%% · 전설 5%%\n중복이면 젤리 %d 돌려받아요" % [Save.boxmol_count(), Save.BOX_MOLS.size(), Save.BOX_DUP_JELLY], 19, Mol.TEXT_SUB, "r")
+	bd.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	bcol.add_child(bd)
+	var bbtn := HBoxContainer.new()
+	bbtn.add_theme_constant_override("separation", 10)
+	v.add_child(bbtn)
+	for pk in [[1, Save.BOX_PRICE, "1개"], [10, Save.BOX10_PRICE, "10개 · 희귀 1개 보장"]]:
+		var bb := _px_btn("%s · 젤리 %s" % [pk[2], _comma(int(pk[1]))], C_YELLOW if pk[0] == 1 else C_VIOLET, 22)
+		bb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		bb.disabled = int(Save.d["jelly"]) < int(pk[1])
+		var cnt: int = pk[0]
+		bb.pressed.connect(func():
+			hud_blocks.erase(shop_panel)
+			shop_panel.queue_free()
+			shop_panel = null
+			menus.open_box(cnt))
+		bbtn.add_child(bb)
 	v.add_child(Mol.DashLine.new())
 	var prog := int(Save.d.get("prog", 0))
 	var ICON := {"shake": "item_shake", "undo": "item_undo", "hammer": "item_hammer", "tilt": "tilt_right", "x2": "item_x2star"}

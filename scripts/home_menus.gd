@@ -2,6 +2,7 @@ extends Node
 ## 홈 화면의 창들: 몰랑이 도감 · 랭킹(주간 리그·오늘의 판) · 퀘스트 · 음악 · 설정 · 말풍선 · 처음 안내
 
 const GameCore := preload("res://scripts/game_core.gd")
+const MolIcon := preload("res://scripts/ui/mol_icon.gd")
 
 var main: Node3D
 var ui: Control
@@ -340,8 +341,26 @@ class DexCell extends Control:
 			draw_string(font, c + Vector2(-w2 / 2, fs2 * 0.35), "?", HORIZONTAL_ALIGNMENT_LEFT, -1, fs2, Color(0.494, 0.941, 0.784, 0.45))
 
 
-func open_dex() -> void:
+var dex_tab := "num"
+
+
+func open_dex(tab := "") -> void:
+	if tab != "":
+		dex_tab = tab
 	var v := _sheet("몰랑이 도감", 660)
+	var tabs := HBoxContainer.new()
+	tabs.add_theme_constant_override("separation", 8)
+	v.add_child(tabs)
+	for td in [["num", "숫자 몰랑이 %d" % Save.dex_count()], ["box", "상자 몰랑이 %d" % Save.boxmol_count()]]:
+		var tb: Button = main._px_btn(td[1], main.C_YELLOW if dex_tab == td[0] else main.C_CREAM, 22)
+		tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var k: String = td[0]
+		tb.pressed.connect(func(): open_dex(k))
+		tabs.add_child(tb)
+	if dex_tab == "box":
+		_box_dex(v)
+		_close_btn(v)
+		return
 	var total := Save.DEX_TO - Save.DEX_FROM + 1
 	var sh := 0
 	for k in Save.dex():
@@ -391,19 +410,24 @@ func open_rank(tab := "") -> void:
 	var tabs := HBoxContainer.new()
 	tabs.add_theme_constant_override("separation", 8)
 	v.add_child(tabs)
-	for td in [["week", "주간 리그"], ["daily", "오늘의 판"]]:
+	for td in [["week", "주간 리그"], ["friends", "친구"], ["daily", "오늘의 판"]]:
 		var tb: Button = main._px_btn(td[1], main.C_YELLOW if rank_tab == td[0] else main.C_CREAM, 22)
 		tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var k: String = td[0]
 		tb.pressed.connect(func(): open_rank(k))
 		tabs.add_child(tb)
-	if not L.online():
+	if not L.online() and rank_tab != "friends":
 		v.add_child(_wrap("연습 리그 · 랭킹 서버를 연결하기 전이라 이 기기의 연습 상대와 겨뤄요", 17, Mol.TEXT_DIM))
 	if rank_tab == "week":
 		await L.refresh_week()
 		if sheet == null or not is_instance_valid(v):
 			return
 		_week_view(v)
+	elif rank_tab == "friends":
+		await L.refresh_friends()
+		if sheet == null or not is_instance_valid(v):
+			return
+		_friend_view(v)
 	else:
 		await L.refresh_daily()
 		if sheet == null or not is_instance_valid(v):
@@ -479,7 +503,33 @@ func _daily_view(v: VBoxContainer) -> void:
 	v.add_child(go)
 
 
-func _rank_row(n: int, nm: String, sc: int, me: bool, zone: String) -> Control:
+func _friend_view(v: VBoxContainer) -> void:
+	var L = Save.league
+	if not L.online():
+		v.add_child(_wrap("친구 랭킹은 랭킹 서버를 연결하면 열려요. 그때 친구 코드나 초대 링크로 친구를 추가할 수 있어요.", 20))
+		return
+	v.add_child(_wrap("친구끼리 이번 주 무한 모드 최고 점수 · 남은 시간 " + L.left_text(L.week_left_sec()), 19))
+	var list := _scroll(v, 600)
+	var rows: Array = L.friend_board
+	for i in rows.size():
+		var r: Dictionary = rows[i]
+		list.add_child(_rank_row(i + 1, str(r["name"]), int(r["score"]), bool(r["me"]), "", str(r.get("avatar", ""))))
+	if rows.size() <= 1:
+		list.add_child(_wrap("아직 친구가 없어요. 아래 「친구 초대」로 링크를 보내 봐요!", 20))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	v.add_child(row)
+	var inv: Button = main._px_btn("친구 초대", main.C_YELLOW, 22)
+	inv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inv.pressed.connect(main.share_game)
+	row.add_child(inv)
+	var add: Button = main._px_btn("코드로 추가", main.C_CREAM, 22)
+	add.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	add.pressed.connect(open_friends)
+	row.add_child(add)
+
+
+func _rank_row(n: int, nm: String, sc: int, me: bool, zone: String, av := "") -> Control:
 	var p := PanelContainer.new()
 	var bg := Color(0.02, 0.07, 0.08, 0.55)
 	var ln := Color(0.494, 0.941, 0.784, 0.1)
@@ -498,6 +548,12 @@ func _rank_row(n: int, nm: String, sc: int, me: bool, zone: String) -> Control:
 	nl.custom_minimum_size.x = 54
 	nl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	row.add_child(nl)
+	if av != "":
+		var ic := MolIcon.new()
+		ic.custom_minimum_size = Vector2(48, 48)
+		ic.show_num = false
+		ic.set_who(av)
+		row.add_child(ic)
 	var name_l := Mol.lbl(nm + ("  (나)" if me else ""), 22, Mol.TEXT, "b" if me else "m")
 	name_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_l.clip_text = true
@@ -568,7 +624,9 @@ func open_music() -> void:
 			open_music())
 		grid.add_child(b)
 	v.add_child(grid)
-	_close_btn(v)
+	var back: Button = main._px_btn("설정으로", main.C_CREAM, 22)
+	back.pressed.connect(open_settings)
+	v.add_child(back)
 
 
 func open_settings() -> void:
@@ -600,6 +658,9 @@ func open_settings() -> void:
 		Bgm.toggle()
 		open_settings())
 	v.add_child(bb)
+	var mu: Button = main._px_btn("음악 · %s" % (Bgm.NAMES[Bgm.cur] if Bgm.is_on() else "꺼짐"), main.C_CREAM, 22)
+	mu.pressed.connect(open_music)
+	v.add_child(mu)
 	var pb: Button = main._px_btn("도트 화면 %s" % ("켜짐" if bool(Save.d.get("pixel_art", true)) else "꺼짐"), main.C_CREAM, 22)
 	pb.pressed.connect(func():
 		Save.d["pixel_art"] = not bool(Save.d.get("pixel_art", true))
@@ -666,3 +727,279 @@ func open_dev() -> void:
 			main.toast("했어요: " + str(a[0])))
 		v.add_child(b)
 	_close_btn(v)
+
+
+func _box_dex(v: VBoxContainer) -> void:
+	v.add_child(_wrap("상점에서 몰랑이 상자를 열면 나와요 · 모은 몰랑이 %d/%d · 섬에 놀러 와요" % [Save.boxmol_count(), Save.BOX_MOLS.size()], 20))
+	var list := _scroll(v, 720)
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.add_theme_constant_override("h_separation", 8)
+	grid.add_theme_constant_override("v_separation", 8)
+	list.add_child(grid)
+	for m in Save.BOX_MOLS:
+		var n := int(Save.boxmol().get(m["id"], 0))
+		var cell := VBoxContainer.new()
+		cell.custom_minimum_size = Vector2(136, 0)
+		cell.add_theme_constant_override("separation", 0)
+		var ic := MolIcon.new()
+		ic.custom_minimum_size = Vector2(130, 110)
+		ic.set_who("b:" + str(m["id"]), false, n <= 0)
+		cell.add_child(ic)
+		var rc := Color(Save.RARITY_COL[int(m["r"])])
+		var l := Mol.lbl(str(m["n"]) if n > 0 else "???", 17, Mol.TEXT if n > 0 else Mol.TEXT_DIM, "m")
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		l.clip_text = true
+		cell.add_child(l)
+		var l2 := Mol.lbl(Save.RARITY[int(m["r"])] + ((" · %d" % n) if n > 0 else ""), 15, rc, "r")
+		l2.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		cell.add_child(l2)
+		grid.add_child(cell)
+	var go: Button = main._px_btn("상점에서 상자 열기", main.C_YELLOW, 22)
+	go.pressed.connect(func():
+		close_sheet()
+		main._open_shop())
+	v.add_child(go)
+
+
+# ───────────────────────── 상자 열기 ─────────────────────────
+
+class GiftDraw extends Control:
+	var t := 0.0
+	var open := false
+	func _process(dt: float) -> void:
+		t += dt
+		queue_redraw()
+	func _draw() -> void:
+		var c := size / 2
+		var w := minf(size.x, size.y) * 0.55
+		var shake := 0.0 if open else sin(t * 38.0) * minf(t * 6.0, 6.0)
+		var o := c + Vector2(shake, 0)
+		var body := Rect2(o + Vector2(-w / 2, -w * 0.15), Vector2(w, w * 0.62))
+		draw_rect(body, Color("#ff8fb0"))
+		draw_rect(Rect2(o + Vector2(-w * 0.08, -w * 0.15), Vector2(w * 0.16, w * 0.62)), Color("#ffe27a"))
+		var lift := w * 0.5 if open else 0.0
+		var lid := Rect2(o + Vector2(-w * 0.56, -w * 0.32 - lift), Vector2(w * 1.12, w * 0.2))
+		draw_rect(lid, Color("#ff6f9c"))
+		draw_rect(Rect2(o + Vector2(-w * 0.08, -w * 0.32 - lift), Vector2(w * 0.16, w * 0.2)), Color("#ffd23a"))
+		draw_circle(o + Vector2(-w * 0.12, -w * 0.38 - lift), w * 0.1, Color("#ffd23a"))
+		draw_circle(o + Vector2(w * 0.12, -w * 0.38 - lift), w * 0.1, Color("#ffd23a"))
+		if open:
+			for k in 12:
+				var a := TAU * k / 12.0 + t
+				draw_circle(c + Vector2(cos(a), sin(a)) * w * (0.6 + 0.1 * sin(t * 4 + k)), 5, Color(1, 0.95, 0.6, 0.8))
+
+
+## 상자 n개 열기 (상점에서): 상자가 흔들리다 퐁 → 나온 몰랑이 카드
+func open_box(n: int) -> void:
+	var res: Array = Save.box_open(n)
+	if res.is_empty():
+		main.toast("젤리가 모자라요")
+		return
+	main.refresh_ui()
+	var v := _sheet("몰랑이 상자", 640)
+	var gd := GiftDraw.new()
+	gd.custom_minimum_size = Vector2(0, 300)
+	v.add_child(gd)
+	main.synth_tone(300, 520, 0.6, 0.06)
+	await get_tree().create_timer(0.9).timeout
+	if not is_instance_valid(gd):
+		return
+	gd.open = true
+	main.synth_tone(660, 1320, 0.14, 0.12)
+	Save.buzz(30)
+	await get_tree().create_timer(0.35).timeout
+	if not is_instance_valid(v):
+		return
+	gd.queue_free()
+	var grid := GridContainer.new()
+	grid.columns = 1 if res.size() == 1 else 5
+	grid.add_theme_constant_override("h_separation", 6)
+	grid.add_theme_constant_override("v_separation", 6)
+	v.add_child(grid)
+	var news := 0
+	var dups := 0
+	for i in res.size():
+		var r: Dictionary = res[i]
+		var m: Dictionary = Save.box_mol(r["id"])
+		var cell := VBoxContainer.new()
+		cell.add_theme_constant_override("separation", 0)
+		var big := res.size() == 1
+		cell.custom_minimum_size = Vector2(560 if big else 108, 0)
+		var ic := MolIcon.new()
+		ic.custom_minimum_size = Vector2(0, 260 if big else 96)
+		ic.set_who("b:" + str(r["id"]))
+		cell.add_child(ic)
+		var rc := Color(Save.RARITY_COL[int(m["r"])])
+		var l := Mol.lbl(str(m["n"]) if big else str(m["n"]).replace(" 몰랑", ""), 30 if big else 15, rc, "b")
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		l.clip_text = true
+		cell.add_child(l)
+		var tag: String = ("NEW · " if r["new"] else "") + str(Save.RARITY[int(m["r"])])
+		var l2 := Mol.lbl(tag, 22 if big else 13, Mol.AMBER if r["new"] else Mol.TEXT_SUB, "m")
+		l2.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		cell.add_child(l2)
+		if r["new"]:
+			news += 1
+		else:
+			dups += 1
+		grid.add_child(cell)
+		cell.scale = Vector2.ONE * 0.3
+		cell.modulate.a = 0.0
+		(func():
+			cell.pivot_offset = cell.size / 2
+			var tw := cell.create_tween().set_parallel()
+			tw.tween_property(cell, "scale", Vector2.ONE, 0.25).set_delay(i * 0.06).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+			tw.tween_property(cell, "modulate:a", 1.0, 0.15).set_delay(i * 0.06)).call_deferred()
+	var sum := "새 몰랑이 %d마리" % news
+	if dups > 0:
+		sum += " · 중복 %d마리는 젤리 +%d" % [dups, dups * Save.BOX_DUP_JELLY]
+	v.add_child(_wrap(sum + " · 새로 만난 몰랑이는 섬에 놀러 와요", 19))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	v.add_child(row)
+	var again: Button = main._px_btn("한 번 더 · %d" % Save.BOX_PRICE, main.C_YELLOW, 22)
+	again.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	again.disabled = int(Save.d["jelly"]) < Save.BOX_PRICE
+	again.pressed.connect(func(): open_box(1))
+	row.add_child(again)
+	var ok: Button = main._px_btn("좋아요", main.C_CREAM, 22)
+	ok.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ok.pressed.connect(close_sheet)
+	row.add_child(ok)
+	main.spawn_molangs()
+
+
+# ───────────────────────── 프로필 · 친구 ─────────────────────────
+
+func open_profile() -> void:
+	var v := _sheet("프로필", 640)
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 18)
+	v.add_child(head)
+	var big := MolIcon.new()
+	big.custom_minimum_size = Vector2(150, 140)
+	big.show_num = false
+	big.set_who(Save.avatar())
+	head.add_child(big)
+	var hv := VBoxContainer.new()
+	hv.alignment = BoxContainer.ALIGNMENT_CENTER
+	hv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(hv)
+	hv.add_child(Mol.lbl(str(Save.home()["name"]), 34, Mol.TEXT, "b"))
+	var L = Save.league
+	hv.add_child(Mol.lbl("%s 리그 · 최고 %s" % [L.tier_name(), GameCore.score_text(int(Save.d.get("best", 0)))], 20, Mol.TEXT_SUB, "m"))
+	var code_l := Mol.lbl("친구 코드 · " + ("불러오는 중…" if L.online() else "랭킹 서버 연결 후"), 20, Mol.AMBER, "m")
+	hv.add_child(code_l)
+	var nb: Button = main._px_btn("이름 바꾸기", main.C_CREAM, 20)
+	nb.pressed.connect(func():
+		ask_name("내 이름 (랭킹에 보여요)", str(Save.home()["name"]), func(nm: String):
+			Save.home()["name"] = nm.left(10)
+			Save.save()
+			main.refresh_names()
+			L.push_profile()
+			open_profile()))
+	v.add_child(nb)
+	v.add_child(Mol.lbl("프로필 사진 · 모은 몰랑이 중에서 골라요", 20, Mol.TEXT_SUB, "m"))
+	var list := _scroll(v, 420)
+	var grid := GridContainer.new()
+	grid.columns = 5
+	grid.add_theme_constant_override("h_separation", 6)
+	grid.add_theme_constant_override("v_separation", 6)
+	list.add_child(grid)
+	var opts: Array = ["t:1"]
+	for t in range(2, Save.DEX_TO + 1):
+		if Save.dex_has(t):
+			opts.append("t:%d" % t)
+	for m in Save.BOX_MOLS:
+		if int(Save.boxmol().get(m["id"], 0)) > 0:
+			opts.append("b:" + str(m["id"]))
+	for a in opts:
+		var b := Button.new()
+		b.focus_mode = Control.FOCUS_NONE
+		b.custom_minimum_size = Vector2(104, 100)
+		var on: bool = a == Save.avatar()
+		var st := Mol.sb(Color(0.494, 0.941, 0.784, 0.18) if on else Color(0.02, 0.07, 0.08, 0.6), Mol.MINT if on else Color(0.494, 0.941, 0.784, 0.14), 20, Vector2(4, 4), 3 if on else 1)
+		for k in ["normal", "hover", "focus", "pressed", "hover_pressed"]:
+			b.add_theme_stylebox_override(k, st)
+		var ic := MolIcon.new()
+		ic.set_anchors_preset(Control.PRESET_FULL_RECT)
+		ic.show_num = a.begins_with("t:")
+		ic.set_who(a)
+		b.add_child(ic)
+		var av: String = a
+		b.pressed.connect(func():
+			Save.home()["avatar"] = av
+			Save.save()
+			main.refresh_names()
+			L.push_profile()
+			open_profile())
+		grid.add_child(b)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	v.add_child(row)
+	var fr: Button = main._px_btn("친구", main.C_CREAM, 22)
+	fr.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	fr.pressed.connect(open_friends)
+	row.add_child(fr)
+	var sh: Button = main._px_btn("공유", main.C_YELLOW, 22)
+	sh.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sh.pressed.connect(main.share_game)
+	row.add_child(sh)
+	_close_btn(v)
+	if L.online():
+		var code: String = await L.ensure_code()
+		if is_instance_valid(code_l):
+			code_l.text = "친구 코드 · " + (code if code != "" else "연결 실패")
+
+
+func open_friends() -> void:
+	var L = Save.league
+	var v := _sheet("친구", 640)
+	if not L.online():
+		v.add_child(_wrap("친구 기능은 랭킹 서버를 연결하면 열려요.\n지금은 「공유」로 게임 링크를 보낼 수 있어요.", 21))
+		var sh0: Button = main._px_btn("게임 공유하기", main.C_YELLOW, 22)
+		sh0.pressed.connect(main.share_game)
+		v.add_child(sh0)
+		_close_btn(v)
+		return
+	var code_l := Mol.lbl("내 친구 코드 · 불러오는 중…", 26, Mol.AMBER, "b")
+	v.add_child(code_l)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	v.add_child(row)
+	var cp: Button = main._px_btn("코드 복사", main.C_CREAM, 22)
+	cp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cp.pressed.connect(func():
+		DisplayServer.clipboard_set(L.friend_code())
+		main.toast("친구 코드를 복사했어요"))
+	row.add_child(cp)
+	var inv: Button = main._px_btn("초대 링크 보내기", main.C_YELLOW, 22)
+	inv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inv.pressed.connect(main.share_game)
+	row.add_child(inv)
+	v.add_child(Mol.lbl("친구 코드로 추가", 20, Mol.TEXT_SUB, "m"))
+	var arow := HBoxContainer.new()
+	arow.add_theme_constant_override("separation", 10)
+	v.add_child(arow)
+	var le := LineEdit.new()
+	le.placeholder_text = "예: 3FA9C21B"
+	le.max_length = 8
+	le.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	le.add_theme_font_size_override("font_size", 26)
+	arow.add_child(le)
+	var ab: Button = main._px_btn("추가", main.C_YELLOW, 22)
+	ab.custom_minimum_size.x = 120
+	ab.pressed.connect(func():
+		var msg: String = await L.add_friend(le.text)
+		main.toast(msg)
+		if msg.ends_with("됐어요!"):
+			open_rank("friends"))
+	arow.add_child(ab)
+	var rk: Button = main._px_btn("친구 랭킹 보기", main.C_CREAM, 22)
+	rk.pressed.connect(func(): open_rank("friends"))
+	v.add_child(rk)
+	_close_btn(v)
+	var code: String = await L.ensure_code()
+	if is_instance_valid(code_l):
+		code_l.text = "내 친구 코드 · " + (code if code != "" else "연결 실패")

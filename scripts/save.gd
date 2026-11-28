@@ -156,6 +156,7 @@ const STAGE_ENTRY_GEM := 10
 const QUESTS := [
 	{"id": "stage5", "t": "스테이지 5단계까지 깨기", "kind": "prog", "need": 5, "gem": 30},
 	{"id": "endless1", "t": "무한 모드 1판 하기", "kind": "endless", "need": 1, "gem": 20},
+	{"id": "box1", "t": "상점에서 몰랑이 상자 1번 열기", "kind": "box", "need": 1, "gem": 20},
 	{"id": "daily1", "t": "오늘의 판 1번 하기", "kind": "daily", "need": 1, "gem": 20},
 	{"id": "dex6", "t": "몰랑이 도감 6칸 채우기 (128 만들기)", "kind": "dex", "need": 6, "gem": 30},
 	{"id": "stage20", "t": "스테이지 20단계까지 깨기", "kind": "prog", "need": 20, "gem": 50},
@@ -175,7 +176,7 @@ func add_gem(n: int) -> void:
 	save()
 
 
-## 횟수 기록: endless(무한 모드 끝낸 판) · daily(오늘의 판 한 수)
+## 횟수 기록: endless(무한 모드 끝낸 판) · daily(오늘의 판 한 수) · box(몰랑이 상자 연 수)
 func bump(kind: String, n := 1) -> void:
 	if not (d.get("cnt") is Dictionary):
 		d["cnt"] = {}
@@ -406,3 +407,99 @@ func dex_add(t: int, shiny := false) -> int:
 		d["jelly"] = int(d["jelly"]) + r
 		jelly_changed.emit()
 	return r
+
+
+# ───────────────────────── 상자 몰랑이 ─────────────────────────
+## 상점에서 젤리로 상자를 사서 열면 나오는 몰랑이 (숫자 몰랑이와 따로 모아요). 모양은 코드로 그려요(에셋 없음).
+## r: 0 보통 · 1 희귀 · 2 전설. col 몸 색 · ear 귀(cat·bunny·bear·none) · hat 머리(crown·leaf·flower·ribbon·horn·santa·star·none) · pat 무늬(spots·stripe·stars·none)
+const BOX_PRICE := 200
+const BOX10_PRICE := 1800
+const BOX_DUP_JELLY := 40      # 이미 있는 몰랑이가 나오면 돌려받는 젤리
+const RARITY := ["보통", "희귀", "전설"]
+const RARITY_COL := ["#9fbcb6", "#8fc8ff", "#ffc171"]
+const RARITY_W := [70.0, 25.0, 5.0]
+const BOX_MOLS := [
+	{"id": "cat", "n": "고양이 몰랑", "r": 0, "col": "#fff1d6", "ear": "cat", "hat": "none", "pat": "none"},
+	{"id": "bunny", "n": "토끼 몰랑", "r": 0, "col": "#ffd0dc", "ear": "bunny", "hat": "none", "pat": "none"},
+	{"id": "bear", "n": "곰돌 몰랑", "r": 0, "col": "#c9946a", "ear": "bear", "hat": "none", "pat": "none"},
+	{"id": "sprout", "n": "새싹 몰랑", "r": 0, "col": "#b8f0c8", "ear": "none", "hat": "leaf", "pat": "none"},
+	{"id": "flower", "n": "꽃 몰랑", "r": 0, "col": "#ffe3f0", "ear": "none", "hat": "flower", "pat": "none"},
+	{"id": "ribbon", "n": "리본 몰랑", "r": 0, "col": "#e2d6ff", "ear": "none", "hat": "ribbon", "pat": "none"},
+	{"id": "cloud", "n": "구름 몰랑", "r": 0, "col": "#ffffff", "ear": "none", "hat": "none", "pat": "none"},
+	{"id": "dot", "n": "점박이 몰랑", "r": 0, "col": "#fff08a", "ear": "none", "hat": "none", "pat": "spots"},
+	{"id": "king", "n": "왕관 몰랑", "r": 1, "col": "#ffe9a8", "ear": "none", "hat": "crown", "pat": "none"},
+	{"id": "tiger", "n": "줄무늬 고양이", "r": 1, "col": "#ffb26b", "ear": "cat", "hat": "none", "pat": "stripe"},
+	{"id": "night", "n": "밤하늘 몰랑", "r": 1, "col": "#3b4a8a", "ear": "none", "hat": "star", "pat": "stars"},
+	{"id": "berry", "n": "딸기 몰랑", "r": 1, "col": "#ff6b7a", "ear": "none", "hat": "leaf", "pat": "spots"},
+	{"id": "devil", "n": "뿔 몰랑", "r": 1, "col": "#b98cff", "ear": "none", "hat": "horn", "pat": "none"},
+	{"id": "santa", "n": "산타 몰랑", "r": 1, "col": "#fff6f0", "ear": "none", "hat": "santa", "pat": "none"},
+	{"id": "rainbow", "n": "무지개 몰랑", "r": 2, "col": "rainbow", "ear": "bunny", "hat": "star", "pat": "none"},
+	{"id": "gold", "n": "황금 몰랑", "r": 2, "col": "#ffd84a", "ear": "none", "hat": "crown", "pat": "none"},
+	{"id": "ghost", "n": "유령 몰랑", "r": 2, "col": "#e8f4ff", "ear": "none", "hat": "none", "pat": "none"},
+	{"id": "dragon", "n": "용 몰랑", "r": 2, "col": "#5fd38a", "ear": "none", "hat": "horn", "pat": "spots"},
+]
+
+
+static func box_mol(id: String) -> Dictionary:
+	for m in BOX_MOLS:
+		if m["id"] == id:
+			return m
+	return {}
+
+
+func boxmol() -> Dictionary:
+	if not (d.get("boxmol") is Dictionary):
+		d["boxmol"] = {}
+	return d["boxmol"]
+
+
+func boxmol_count() -> int:
+	var c := 0
+	for m in BOX_MOLS:
+		if int(boxmol().get(m["id"], 0)) > 0:
+			c += 1
+	return c
+
+
+## 상자 n개 열기: 젤리를 내고 몰랑이를 뽑아요. [{id, new}] (젤리가 모자라면 빈 배열)
+func box_open(n: int) -> Array:
+	var price := BOX10_PRICE if n >= 10 else BOX_PRICE * n
+	if int(d["jelly"]) < price:
+		return []
+	d["jelly"] = int(d["jelly"]) - price
+	var out: Array = []
+	for i in n:
+		var rr := 0
+		var v := randf() * (RARITY_W[0] + RARITY_W[1] + RARITY_W[2])
+		if v > RARITY_W[0] + RARITY_W[1]:
+			rr = 2
+		elif v > RARITY_W[0]:
+			rr = 1
+		if n >= 10 and i == n - 1 and not out.any(func(o): return int(box_mol(o["id"])["r"]) >= 1):
+			rr = 1      # 10개 묶음은 희귀 이상 하나는 꼭
+		var pool: Array = BOX_MOLS.filter(func(m): return int(m["r"]) == rr)
+		var m: Dictionary = pool[randi() % pool.size()]
+		var fresh := int(boxmol().get(m["id"], 0)) == 0
+		boxmol()[m["id"]] = int(boxmol().get(m["id"], 0)) + 1
+		if not fresh:
+			d["jelly"] = int(d["jelly"]) + BOX_DUP_JELLY
+		out.append({"id": m["id"], "new": fresh})
+	bump("box", n)
+	save()
+	jelly_changed.emit()
+	return out
+
+
+# ───────────────────────── 프로필 그림 ─────────────────────────
+## "t:5" = 숫자 몰랑이(32) · "b:cat" = 상자 몰랑이. 모은 것만 고를 수 있어요.
+func avatar() -> String:
+	return str(home().get("avatar", "t:1"))
+
+
+func avatar_owned(a: String) -> bool:
+	if a.begins_with("t:"):
+		var t := a.substr(2).to_int()
+		return t == 1 or dex_has(t)
+	if a.begins_with("b:"):
+		return int(boxmol().get(a.substr(2), 0)) > 0
+	return false

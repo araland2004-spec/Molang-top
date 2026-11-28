@@ -33,9 +33,10 @@ const MEM_B := 32.0
 const MEM_TRAVEL := 21.0
 const PRESS_FULL := 3.5          # 반원이 「꽉 눌림」으로 보는 깊이 (작을수록 예민)
 const REST_SPD := 12.0           # 평균 속도가 이보다 느리면 쉬기 시작 (px/s)
-const REST_AFTER := 0.4          # 그만큼 계속 느리면 쉼 (초)
-const REST_DRIFT := 4.0          # 중심이 이 안에서만 움직이면 제자리 떨림 (px)
-const WAKE_SPD := 120.0          # 이보다 빠른 숫자가 닿으면 깨움
+const REST_AFTER := 1.2          # 그만큼 계속 제자리면 쉼 (초) — 짧으면 쌓인 숫자가 굳어 흘러내리지 않았음
+const REST_MIN := 14             # 숫자가 이만큼 넘을 때만 쉬기 (적을 땐 모두 끝까지 말랑하게 흘러요)
+const REST_DRIFT := 2.5          # 중심이 이 안에서만 움직이면 제자리 떨림 (px)
+const WAKE_SPD := 50.0           # 이보다 빠른 숫자가 닿으면 깨움
 var heavy_blobs := 14          # 숫자가 이보다 많으면 가벼운 계산 (겹침 정리 1번)
 const CHAMFER := 80.0
 const MERGE_SUBSTEPS := 10
@@ -59,9 +60,11 @@ const STREAK_STEP := 0.5
 const STREAK_MAX := 8
 const STREAK_WAIT := 2.5
 const TIER_MAX := 899
+## 합치면 몇 단계 뛰나: 2 → 두 배씩이 아니라 네 배씩 (32 + 32 → 128). 1로 바꾸면 예전처럼 두 배
+const MERGE_STEP := 2
 # 몸 둘레 점 개수 (웹 버전 10 + r×0.3). GDScript 는 느려서 조금 줄임 — 모양은 곡선으로 부드럽게 그림
 const POINTS_BASE := 8.0
-const POINTS_PER_R := 0.13      # 숫자 고리 점 수 (예전 0.2): 큰 숫자일수록 점이 덜 늘게 → 계산 가벼움
+const POINTS_PER_R := 0.18      # 숫자 고리 점 수: 점이 적으면 동글동글 딱딱해 보였음 (0.13 → 0.18)
 
 var num_font: Font
 var txt_font: Font
@@ -436,8 +439,8 @@ func internal_constraints(b: Blob) -> void:
 		var ang := atan2(A, B)
 		var ca := cos(ang)
 		var sa := sin(ang)
-		# 모양 되돌리는 힘(장력): 조금 낮춰서 밀면 틈 사이로 더 쏙 들어가게 (0.0032 → 0.0024)
-		var k := (0.0024 * minf(1.0, (36.0 / b.r) * (36.0 / b.r)) + 0.0072 * maxf(0.0, (34.0 - b.r) / 17.0)) * (0.3 if b.wob > 0 else 1.0)
+		# 모양 되돌리는 힘(장력): 낮을수록 물렁·쫀득 (0.0032 → 0.0024 → 0.002)
+		var k := (0.002 * minf(1.0, (36.0 / b.r) * (36.0 / b.r)) + 0.006 * maxf(0.0, (34.0 - b.r) / 17.0)) * (0.3 if b.wob > 0 else 1.0)
 		var small := maxf(0.0, (42.0 - b.r) / 25.0)
 		var dev := 0.0
 		var gxs := PackedFloat64Array()
@@ -1048,7 +1051,7 @@ func substep(h: float) -> void:
 	# (새로 던진 숫자는 부딪힐 때 깨우니, 줄어들 때만 — 받치던 숫자가 사라지면 위가 떨어져야 해요)
 	var shrunk := blobs.size() < rest_count
 	rest_count = blobs.size()
-	if shrunk or shake_ax != 0.0 or shake_ay != 0.0 or tilt_g != 0.0 or warps.size() > 0:
+	if shrunk or shake_ax != 0.0 or shake_ay != 0.0 or tilt_g != 0.0 or warps.size() > 0 or blobs.size() < REST_MIN:
 		for b: Blob in blobs:
 			if b.rest:
 				_wake(b)
@@ -1164,7 +1167,7 @@ func substep(h: float) -> void:
 				wx *= f; wy *= f
 			vx[i] = wx; vy[i] = wy
 		b.x = x; b.y = y; b.vx = vx; b.vy = vy
-		if b.still > REST_AFTER:
+		if b.still > REST_AFTER and blobs.size() >= REST_MIN:
 			b.rest = true
 			vx.fill(0.0); vy.fill(0.0)
 			b.vx = vx; b.vy = vy
@@ -1215,7 +1218,7 @@ func resolve_merges() -> void:
 		var va := blob_motion(a)
 		var vb := blob_motion(b)
 		a.dead = true; b.dead = true
-		var nt := (b.t if a.wild else a.t) + 1
+		var nt := (b.t if a.wild else a.t) + MERGE_STEP
 		var shot_id := a.shot if a.shot else b.shot
 		if streak_on and shot_id and shot_wait.has(shot_id):
 			shot_wait.erase(shot_id)
@@ -1957,7 +1960,7 @@ func draw_blob(b: Blob) -> void:
 	col.a = alpha
 	var poly := pts
 	# 꼬인 모양인지 검사(삼각형 나누기)는 무거워서 6프레임에 한 번만 (그리기에서 한 번 더 나누니 매 프레임 두 번이었음)
-	if (draw_tick + b.id) % 6 == 0 or b.age < 0.3:
+	if (draw_tick + b.id) % 3 == 0 or b.age < 0.3 or b.spd > 200.0:
 		b.tri_ok = not Geometry2D.triangulate_polygon(poly).is_empty()
 	if not b.tri_ok:
 		draw_circle(Vector2(b.cx, b.cy), b.r * b.s, col)

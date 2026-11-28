@@ -3,8 +3,11 @@ extends Node3D
 ## 말랑한 젤리 공 + 눈·볼 + 머리 위 숫자. 통통 뛰어다니다가 가끔 멈춰 쉬어요. 누르면 폴짝 + 하트.
 
 const GameCore := preload("res://scripts/game_core.gd")
+const SaveS := preload("res://scripts/save.gd")
 
 var t := 1
+var who := "t:1"          # "t:5" 숫자 몰랑이 · "b:cat" 상자 몰랑이
+var look := {}            # 상자 몰랑이 모양 (Save.BOX_MOLS)
 var shiny := false
 var made := 0
 var area := Rect2(-3.5, -3.5, 7, 7)     # 돌아다닐 수 있는 곳 (x, z)
@@ -25,8 +28,16 @@ var clock := 0.0
 var sparkle: CPUParticles3D
 
 
-func setup(tier: int, is_shiny: bool, count: int, walk: Rect2, fy: float) -> void:
-	t = tier
+var body_mat: StandardMaterial3D
+
+
+func setup(w: String, is_shiny: bool, count: int, walk: Rect2, fy: float) -> void:
+	who = w
+	if w.begins_with("t:"):
+		t = w.substr(2).to_int()
+	else:
+		look = SaveS.box_mol(w.substr(2))
+		t = 7 + int(look.get("r", 0)) * 2      # 크기만 (상자 몰랑이는 보통 → 전설일수록 조금 크게)
 	shiny = is_shiny
 	made = count
 	area = walk
@@ -44,6 +55,8 @@ func _build() -> void:
 	body = Node3D.new()
 	add_child(body)
 	var col := GameCore.tier_color(t)
+	if not look.is_empty():
+		col = Color("#ffffff") if look["col"] == "rainbow" else Color(str(look["col"]))
 	mesh = MeshInstance3D.new()
 	var sm := SphereMesh.new()
 	sm.radius = r
@@ -62,9 +75,19 @@ func _build() -> void:
 		m.emission = Color("#ffd84a")
 		m.emission_energy_multiplier = 0.35
 		m.metallic = 0.3
+	if look.get("id", "") == "ghost":
+		m.emission_enabled = true
+		m.emission = Color(0.75, 0.88, 1.0)
+		m.emission_energy_multiplier = 0.4
+	elif look.get("id", "") == "gold":
+		m.metallic = 0.6
+		m.roughness = 0.25
+	body_mat = m
 	mesh.material_override = m
 	mesh.position.y = r * 0.85
 	body.add_child(mesh)
+	if not look.is_empty():
+		_add_parts(col)
 	# 눈 두 개 + 볼
 	var em := StandardMaterial3D.new()
 	em.albedo_color = Color("#2a2533")
@@ -123,8 +146,97 @@ func _build() -> void:
 		add_child(sparkle)
 
 
+## 상자 몰랑이 귀·모자·무늬 (간단한 도형)
+func _part(mesh_res: Mesh, col: Color, pos: Vector3, rot := Vector3.ZERO, emit := false) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh_res
+	var m := StandardMaterial3D.new()
+	m.albedo_color = col
+	m.roughness = 0.5
+	if emit:
+		m.emission_enabled = true
+		m.emission = col
+		m.emission_energy_multiplier = 0.4
+	mi.material_override = m
+	mi.position = pos
+	mi.rotation = rot
+	body.add_child(mi)
+	return mi
+
+
+func _sphere(rad: float, h := -1.0) -> SphereMesh:
+	var sm := SphereMesh.new()
+	sm.radius = rad
+	sm.height = rad * 2.0 if h < 0 else h
+	sm.radial_segments = 12
+	sm.rings = 6
+	return sm
+
+
+func _cone(rad: float, h: float) -> CylinderMesh:
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.0
+	cm.bottom_radius = rad
+	cm.height = h
+	cm.radial_segments = 10
+	return cm
+
+
+func _add_parts(col: Color) -> void:
+	var top := r * 1.62
+	match str(look.get("ear", "none")):
+		"cat":
+			for sx in [-1, 1]:
+				_part(_cone(r * 0.26, r * 0.5), col, Vector3(sx * r * 0.5, top - r * 0.05, 0), Vector3(0, 0, -sx * 0.35))
+		"bunny":
+			for sx in [-1, 1]:
+				var cap := CapsuleMesh.new()
+				cap.radius = r * 0.13
+				cap.height = r * 1.0
+				_part(cap, col, Vector3(sx * r * 0.3, top + r * 0.3, 0), Vector3(0, 0, -sx * 0.18))
+		"bear":
+			for sx in [-1, 1]:
+				_part(_sphere(r * 0.22), col, Vector3(sx * r * 0.58, top - r * 0.12, 0))
+	match str(look.get("hat", "none")):
+		"crown":
+			var cy := CylinderMesh.new()
+			cy.top_radius = r * 0.36
+			cy.bottom_radius = r * 0.3
+			cy.height = r * 0.3
+			cy.radial_segments = 8
+			_part(cy, Color("#ffcf3a"), Vector3(0, top + r * 0.1, 0), Vector3.ZERO, true)
+		"leaf":
+			_part(_sphere(r * 0.22, r * 0.12), Color("#5fcf6a"), Vector3(r * 0.12, top + r * 0.1, 0), Vector3(0, 0, -0.5))
+		"flower":
+			_part(_sphere(r * 0.14), Color("#ff9dc0"), Vector3(r * 0.35, top - r * 0.05, r * 0.2))
+			_part(_sphere(r * 0.08), Color("#ffe27a"), Vector3(r * 0.38, top - r * 0.02, r * 0.3))
+		"ribbon":
+			for sx in [-1, 1]:
+				_part(_sphere(r * 0.16, r * 0.12), Color("#ff6f9c"), Vector3(r * 0.25 + sx * r * 0.14, top - r * 0.02, r * 0.1))
+		"horn":
+			for sx in [-1, 1]:
+				_part(_cone(r * 0.13, r * 0.42), Color("#5a3a8a"), Vector3(sx * r * 0.42, top + r * 0.05, 0), Vector3(0, 0, -sx * 0.3))
+		"santa":
+			_part(_cone(r * 0.42, r * 0.7), Color("#e8404a"), Vector3(0, top + r * 0.25, 0), Vector3(0, 0, -0.25))
+			_part(_sphere(r * 0.11), Color.WHITE, Vector3(r * 0.16, top + r * 0.6, 0))
+		"star":
+			_part(_sphere(r * 0.14), Color("#ffe27a"), Vector3(0, top + r * 0.2, 0), Vector3.ZERO, true)
+	match str(look.get("pat", "none")):
+		"spots", "stars":
+			var pc := Color("#ffe27a") if look["pat"] == "stars" else col.darkened(0.3)
+			for d in [Vector3(-0.5, 0.9, 0.7), Vector3(0.6, 0.7, 0.62), Vector3(0.1, 1.25, 0.75), Vector3(-0.7, 1.2, 0.3)]:
+				_part(_sphere(r * 0.1), pc, Vector3(d.x * r, d.y * r, d.z * r), Vector3.ZERO, look["pat"] == "stars")
+		"stripe":
+			for k in [-0.35, 0.0, 0.35]:
+				var bx := BoxMesh.new()
+				bx.size = Vector3(r * 0.1, r * 0.08, r * 0.9)
+				_part(bx, col.darkened(0.35), Vector3(k * r, top - r * 0.08, 0))
+
+
 func _process(dt: float) -> void:
 	clock += dt
+	if look.get("col", "") == "rainbow" and body_mat:
+		body_mat.albedo_color = Color.from_hsv(fmod(clock * 0.2, 1.0), 0.45, 1.0)
 	if hop_t >= 0.0:
 		hop_t += dt / 0.38
 		var k := minf(hop_t, 1.0)

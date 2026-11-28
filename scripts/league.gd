@@ -31,6 +31,8 @@ const BOT_NAMES := ["말랑콩", "젤리곰", "모찌모찌", "콩떡이", "푸�
 signal updated      # 리그·오늘의 판 목록을 새로 받았을 때
 
 var board: Array = []        # 이번 주 리그: [{name, score, me, bot}] 점수 순
+var friend_board: Array = [] # 친구 랭킹 (이번 주 무한 모드 최고): 같은 모양 + avatar
+var _profile_pushed := false
 var daily_board: Array = []  # 오늘의 판: 같은 모양
 var loading := false
 var last_error := ""
@@ -40,6 +42,11 @@ var _exp := 0.0
 
 func _ready() -> void:
 	ensure_week()
+	# 친구 초대 링크(?f=코드)로 들어왔으면 기억해 두고, 서버에 연결되면 친구로 추가해요
+	if OS.has_feature("web"):
+		var f = JavaScriptBridge.eval("new URLSearchParams(location.search).get('f')||''")
+		if f != null and str(f) != "":
+			Save.d["pending_friend"] = str(f).to_upper().left(8)
 
 
 func online() -> bool:
@@ -349,6 +356,9 @@ func _auth() -> bool:
 		s["uid"] = str(res[1].get("user", {}).get("id", s.get("uid", "")))
 		Save.save()
 		last_error = ""
+		if not _profile_pushed:
+			_profile_pushed = true
+			push_profile()
 		return true
 	last_error = "서버에 연결하지 못했어요"
 	return false
@@ -411,3 +421,95 @@ func _fetch_daily() -> void:
 		else:
 			last_error = "랭킹을 불러오지 못했어요"
 	loading = false
+
+
+# ───────────────────────── 친구 ─────────────────────────
+## 친구 코드 = 내 아이디 앞 8글자. 코드로 찾아서 친구 추가 → 친구 표(friends)에 한 줄. 서로 한 줄이면 둘 다 친구로 보여요.
+## 서버 표: profiles(uid, code, name, avatar) · friends(uid, friend) — docs/랭킹-서버.md
+
+func friend_code() -> String:
+	var uid := str(st().get("uid", ""))
+	if not online() or uid == "":
+		return ""
+	return uid.replace("-", "").left(8).to_upper()
+
+
+## 서버에 연결해서 코드를 만들어 둬요 (프로필 창을 열 때)
+func ensure_code() -> String:
+	if not online():
+		return ""
+	if friend_code() == "":
+		await _auth()
+	return friend_code()
+
+
+func push_profile() -> void:
+	if not online() or not await _auth():
+		return
+	var row := {"uid": st()["uid"], "code": friend_code(), "name": nick(), "avatar": Save.avatar()}
+	await _http(HTTPClient.METHOD_POST, SUPA_URL + "/rest/v1/profiles?on_conflict=uid", _hd(), JSON.stringify(row))
+
+
+## 코드로 친구 추가. 결과 문구를 돌려줘요
+func add_friend(code: String) -> String:
+	code = code.strip_edges().to_upper()
+	if not online():
+		return "랭킹 서버를 연결하면 친구를 추가할 수 있어요"
+	if code.length() < 4:
+		return "친구 코드를 확인해 주세요"
+	if not await _auth():
+		return last_error
+	if code == friend_code():
+		return "내 코드예요!"
+	var res: Array = await _http(HTTPClient.METHOD_GET, SUPA_URL + "/rest/v1/profiles?code=eq.%s&select=uid,name" % code.uri_encode(), _hd())
+	if int(res[0]) != 200 or not (res[1] is Array) or (res[1] as Array).is_empty():
+		return "그런 코드의 친구가 없어요"
+	var them: Dictionary = res[1][0]
+	var row := {"uid": st()["uid"], "friend": them["uid"]}
+	var r2: Array = await _http(HTTPClient.METHOD_POST, SUPA_URL + "/rest/v1/friends?on_conflict=uid,friend", _hd(), JSON.stringify(row))
+	if int(r2[0]) >= 300:
+		return "친구 추가에 실패했어요"
+	return "「%s」 님과 친구가 됐어요!" % str(them.get("name", "친구"))
+
+
+## 초대 링크로 들어온 친구 코드 처리 (홈에서 불러요). 결과 문구 또는 ""
+func process_pending() -> String:
+	var code := str(Save.d.get("pending_friend", ""))
+	if code == "" or not online():
+		return ""
+	Save.d.erase("pending_friend")
+	Save.save()
+	return await add_friend(code)
+
+
+func refresh_friends() -> void:
+	friend_board = []
+	if not online():
+		updated.emit()
+		return
+	loading = true
+	if await _auth():
+		var me := str(st()["uid"])
+		var res: Array = await _http(HTTPClient.METHOD_GET, SUPA_URL + "/rest/v1/friends?or=(uid.eq.%s,friend.eq.%s)&select=uid,friend" % [me, me], _hd())
+		var ids: Array = [me]
+		if int(res[0]) == 200 and res[1] is Array:
+			for r in res[1]:
+				var o := str(r["friend"]) if str(r["uid"]) == me else str(r["uid"])
+				if not ids.has(o):
+					ids.append(o)
+		var inl := ",".join(ids)
+		var pr: Array = await _http(HTTPClient.METHOD_GET, SUPA_URL + "/rest/v1/profiles?uid=in.(%s)&select=uid,name,avatar" % inl, _hd())
+		var sc: Array = await _http(HTTPClient.METHOD_GET, SUPA_URL + "/rest/v1/league_scores?week=eq.%s&uid=in.(%s)&select=uid,score" % [week_key(), inl], _hd())
+		var scores := {}
+		if int(sc[0]) == 200 and sc[1] is Array:
+			for r in sc[1]:
+				scores[str(r["uid"])] = int(r["score"])
+		if int(pr[0]) == 200 and pr[1] is Array:
+			for r in pr[1]:
+				var u := str(r["uid"])
+				friend_board.append({"name": str(r.get("name", "?")), "score": int(scores.get(u, 0)), "me": u == me, "bot": false, "avatar": str(r.get("avatar", "t:1"))})
+		if not friend_board.any(func(o): return o["me"]):
+			friend_board.append({"name": nick(), "score": my_best(), "me": true, "bot": false, "avatar": Save.avatar()})
+		friend_board.sort_custom(func(a, b): return int(a["score"]) > int(b["score"]))
+	loading = false
+	updated.emit()
